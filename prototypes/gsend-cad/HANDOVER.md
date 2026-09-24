@@ -27,7 +27,7 @@ The file has no `<html>/<head>/<body>` tags because it was published as a claude
 A Fusion 360-style CAD UI shell, branded G-SEND.IO. It's HTML for now; the real product will be Python 3.
 
 - **Top bar:** G-SEND.IO wordmark (blue square Squada One "G" + Anton "-SEND.IO", then "CAD"), save/undo/redo, document tab "Bracket Plate v3", units pill set to inches, user name.
-- **Ribbon:** a DESIGN workspace dropdown, then Solid / Surface / Mesh / Sheet Metal / Plastic / Utilities tabs. Each tab has tool groups (Create, Modify, Assemble, Construct, Inspect, Insert, Select). Tools open a mock command dialog with realistic inch values. Shortcuts: E extrude, H hole, F fillet, L sketch, I measure.
+- **Ribbon:** a DESIGN workspace dropdown, then Solid / Surface / Utilities tabs (Mesh, Sheet Metal and Plastic were removed at Shane's request; don't add them back). Each tab has tool groups (Create, Modify, Assemble, Construct, Inspect, Insert, Select). Tools open a mock command dialog with realistic inch values. Shortcuts: E extrude, H hole, F fillet, L sketch, I measure.
 - **Browser tree (left):** Origin (XY/XZ/YZ), Bodies, Sketches, with visibility dots. Below it is a properties panel: bounding box, volume, and mass in 6061-T6.
 - **3D viewport (Three.js, Z-up like Fusion):** a 4 × 3 × 0.5 in plate with 0.25 corner radii, a Ø1.25 × 0.75 boss, 4× Ø0.266 thru holes, and a Ø0.5 bore. Orbit (left drag), pan (right drag), zoom (wheel). There's a view cube (TOP/FRT/L/R/isos/home), a nav bar (orbit, look, pan, zoom, fit, display mode), a 0.25 in grid with a 1 in major grid, a HUD, and a live cursor XY readout in the status bar.
 - **Timeline (bottom):** Sketch1, Extrude1, Sketch2, Extrude2, Hole1, Hole2. Clicking a feature, or using start/back/play/forward/end, rolls the model and the browser back and forth.
@@ -60,11 +60,17 @@ A Fusion 360-style CAD UI shell, branded G-SEND.IO. It's HTML for now; the real 
 3. **Theme:** dark industrial CNC. `#0a0a0a` background, `#111` panels, 1px borders, flat (no gradients or shadows), Rajdhani headers, Share Tech Mono body, uppercase letter-spaced labels.
 4. **The accent is BLUE, `#2f9bff`, with dim `#0c3457`.** It's a placeholder until I give the exact G-SEND blue. Changing it means editing `--accent`/`--accent-dim` in the CSS, the `0x2f9bff` values in the JS, and the selection emissive `0x0a2a4a`. Don't reintroduce orange.
 5. **Units are inches.** It's aimed at machined parts: plates, bosses, holes, shafts.
-6. **Geometry is still hard-coded.** Command dialog "OK" buttons don't change the model yet. That's expected for this stage.
+6. **The stock part is still hard-coded** (Sketch1 to Hole2). Extrude is the one real command; the other dialogs (Hole, Fillet, etc.) are still mock and their OK does nothing.
+
+## Extrude (done)
+
+Press E (or the Extrude tool) after finishing a sketch. Closed profiles are found in each user sketch (rect, circle, polygon, and line chains that close on themselves); a loop inside another becomes a hole, so each click picks a region, like Fusion. Click regions to select or deselect them. The dialog has Direction (One side / Symmetric), Distance (negative flips it), and Operation (Join / Cut / New Body) with a live preview (blue, or red for Cut). OK adds ExtrudeN to the timeline; it rolls back like the others, and the sketch it used hides. Join and Cut are real booleans: a small BSP CSG engine is inlined (section `SOLID ENGINE`), and edges on boolean results come from `featureEdges`. Cut hits every body it reaches. The volume and mass in the properties panel update. The feature stores plain data for the Python port: `{op, distance, direction, profiles:[{sketch, outer:[entIdx], holes:[[entIdx]]}]}`.
+
+Known limits: sketches are on the XY plane at Z 0 only; overlapping profiles that cross each other are not split into regions; a line chain with a branch (a vertex joining 3 or more lines) is not detected as a loop.
 
 ## Next steps (ask me which one first)
 
-1. **Extrude a user sketch in the HTML prototype.** Detect closed profiles (rect, circle, polygon, and closed line chains), let me pick one, build it with `THREE.ExtrudeGeometry` (distance, Join/Cut/New Body), and add an ExtrudeN feature to the timeline that rolls back like the others. Show the Extrude dialog with a live preview.
+1. ~~**Extrude a user sketch in the HTML prototype.**~~ Done, see above. Detect closed profiles (rect, circle, polygon, and closed line chains), let me pick one, build it with `THREE.ExtrudeGeometry` (distance, Join/Cut/New Body), and add an ExtrudeN feature to the timeline that rolls back like the others. Show the Extrude dialog with a live preview.
 2. **Start the real Python 3 app.** Recommended stack:
    - **build123d** (OpenCascade kernel) for sketch → extrude → booleans → fillet/chamfer → STEP export
    - **PySide6 / Qt** for the ribbon, browser tree, timeline, and dockable panels

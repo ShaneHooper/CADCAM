@@ -96,7 +96,7 @@ button:focus-visible,[tabindex]:focus-visible{outline:1px solid var(--accent);ou
 .navbar button svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;}
 .toast{position:absolute;left:50%;top:10px;transform:translateX(-50%);padding:4px 12px;border:1px solid var(--accent);background:var(--panel);color:var(--accent);font-family:var(--head);font-weight:600;letter-spacing:.12em;text-transform:uppercase;font-size:11px;opacity:0;transition:opacity .15s;}
 .toast.show{opacity:1;}
-.dialog{position:absolute;right:14px;top:104px;width:230px;background:var(--panel);border:1px solid var(--line2);display:none;}
+.dialog{position:absolute;right:14px;top:104px;width:230px;background:var(--panel);border:1px solid var(--line2);display:none;contain:paint;}
 .dialog.show{display:block;}
 .dialog .dh{display:flex;justify-content:space-between;align-items:center;padding:5px 10px;border-bottom:1px solid var(--line);font-family:var(--head);font-weight:700;letter-spacing:.14em;text-transform:uppercase;font-size:12px;color:var(--accent);}
 .dialog .dh button{color:var(--fg3);}
@@ -107,6 +107,12 @@ button:focus-visible,[tabindex]:focus-visible{outline:1px solid var(--accent);ou
 .dialog .foot{display:flex;justify-content:flex-end;gap:4px;padding:6px 10px;}
 .dialog .foot button{padding:3px 12px;border:1px solid var(--line2);font-family:var(--head);font-weight:600;letter-spacing:.1em;text-transform:uppercase;font-size:11px;color:var(--fg2);}
 .dialog .foot button.ok{border-color:var(--accent);color:var(--accent);}
+.dialog .row label{display:flex;align-items:center;gap:5px;color:var(--fg2);}
+.dialog .row input,.dialog .row select{background:var(--panel2);color:var(--fg);border:1px solid var(--line2);font:inherit;padding:1px 4px;width:92px;font-variant-numeric:tabular-nums;}
+.dialog .row input{text-align:right;color:var(--accent);}
+.dialog .row input:focus,.dialog .row select:focus{outline:1px solid var(--accent);outline-offset:0;}
+#view.picking canvas{cursor:pointer;}
+.dialog .row .val.none{color:var(--fg3);}
 
 /* SKETCH MODE */
 .tool.finish{border-color:var(--accent);color:var(--accent);width:auto;padding:0 10px;}
@@ -184,9 +190,6 @@ button:focus-visible,[tabindex]:focus-visible{outline:1px solid var(--accent);ou
       <div class="ws">Design <span class="caret">▼</span></div>
       <button class="rtab" role="tab" aria-selected="true" data-tab="solid">Solid</button>
       <button class="rtab" role="tab" aria-selected="false" data-tab="surface">Surface</button>
-      <button class="rtab" role="tab" aria-selected="false" data-tab="mesh">Mesh</button>
-      <button class="rtab" role="tab" aria-selected="false" data-tab="sheet">Sheet Metal</button>
-      <button class="rtab" role="tab" aria-selected="false" data-tab="plastic">Plastic</button>
       <button class="rtab" role="tab" aria-selected="false" data-tab="util">Utilities</button>
       <button class="rtab" role="tab" aria-selected="false" data-tab="sketch" id="rtabSketch" hidden>Sketch</button>
     </div>
@@ -1368,6 +1371,9 @@ const I={
 /* ---------- sketch state (declared early; engine below) ---------- */
 const SK={active:false,tool:null,pts:[],ents:[],group:null,preview:null,num:3,shift:false,cursor:[0,0]};
 let userSketchCount=0;
+/* extrude state (declared early; engine below) */
+const EX={active:false,regions:[],sel:new Set(),hover:null,fills:null,preview:null,op:'join',dist:0.5,dir:'one'};
+let bodyCount=1,selPainted=false;
 
 /* ---------- ribbon ---------- */
 const RIBBON={
@@ -1383,20 +1389,6 @@ const RIBBON={
   surface:[
     {label:'Create',tools:[['sketch','Sketch'],['extrude','Extrude'],['revolve','Revolve'],['plane','Patch']]},
     {label:'Modify',tools:[['fillet','Fillet'],['combine','Stitch'],['section','Trim']]},
-    {label:'Select',tools:[['select','Select']]},
-  ],
-  mesh:[
-    {label:'Create',tools:[['insert','Insert Mesh'],['body','Tessellate']]},
-    {label:'Modify',tools:[['move','Remesh'],['shell','Reduce'],['section','Plane Cut']]},
-    {label:'Select',tools:[['select','Select']]},
-  ],
-  sheet:[
-    {label:'Create',tools:[['sketch','Sketch'],['box','Flange'],['fillet','Bend']]},
-    {label:'Modify',tools:[['section','Unfold'],['extrude','Refold']]},
-    {label:'Select',tools:[['select','Select']]},
-  ],
-  plastic:[
-    {label:'Create',tools:[['sketch','Sketch'],['cyl','Boss'],['shell','Rib'],['thread','Snap Fit']]},
     {label:'Select',tools:[['select','Select']]},
   ],
   util:[
@@ -1423,6 +1415,8 @@ $('#ribbonBody').addEventListener('click',e=>{
   const name=t.dataset.tool;
   if(name==='Sketch'){enterSketch();return;}
   if(SK.active){sketchTool(name,t);return;}
+  if(name==='Extrude'){startExtrude();return;}
+  if(EX.active)cancelExtrude();
   document.querySelectorAll('.tool').forEach(x=>x.classList.remove('active'));t.classList.add('active');
   openDialog(name);
 });
@@ -1445,8 +1439,8 @@ function openDialog(name){
   msg(`${name.toUpperCase()}: select geometry in the viewport, then OK`);
 }
 function closeDialog(){$('#dlg').classList.remove('show');document.querySelectorAll('.tool').forEach(x=>x.classList.remove('active'));}
-$('#dlgClose').onclick=$('#dlgCancel').onclick=closeDialog;
-$('#dlgOk').onclick=()=>{toast(`${$('#dlgTitle').textContent} — prototype, no geometry change`);closeDialog();};
+$('#dlgClose').onclick=$('#dlgCancel').onclick=()=>{if(EX.active)cancelExtrude();else closeDialog();};
+$('#dlgOk').onclick=()=>{if(EX.active){commitExtrude();return;}toast(`${$('#dlgTitle').textContent} — prototype, no geometry change`);closeDialog();};
 
 function msg(t){$('#msg').textContent=t;}
 let toastT;function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('show');clearTimeout(toastT);toastT=setTimeout(()=>e.classList.remove('show'),1800);}
@@ -1539,6 +1533,7 @@ const objs={
   sketch2:mkSketchBoss(),boss:mkBoss(false),bossBore:mkBoss(true),
 };
 Object.values(objs).forEach(o=>part.add(o));
+[objs.plate,objs.plateHoles,objs.boss,objs.bossBore].forEach(o=>o.userData.body='body1');
 
 /* ---------- timeline ---------- */
 const FEATURES=[
@@ -1552,13 +1547,18 @@ const FEATURES=[
 let tlPos=FEATURES.length; // number of features applied
 function applyTimeline(){
   const n=tlPos;
-  FEATURES.forEach((f,i)=>{if(f.group)f.group.visible=n>=i+1;});
+  FEATURES.forEach((f,i)=>{if(f.group)f.group.visible=EX.active||sketchShown(i,n);});
   objs.sketch1.visible=n>=1&&n<2;
   objs.plate.visible=n>=2&&n<5;
   objs.plateHoles.visible=n>=5;
   objs.sketch2.visible=n>=3&&n<4;
   objs.boss.visible=n>=4&&n<6;
   objs.bossBore.visible=n>=6;
+  // user extrudes store their resulting body meshes in f.after; the latest one before the marker wins
+  const latest=bodiesAt(n);
+  FEATURES.forEach(f=>{if(f.after)Object.values(f.after).forEach(m=>m.visible=false);});
+  Object.values(latest).forEach(m=>m.visible=true);
+  if(latest.body1)[objs.plate,objs.plateHoles,objs.boss,objs.bossBore].forEach(o=>o.visible=false);
   document.querySelectorAll('.feat').forEach((el,i)=>{
     el.classList.toggle('on',i<n);el.classList.toggle('off',i>=n);el.classList.toggle('cur',i===n-1);
   });
@@ -1574,9 +1574,10 @@ function buildTimeline(){
 }
 (function(){
   const body=$('#tlBody');buildTimeline();
-  body.addEventListener('click',e=>{const f=e.target.closest('.feat');if(!f)return;tlPos=+f.dataset.i+1;applyTimeline();msg(`Rolled to ${FEATURES[tlPos-1].name}: ${FEATURES[tlPos-1].desc}`);});
+  body.addEventListener('click',e=>{const f=e.target.closest('.feat');if(!f)return;if(EX.active)cancelExtrude();tlPos=+f.dataset.i+1;applyTimeline();msg(`Rolled to ${FEATURES[tlPos-1].name}: ${FEATURES[tlPos-1].desc}`);});
   document.querySelectorAll('[data-tl]').forEach(b=>b.addEventListener('click',()=>{
     const a=b.dataset.tl;
+    if(EX.active)cancelExtrude();
     if(a==='start')tlPos=0;else if(a==='end')tlPos=FEATURES.length;else if(a==='prev')tlPos=Math.max(0,tlPos-1);else if(a==='next')tlPos=Math.min(FEATURES.length,tlPos+1);
     else if(a==='play'){tlPos=0;applyTimeline();let k=0;const iv=setInterval(()=>{k++;tlPos=k;applyTimeline();if(k>=FEATURES.length)clearInterval(iv);},450);return;}
     applyTimeline();
@@ -1599,20 +1600,28 @@ function renderTree(){
     {d:2,tw:' ',eye:n>=1&&n<2,icon:'sketch',name:'Sketch1',id:'sk1',dim:n<1},
     {d:2,tw:' ',eye:n>=3&&n<4,icon:'sketch',name:'Sketch2',id:'sk2',dim:n<3},
   ];
-  FEATURES.forEach((f,i)=>{if(f.group)rows.push({d:2,tw:' ',eye:n>=i+1,icon:'sketch',name:f.name,id:f.id,dim:n<i+1,tag:f.count+' ENT'});});
+  const bi=rows.findIndex(r=>r.id==='body1')+1;
+  rows.splice(bi,0,...FEATURES.filter(f=>f.newBody).map(f=>{const on=FEATURES.indexOf(f)<n;return {d:2,tw:' ',eye:on,icon:'body',name:f.newBody.name,id:f.newBody.id,dim:!on,tag:on?'SOLID':'—'};}));
+  FEATURES.forEach((f,i)=>{if(f.group)rows.push({d:2,tw:' ',eye:sketchShown(i,n),icon:'sketch',name:f.name,id:f.id,dim:n<i+1,tag:f.count+' ENT'});});
   if(SK.active)rows.push({d:2,tw:' ',eye:true,icon:'sketch',name:'Sketch'+SK.num+' (editing)',id:'skedit',tag:SK.ents.length+' ENT'});
   $('#tree').innerHTML=rows.map(r=>`<div class="node${selected===r.id?' sel':''}" data-id="${r.id}" style="padding-left:${8+r.d*14}px"><span class="tw">${r.tw}</span><span class="eye ${r.eye?'on':''}">${r.eye?'●':'○'}</span><svg class="nicon" viewBox="0 0 24 24">${I[r.icon].replace(/<\/?svg[^>]*>/g,'')}</svg><span class="nm${r.dim?' dim':''}">${r.name}</span>${r.tag?`<span class="tag">${r.tag}</span>`:''}</div>`).join('');
   renderProps();
 }
 $('#tree').addEventListener('click',e=>{const nd=e.target.closest('.node');if(!nd)return;selected=nd.dataset.id;renderTree();
-  const isBody=selected==='body1';
-  [objs.plate,objs.plateHoles,objs.boss,objs.bossBore].forEach(m=>m.material=isBody?matSel:matBody);
+  selPainted=true;paintSel();
   $('#selInfo').textContent='SEL: '+nd.querySelector('.nm').textContent.toUpperCase();
 });
+function paintSel(){part.traverse(o=>{if(o.isMesh&&o.userData.body)o.material=selPainted&&o.userData.body===selected?matSel:matBody;});}
 function renderProps(){
   const n=tlPos;
-  const vol=(n>=2?P.L*P.W*P.T:0)+(n>=4?Math.PI*(P.bossD/2)**2*P.bossH:0)-(n>=5?4*Math.PI*(P.holeD/2)**2*P.T:0)-(n>=6?Math.PI*(P.bossBore/2)**2*(P.T+P.bossH):0);
-  const rows=[['BODY','Body1'],['MATERIAL','6061-T6'],['BBOX X',P.L.toFixed(3)+' in'],['BBOX Y',P.W.toFixed(3)+' in'],['BBOX Z',(n>=4?P.T+P.bossH:n>=2?P.T:0).toFixed(3)+' in'],['VOLUME',vol.toFixed(3)+' in³'],['MASS',(vol*0.0975).toFixed(3)+' lb'],['FEATURES',n+' / '+FEATURES.length]];
+  // Body1 volume: exact formula for the stock features, plus the mesh-measured change from each user feature
+  const nb=FEATURES.find((f,i)=>i<n&&f.newBody&&f.newBody.id===selected);
+  const id=nb?selected:'body1';
+  let vol=nb?0:(n>=2?P.L*P.W*P.T:0)+(n>=4?Math.PI*(P.bossD/2)**2*P.bossH:0)-(n>=5?4*Math.PI*(P.holeD/2)**2*P.T:0)-(n>=6?Math.PI*(P.bossBore/2)**2*(P.T+P.bossH):0);
+  FEATURES.forEach((f,i)=>{if(i<n&&f.dVol&&f.dVol[id])vol+=f.dVol[id];});
+  const m=bodiesAt(n)[id];let bx=[P.L,P.W,n>=4?P.T+P.bossH:n>=2?P.T:0];
+  if(m){const b=m.geometry.boundingBox;bx=[b.max.x-b.min.x,b.max.y-b.min.y,b.max.z-b.min.z];}
+  const rows=[['BODY',nb?nb.newBody.name:'Body1'],['MATERIAL','6061-T6'],['BBOX X',bx[0].toFixed(3)+' in'],['BBOX Y',bx[1].toFixed(3)+' in'],['BBOX Z',bx[2].toFixed(3)+' in'],['VOLUME',vol.toFixed(3)+' in³'],['MASS',(vol*0.0975).toFixed(3)+' lb'],['FEATURES',n+' / '+FEATURES.length]];
   $('#props').innerHTML='<table>'+rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('')+'</table>';
 }
 
@@ -1728,6 +1737,7 @@ function sketchCancelChain(){SK.pts=[];clearPreview();}
 function sketchUndo(){if(SK.pts.length){sketchCancelChain();return;}SK.ents.pop();redrawSketch();}
 function enterSketch(){
   if(SK.active)return;
+  if(EX.active)cancelExtrude();
   closeDialog();
   SK.active=true;SK.num=userSketchCount+3;SK.ents=[];SK.pts=[];SK.tool=null;
   SK.group=new THREE.Group();scene.add(SK.group);
@@ -1751,7 +1761,7 @@ function finishSketch(){
   const name='Sketch'+SK.num;
   FEATURES.push({id:'usk'+userSketchCount,name,icon:'sketch',desc:ents.length+' entities · XY plane',group,count:ents.length,ents});
   tlPos=FEATURES.length;buildTimeline();applyTimeline();
-  toast(name+' added · '+ents.length+' entities');msg(name+' saved to the timeline. Extrude will use it once the solid engine lands.');
+  toast(name+' added · '+ents.length+' entities');msg(name+' saved to the timeline. Press E to extrude its closed profiles.');
   setView('home');
 }
 function sketchPoint(e){
@@ -1784,9 +1794,302 @@ renderer.domElement.addEventListener('pointermove',e=>{
 });
 addEventListener('keydown',e=>{SK.shift=e.shiftKey;});addEventListener('keyup',e=>{SK.shift=e.shiftKey;});
 
+/* ---------- SOLID ENGINE: CSG (BSP booleans, after csg.js by Evan Wallace, MIT) ---------- */
+const CSG_EPS=1e-5;
+class CPlane{
+  constructor(n,w){this.n=n;this.w=w;}
+  static from(a,b,c){const n=new THREE.Vector3().subVectors(b,a).cross(new THREE.Vector3().subVectors(c,a)).normalize();return new CPlane(n,n.dot(a));}
+  clone(){return new CPlane(this.n.clone(),this.w);}
+  flip(){this.n.negate();this.w=-this.w;}
+  split(poly,cpf,cpb,front,back){
+    const FR=1,BK=2,SP=3;let all=0;const ty=[];
+    for(const v of poly.v){const t=this.n.dot(v)-this.w;const k=t<-CSG_EPS?BK:t>CSG_EPS?FR:0;all|=k;ty.push(k);}
+    if(all===0)(this.n.dot(poly.p.n)>0?cpf:cpb).push(poly);
+    else if(all===FR)front.push(poly);
+    else if(all===BK)back.push(poly);
+    else{
+      const f=[],b=[],V=poly.v;
+      for(let i=0;i<V.length;i++){
+        const j=(i+1)%V.length,ti=ty[i],tj=ty[j],vi=V[i],vj=V[j];
+        if(ti!==BK)f.push(vi);if(ti!==FR)b.push(vi);
+        if((ti|tj)===SP){const t=(this.w-this.n.dot(vi))/this.n.dot(new THREE.Vector3().subVectors(vj,vi));const v=vi.clone().lerp(vj,t);f.push(v);b.push(v);}
+      }
+      if(f.length>=3)front.push(new CPoly(f,poly.p.clone()));
+      if(b.length>=3)back.push(new CPoly(b,poly.p.clone()));
+    }
+  }
+}
+class CPoly{
+  constructor(v,p){this.v=v;this.p=p||CPlane.from(v[0],v[1],v[2]);}
+  clone(){return new CPoly(this.v.slice(),this.p.clone());}
+  flip(){this.v.reverse();this.p.flip();}
+}
+class CNode{
+  constructor(polys){this.plane=null;this.front=null;this.back=null;this.polys=[];if(polys)this.build(polys);}
+  invert(){for(const p of this.polys)p.flip();if(this.plane)this.plane.flip();if(this.front)this.front.invert();if(this.back)this.back.invert();const t=this.front;this.front=this.back;this.back=t;}
+  clipPolys(polys){
+    if(!this.plane)return polys.slice();
+    let f=[],b=[];for(const p of polys)this.plane.split(p,f,b,f,b);
+    if(this.front)f=this.front.clipPolys(f);
+    b=this.back?this.back.clipPolys(b):[];
+    return f.concat(b);
+  }
+  clipTo(bsp){this.polys=bsp.clipPolys(this.polys);if(this.front)this.front.clipTo(bsp);if(this.back)this.back.clipTo(bsp);}
+  all(out){out=out||[];out.push(...this.polys);if(this.front)this.front.all(out);if(this.back)this.back.all(out);return out;}
+  build(polys){
+    if(!polys.length)return;
+    if(!this.plane)this.plane=polys[0].p.clone();
+    const f=[],b=[];for(const p of polys)this.plane.split(p,this.polys,this.polys,f,b);
+    if(f.length){if(!this.front)this.front=new CNode();this.front.build(f);}
+    if(b.length){if(!this.back)this.back=new CNode();this.back.build(b);}
+  }
+}
+function csgUnion(A,B){const a=new CNode(A.map(p=>p.clone())),b=new CNode(B.map(p=>p.clone()));a.clipTo(b);b.clipTo(a);b.invert();b.clipTo(a);b.invert();a.build(b.all());return a.all();}
+function csgSubtract(A,B){const a=new CNode(A.map(p=>p.clone())),b=new CNode(B.map(p=>p.clone()));a.invert();a.clipTo(b);b.clipTo(a);b.invert();b.clipTo(a);b.invert();a.build(b.all());a.invert();return a.all();}
+function geoToPolys(geo,matrix){
+  const pos=geo.attributes.position,idx=geo.index,out=[];
+  const n=idx?idx.count:pos.count,at=i=>{const v=new THREE.Vector3().fromBufferAttribute(pos,idx?idx.getX(i):i);return matrix?v.applyMatrix4(matrix):v;};
+  for(let i=0;i<n;i+=3){
+    const a=at(i),b=at(i+1),c=at(i+2);
+    if(new THREE.Vector3().subVectors(b,a).cross(new THREE.Vector3().subVectors(c,a)).lengthSq()<1e-14)continue;
+    out.push(new CPoly([a,b,c]));
+  }
+  return out;
+}
+function polysToGeo(polys){
+  const arr=[];
+  for(const p of polys)for(let i=1;i<p.v.length-1;i++)for(const v of [p.v[0],p.v[i],p.v[i+1]])arr.push(v.x,v.y,v.z);
+  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(arr,3));
+  g.computeVertexNormals();g.computeBoundingBox();return g;
+}
+function meshVolume(geo){
+  const p=geo.attributes.position.array;let v=0;
+  for(let i=0;i<p.length;i+=9)v+=(p[i]*(p[i+4]*p[i+8]-p[i+5]*p[i+7])-p[i+1]*(p[i+3]*p[i+8]-p[i+5]*p[i+6])+p[i+2]*(p[i+3]*p[i+7]-p[i+4]*p[i+6]))/6;
+  return v;
+}
+/* Sharp edges of a boolean result. CSG leaves T-junctions, so edges are matched by the
+   line they lie on (not by shared vertices): a span is drawn where the faces on it disagree. */
+function featureEdges(geo,deg){
+  const pos=geo.attributes.position.array,cos=Math.cos(deg*Math.PI/180),Q=1e4,buckets=new Map();
+  const V=[new THREE.Vector3(),new THREE.Vector3(),new THREE.Vector3()];
+  for(let i=0;i<pos.length;i+=9){
+    V[0].fromArray(pos,i);V[1].fromArray(pos,i+3);V[2].fromArray(pos,i+6);
+    const n=new THREE.Vector3().subVectors(V[1],V[0]).cross(new THREE.Vector3().subVectors(V[2],V[0]));
+    if(n.lengthSq()<1e-16)continue;n.normalize();
+    for(let k=0;k<3;k++){
+      const p=V[k],q=V[(k+1)%3],d=new THREE.Vector3().subVectors(q,p),L=d.length();
+      if(L<1e-7)continue;d.divideScalar(L);
+      if(d.x<-1e-9||(Math.abs(d.x)<=1e-9&&(d.y<-1e-9||(Math.abs(d.y)<=1e-9&&d.z<0))))d.negate();
+      const t0=p.dot(d),t1=q.dot(d),o=p.clone().addScaledVector(d,-t0);
+      const key=[d.x,d.y,d.z,o.x,o.y,o.z].map(x=>Math.round(x*Q)).join(',');
+      let bk=buckets.get(key);if(!bk){bk={d,o,s:[]};buckets.set(key,bk);}
+      bk.s.push([Math.min(t0,t1),Math.max(t0,t1),n]);
+    }
+  }
+  const out=[];
+  buckets.forEach(bk=>{
+    const ts=[];bk.s.forEach(s=>ts.push(s[0],s[1]));ts.sort((a,b)=>a-b);
+    const br=[];ts.forEach(t=>{if(!br.length||t-br[br.length-1]>1e-6)br.push(t);});
+    for(let k=0;k<br.length-1;k++){
+      const m=(br[k]+br[k+1])/2,ns=bk.s.filter(s=>s[0]-1e-7<=m&&m<=s[1]+1e-7).map(s=>s[2]);
+      if(ns.length<2||!ns.some(nn=>nn.dot(ns[0])<cos))continue;
+      const a=bk.o.clone().addScaledVector(bk.d,br[k]),b=bk.o.clone().addScaledVector(bk.d,br[k+1]);
+      out.push(a.x,a.y,a.z,b.x,b.y,b.z);
+    }
+  });
+  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(out,3));return g;
+}
+function mkBodyMesh(geo,bodyId){
+  const m=new THREE.Mesh(geo,selPainted&&selected===bodyId?matSel:matBody);m.userData.body=bodyId;
+  const e=new THREE.LineSegments(featureEdges(geo,25),matEdge);e.visible=dispMode!==1;m.add(e);
+  m.visible=false;part.add(m);return m;
+}
+/* body state at timeline position n: {bodyId: mesh} from user features (stock Body1 comes from objs) */
+function bodiesAt(n){const out={};FEATURES.forEach((f,i)=>{if(f.after&&i<n)Object.assign(out,f.after);});return out;}
+let baseBody1Geo=null;
+function bodyGeoNow(id){
+  const m=bodiesAt(FEATURES.length)[id];if(m)return m.geometry;
+  if(id!=='body1')return null;
+  if(!baseBody1Geo){
+    [objs.plateHoles,objs.bossBore].forEach(o=>o.updateMatrix());
+    baseBody1Geo=polysToGeo(csgUnion(geoToPolys(objs.plateHoles.geometry,objs.plateHoles.matrix),geoToPolys(objs.bossBore.geometry,objs.bossBore.matrix)));
+  }
+  return baseBody1Geo;
+}
+/* a sketch is hidden once an applied extrude has consumed it (like Sketch1/Sketch2) */
+function sketchShown(i,n){const id=FEATURES[i].id;return n>=i+1&&!FEATURES.some((g,j)=>j<n&&g.profiles&&g.profiles.some(p=>p.sketch===id));}
+
+/* ---------- EXTRUDE ---------- */
+/* Profiles are closed loops found in a sketch's entities: rect, polygon, circle, or a chain of lines
+   that closes on itself. A loop sitting inside another becomes a hole of it, so each click picks a region.
+   The feature stores plain data for the Python port:
+   {op:'join'|'cut'|'new', distance, direction:'one'|'sym', profiles:[{sketch, outer:[entIdx], holes:[[entIdx]]}]} */
+const matFill=()=>new THREE.MeshBasicMaterial({color:0x2f9bff,transparent:true,opacity:0,depthTest:false,depthWrite:false,side:THREE.DoubleSide});
+function circPts(c,r,n){const p=[];for(let i=0;i<n;i++){const a=i/n*Math.PI*2;p.push([c[0]+r*Math.cos(a),c[1]+r*Math.sin(a)]);}return p;}
+function polyArea(p){let a=0;for(let i=0,j=p.length-1;i<p.length;j=i++)a+=(p[j][0]+p[i][0])*(p[j][1]-p[i][1]);return a/2;}
+function pip(p,poly){let c=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){const a=poly[i],b=poly[j];if((a[1]>p[1])!==(b[1]>p[1])&&p[0]<(b[0]-a[0])*(p[1]-a[1])/(b[1]-a[1])+a[0])c=!c;}return c;}
+function onEdge(p,poly){for(let i=0,j=poly.length-1;i<poly.length;j=i++){const a=poly[j],b=poly[i],dx=b[0]-a[0],dy=b[1]-a[1],L=dx*dx+dy*dy;const t=L?Math.max(0,Math.min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dy)/L)):0;if(Math.hypot(a[0]+t*dx-p[0],a[1]+t*dy-p[1])<1e-6)return true;}return false;}
+function sketchLoops(ents){
+  const loops=[],lines=[];
+  ents.forEach((e,i)=>{
+    if(e.type==='circle')loops.push({ents:[i],circle:e,pts:circPts(e.c,e.r,64)});
+    else if(e.type==='rect'||e.type==='polygon')loops.push({ents:[i],pts:e.pts});
+    else if(e.type==='line')lines.push(i);
+  });
+  // closed line chains: walk connected lines; every vertex on the loop must join exactly two lines
+  const K=p=>p[0].toFixed(5)+','+p[1].toFixed(5),adj=new Map();
+  lines.forEach(i=>ents[i].pts.forEach(p=>{const k=K(p);if(!adj.has(k))adj.set(k,{p,l:[]});adj.get(k).l.push(i);}));
+  const used=new Set();
+  lines.forEach(i0=>{
+    if(used.has(i0))return;
+    const start=K(ents[i0].pts[0]),chain=[],pts=[];let cur=i0,at=start,closed=false;
+    while(!used.has(cur)){
+      used.add(cur);chain.push(cur);pts.push(adj.get(at).p);
+      const [a,b]=ents[cur].pts,next=K(a)===at?K(b):K(a),nd=adj.get(next);
+      if(nd.l.length!==2||adj.get(start).l.length!==2)break;
+      if(next===start){closed=true;break;}
+      cur=nd.l[0]===cur?nd.l[1]:nd.l[0];at=next;
+    }
+    if(closed&&chain.length>=3)loops.push({ents:chain,pts});
+  });
+  loops.forEach(L=>L.area=Math.abs(polyArea(L.pts)));
+  return loops.filter(L=>L.area>1e-9);
+}
+function loopInside(a,b){return a!==b&&a.area<b.area&&a.pts.every(p=>onEdge(p,b.pts)||pip(p,b.pts))&&!a.pts.every(p=>onEdge(p,b.pts));}
+function loopPath(L,P){
+  if(L.circle)P.absarc(L.circle.c[0],L.circle.c[1],L.circle.r,0,Math.PI*2,false);
+  else{P.moveTo(L.pts[0][0],L.pts[0][1]);for(let i=1;i<L.pts.length;i++)P.lineTo(L.pts[i][0],L.pts[i][1]);P.lineTo(L.pts[0][0],L.pts[0][1]);}
+  return P;
+}
+function sketchRegions(f){
+  const loops=sketchLoops(f.ents);
+  return loops.map(L=>{
+    const holes=loops.filter(q=>loopInside(q,L)&&!loops.some(r=>r!==L&&loopInside(q,r)&&loopInside(r,L)));
+    const shape=loopPath(L,new THREE.Shape());holes.forEach(h=>shape.holes.push(loopPath(h,new THREE.Path())));
+    return {key:f.id+':'+L.ents.join('-'),sketch:f.id,outer:L,holes,shape,area:L.area-holes.reduce((s,h)=>s+h.area,0)};
+  });
+}
+function regionAt(p){
+  let best=null;
+  EX.regions.forEach(r=>{if(pip(p,r.outer.pts)&&!r.holes.some(h=>pip(p,h.pts))&&(!best||r.area<best.area))best=r;});
+  return best;
+}
+function paintRegions(){
+  EX.regions.forEach(r=>{r.mesh.material.opacity=EX.sel.has(r.key)?0.45:EX.hover===r?0.2:0;});
+  $('#exProf').textContent=EX.sel.size?EX.sel.size+' selected':'Select';
+  $('#exProf').classList.toggle('none',!EX.sel.size);
+}
+function exDepth(){const d=EX.dist;return EX.dir==='sym'?{z0:-Math.abs(d)/2,depth:Math.abs(d)}:{z0:Math.min(0,d),depth:Math.abs(d)};}
+function toolGeo(r){const {z0,depth}=exDepth();const g=new THREE.ExtrudeGeometry(r.shape,{depth,bevelEnabled:false,curveSegments:48});g.translate(0,0,z0);return g;}
+function selRegions(){return EX.regions.filter(r=>EX.sel.has(r.key));}
+function clearExPreview(){if(EX.preview){scene.remove(EX.preview);EX.preview.traverse(o=>{if(o.geometry)o.geometry.dispose();});EX.preview=null;}}
+function updateExPreview(){
+  clearExPreview();
+  const regs=selRegions();
+  if(!regs.length||Math.abs(EX.dist)<0.001)return;
+  const {z0,depth}=exDepth();
+  const g=new THREE.ExtrudeGeometry(regs.map(r=>r.shape),{depth,bevelEnabled:false,curveSegments:48});g.translate(0,0,z0);
+  const col=EX.op==='cut'?0xff3b3b:0x2f9bff;
+  const m=new THREE.Mesh(g,new THREE.MeshStandardMaterial({color:col,emissive:col,emissiveIntensity:0.25,transparent:true,opacity:0.35,depthTest:false,depthWrite:false}));
+  m.add(new THREE.LineSegments(new THREE.EdgesGeometry(g,25),new THREE.LineBasicMaterial({color:col,depthTest:false})));
+  m.renderOrder=8;m.children[0].renderOrder=8;
+  EX.preview=m;scene.add(m);
+  const opName={join:'JOIN',cut:'CUT',new:'NEW BODY'}[EX.op];
+  const t=`EXTRUDE ${opName}${EX.dir==='sym'?' SYMMETRIC':''} · ${regs.length} profile${regs.length>1?'s':''} · Enter = OK · Esc = cancel`;
+  if($('#msg').textContent!==t)msg(t); // leave the status bar alone while the distance is typed
+}
+function exRows(){
+  return `<div class="row"><span>Profile</span><span class="val" id="exProf">Select</span></div>
+<div class="row"><span>Start</span><span class="val">Profile plane</span></div>
+<div class="row"><span>Direction</span><select id="exDir"><option value="one">One side</option><option value="sym">Symmetric</option></select></div>
+<div class="row"><span>Distance</span><label><input id="exDist" type="number" step="0.05" autocomplete="off" value="${EX.dist.toFixed(3)}"> in</label></div>
+<div class="row"><span>Operation</span><select id="exOp"><option value="join">Join</option><option value="cut">Cut</option><option value="new">New Body</option></select></div>`;
+}
+function startExtrude(){
+  if(SK.active){toast('Finish the sketch first');return;}
+  if(EX.active)return;
+  closeDialog();
+  if(tlPos<FEATURES.length){tlPos=FEATURES.length;applyTimeline();}
+  const regions=[];FEATURES.forEach(f=>{if(f.ents)regions.push(...sketchRegions(f));});
+  if(!regions.length){toast('No closed profiles · press L to sketch');msg('Extrude needs a closed profile: rectangle, circle, polygon, or a line chain that closes.');return;}
+  EX.active=true;EX.regions=regions;EX.sel=new Set();EX.hover=null;EX.op='join';EX.dist=0.5;EX.dir='one';
+  EX.fills=new THREE.Group();scene.add(EX.fills);
+  regions.forEach(r=>{r.mesh=new THREE.Mesh(new THREE.ShapeGeometry(r.shape,48),matFill());r.mesh.position.z=skZ-0.001;r.mesh.renderOrder=9;EX.fills.add(r.mesh);});
+  // convenience: if the newest sketch has exactly one region, start with it selected
+  const last=FEATURES.filter(f=>f.ents).pop(),lr=regions.filter(r=>r.sketch===last.id);
+  if(lr.length===1)EX.sel.add(lr[0].key);
+  $('#dlgTitle').textContent='Extrude';$('#dlgRows').innerHTML=exRows();$('#dlg').classList.add('show');
+  $('#exDist').addEventListener('input',e=>{const v=parseFloat(e.target.value);if(isFinite(v)){EX.dist=v;updateExPreview();}});
+  $('#exDir').addEventListener('change',e=>{EX.dir=e.target.value;updateExPreview();});
+  $('#exOp').addEventListener('change',e=>{EX.op=e.target.value;updateExPreview();});
+  document.querySelectorAll('.tool').forEach(x=>x.classList.toggle('active',x.dataset.tool==='Extrude'));
+  view.classList.add('picking');applyTimeline();paintRegions();updateExPreview();
+  if(!EX.sel.size)msg('EXTRUDE: click a profile to select it · click again to remove · Enter = OK · Esc = cancel');
+}
+function endExtrude(){
+  EX.active=false;clearExPreview();
+  if(EX.fills){scene.remove(EX.fills);EX.fills.traverse(o=>{if(o.geometry)o.geometry.dispose();});EX.fills=null;}
+  EX.regions=[];EX.sel.clear();EX.hover=null;
+  view.classList.remove('picking');closeDialog();applyTimeline();
+}
+function cancelExtrude(){if(!EX.active)return;endExtrude();msg('Extrude cancelled');}
+function commitExtrude(){
+  const regs=selRegions();
+  if(!regs.length){toast('Select a profile');return;}
+  if(Math.abs(EX.dist)<0.001){toast('Distance must not be zero');return;}
+  // the tool body: one solid per region, unioned so touching regions make one clean solid
+  let tool=geoToPolys(toolGeo(regs[0]));
+  for(let i=1;i<regs.length;i++)tool=csgUnion(tool,geoToPolys(toolGeo(regs[i])));
+  const toolBox=new THREE.Box3();tool.forEach(p=>p.v.forEach(v=>toolBox.expandByPoint(v)));
+  const after={},dVol={};let newBody=null;
+  if(EX.op==='new'){
+    const id='body'+(bodyCount+1),g=polysToGeo(tool);
+    newBody={id,name:'Body'+(bodyCount+1)};after[id]=mkBodyMesh(g,id);dVol[id]=meshVolume(g);
+  }else{
+    const ids=['body1',...FEATURES.filter(f=>f.newBody).map(f=>f.newBody.id)];
+    const targets=EX.op==='join'?['body1']:ids.filter(id=>{const g=bodyGeoNow(id);if(!g.boundingBox)g.computeBoundingBox();return g.boundingBox.intersectsBox(toolBox);});
+    if(!targets.length){toast('Cut does not reach any body');return;}
+    targets.forEach(id=>{
+      const g0=bodyGeoNow(id),a=geoToPolys(g0);
+      const g=polysToGeo(EX.op==='join'?csgUnion(a,tool):csgSubtract(a,tool));
+      after[id]=mkBodyMesh(g,id);dVol[id]=meshVolume(g)-meshVolume(g0);
+    });
+  }
+  if(newBody)bodyCount++;
+  const name='Extrude'+(FEATURES.filter(f=>f.icon==='extrude').length+1);
+  const opName={join:'Join',cut:'Cut',new:'New Body'}[EX.op];
+  const profiles=regs.map(r=>({sketch:r.sketch,outer:r.outer.ents.slice(),holes:r.holes.map(h=>h.ents.slice())}));
+  FEATURES.push({id:'uex'+FEATURES.length,name,icon:'extrude',desc:`${opName} · ${EX.dist.toFixed(3)} in${EX.dir==='sym'?' symmetric':''} · ${regs.length} profile${regs.length>1?'s':''}`,
+    op:EX.op,distance:EX.dist,direction:EX.dir,profiles,after,dVol,newBody});
+  endExtrude();
+  tlPos=FEATURES.length;buildTimeline();applyTimeline();
+  toast(`${name} · ${opName} ${EX.dist.toFixed(3)} in`);msg(`${name} added to the timeline. Roll back to compare.`);
+}
+const exDown={x:0,y:0};
+renderer.domElement.addEventListener('pointerdown',e=>{exDown.x=e.clientX;exDown.y=e.clientY;});
+function exPoint(e){
+  const r=renderer.domElement.getBoundingClientRect();
+  ndc.set((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height*2-1));
+  ray.setFromCamera(ndc,camera);
+  return ray.ray.intersectPlane(plane,hit)?[hit.x,hit.y]:null;
+}
+renderer.domElement.addEventListener('pointerup',e=>{
+  if(!EX.active||e.button!==0||Math.hypot(e.clientX-exDown.x,e.clientY-exDown.y)>4)return; // a drag orbits
+  const p=exPoint(e),r=p&&regionAt(p);if(!r)return;
+  if(EX.sel.has(r.key))EX.sel.delete(r.key);else EX.sel.add(r.key);
+  $('#selInfo').textContent=`SEL: ${EX.sel.size} PROFILE${EX.sel.size===1?'':'S'}`;
+  paintRegions();updateExPreview();
+});
+renderer.domElement.addEventListener('pointermove',e=>{
+  if(!EX.active||e.buttons)return;
+  const p=exPoint(e),r=p&&regionAt(p);
+  if(r!==EX.hover){EX.hover=r;paintRegions();}
+});
+
 /* keyboard shortcuts like Fusion */
 addEventListener('keydown',e=>{
-  if(e.target.tagName==='INPUT')return;
+  if(EX.active&&(e.key==='Escape'||e.key==='Enter')){e.preventDefault();if(e.key==='Enter')commitExtrude();else cancelExtrude();return;}
+  if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
   const k=e.key.toLowerCase();
   if(SK.active){
     if(k==='escape'){if(SK.pts.length)sketchCancelChain();else sketchTool(null);}
@@ -1795,8 +2098,8 @@ addEventListener('keydown',e=>{
     else if(k==='enter')finishSketch();
     return;
   }
-  if(k==='e')openDialog('Extrude');else if(k==='h')openDialog('Hole');else if(k==='f')openDialog('Fillet');else if(k==='l')enterSketch();else if(k==='i')openDialog('Measure');
-  else if(k==='escape')closeDialog();else if(k==='home')setView('home');
+  if(k==='e')startExtrude();else if(k==='h')openDialog('Hole');else if(k==='f')openDialog('Fillet');else if(k==='l')enterSketch();else if(k==='i')openDialog('Measure');
+  else if(k==='escape'){if(EX.active)cancelExtrude();else closeDialog();}else if(k==='home')setView('home');
 });
 })();
 </script>
