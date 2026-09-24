@@ -71,7 +71,7 @@ Known limits: sketches are on the XY plane at Z 0 only; overlapping profiles tha
 ## Next steps (ask me which one first)
 
 1. ~~**Extrude a user sketch in the HTML prototype.**~~ Done, see above. Detect closed profiles (rect, circle, polygon, and closed line chains), let me pick one, build it with `THREE.ExtrudeGeometry` (distance, Join/Cut/New Body), and add an ExtrudeN feature to the timeline that rolls back like the others. Show the Extrude dialog with a live preview.
-2. **Start the real Python 3 app.** Recommended stack:
+2. ~~**Start the real Python 3 app.**~~ Started: see `gsend_cad/README.md`. It has sketch, extrude (Join/Cut/New Body on a real OpenCascade kernel), timeline rollback, undo, save/open, and STEP/STL export, in the same look. What follows is the original plan. Recommended stack:
    - **build123d** (OpenCascade kernel) for sketch → extrude → booleans → fillet/chamfer → STEP export
    - **PySide6 / Qt** for the ribbon, browser tree, timeline, and dockable panels
    - **pyvista or vedo** (VTK) viewport embedded in Qt. Tkinter can't do shaded B-rep with orbit.
