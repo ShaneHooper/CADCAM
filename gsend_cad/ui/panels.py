@@ -9,6 +9,7 @@ from PySide6.QtGui import QColor, QPainter, QPixmap, QPolygon
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QScrollArea, QSizePolicy,
                                QStackedWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
+from .. import APP_NAME
 from . import icons, theme
 
 # ribbon: tab -> [(group, [(icon, label)])]. Mesh, Sheet Metal and Plastic are left out on purpose.
@@ -62,17 +63,14 @@ class TopBar(QFrame):
         self.setObjectName("topbar")
         self.setFixedHeight(34)
         lay = hbox(self, (10, 0, 10, 0), 6)
-        g = QLabel("G")
-        g.setObjectName("brandG")
-        g.setFixedSize(24, 24)
-        g.setAlignment(Qt.AlignCenter)
-        g.setStyleSheet(f"font-family:'{fonts['g']}';")
-        wm = QLabel(f"<span style=\"font-family:'{fonts['wm']}';font-size:19px;letter-spacing:1px\">-SEND"
-                    f"<span style='color:{theme.ACCENT}'>.IO</span></span>")
-        cad = QLabel("CAD")
+        # the G00 logo (blue graffiti G, white 00) then the product label
+        logo = QLabel()
+        logo.setPixmap(theme.logo_pixmap(30))
+        logo.setToolTip(APP_NAME)
+        cad = QLabel("CAM")
         cad.setObjectName("brandCad")
-        for w in (g, wm, cad):
-            lay.addWidget(w)
+        lay.addWidget(logo)
+        lay.addWidget(cad)
         lay.addSpacing(8)
         for name, sig, tip in (("open", self.open, "Open (Ctrl+O)"), ("save", self.save, "Save (Ctrl+S)"),
                                ("undo", self.undo, "Undo (Ctrl+Z)"), ("redo", self.redo, "Redo (Ctrl+Y)")):

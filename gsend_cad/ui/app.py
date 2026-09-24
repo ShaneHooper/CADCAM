@@ -6,6 +6,7 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
+from .. import APP_NAME
 from ..core import Document, bracket_plate
 from . import theme
 
@@ -29,8 +30,12 @@ def launch(document: Document | str | None = None, block: bool | None = None):
     app = QApplication.instance()
     created = app is None
     if created:
+        if sys.platform == "win32":     # own taskbar entry, so Windows shows the G00 logo, not Python's
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("G00.CAM")
         app = QApplication(sys.argv[:1])
-        app.setApplicationName("G-SEND.IO CAD")
+        app.setApplicationName(APP_NAME)
+    app.setWindowIcon(theme.app_icon())
     fonts = _style(app)
     path = None
     if isinstance(document, str):
@@ -46,7 +51,7 @@ def launch(document: Document | str | None = None, block: bool | None = None):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="gsend_cad", description="G-SEND.IO CAD")
+    ap = argparse.ArgumentParser(prog="g00cam", description=APP_NAME)
     ap.add_argument("file", nargs="?", help=".gcad document to open")
     args = ap.parse_args(argv)
     launch(args.file, block=True)

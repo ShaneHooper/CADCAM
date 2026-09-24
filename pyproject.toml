@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gsend-cad"
 version = "0.1.0"
-description = "G-SEND.IO CAD module: sketch, extrude and B-rep solids with a Fusion-style UI"
+description = "G00 CAM: sketch, extrude and B-rep solids with a Fusion-style UI (G-SEND.IO module)"
 requires-python = ">=3.10"
 dependencies = []                      # gsend_cad.core needs nothing
 
@@ -15,13 +15,14 @@ ui = ["build123d>=0.9", "numpy", "PySide6>=6.6", "pyvista>=0.43", "pyvistaqt>=0.
 dev = ["pytest", "pillow"]
 
 [project.scripts]
+g00cam = "gsend_cad.ui.app:main"
 gsend-cad = "gsend_cad.ui.app:main"
 
 [tool.setuptools.packages.find]
 include = ["gsend_cad*"]
 
 [tool.setuptools.package-data]
-"gsend_cad.ui" = ["fonts/*"]
+"gsend_cad.ui" = ["fonts/*", "assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

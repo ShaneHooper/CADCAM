@@ -11,6 +11,7 @@ Three layers, so G-SEND.IO can take only what it needs:
     gsend_cad.launch("part.gcad")
 """
 __version__ = "0.1.0"
+APP_NAME = "G00 CAM"          # working name; one place to change it
 
 
 def launch(document=None, block=None):

@@ -6,13 +6,14 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QFileDialog, QGridLayout, QMainWindow, QMessageBox, QWidget
 
+from .. import APP_NAME
 from ..core import Document, bracket_plate
 from ..kernel import Kernel
 from . import theme
 from .commands import ExtrudeSession, SketchSession, regions_for
 from .panels import Browser, Ribbon, StatusBar, Timeline, TopBar
 
-FILE_FILTER = "G-SEND CAD (*.gcad);;All files (*)"
+FILE_FILTER = f"{APP_NAME} (*.gcad);;All files (*)"
 DEFAULT_MSG = "Left drag: orbit · Right drag: pan · Wheel: zoom · Click a feature in the timeline to roll back"
 
 
@@ -34,7 +35,8 @@ class MainWindow(QMainWindow):
         self.session = None
         fonts = fonts or {"g": "DejaVu Sans", "wm": "DejaVu Sans"}
 
-        self.setWindowTitle("G-SEND.IO CAD")
+        self.setWindowTitle(APP_NAME)
+        self.setWindowIcon(theme.app_icon())
         self.resize(1400, 820)
         central = QWidget()
         central.setObjectName("central")
@@ -396,7 +398,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, ev):
         if self.dirty and self.isVisible():
-            r = QMessageBox.question(self, "G-SEND CAD", "Save changes before closing?",
+            r = QMessageBox.question(self, APP_NAME, "Save changes before closing?",
                                      QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
             if r == QMessageBox.Cancel:
                 ev.ignore()

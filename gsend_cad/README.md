@@ -1,21 +1,33 @@
-# gsend_cad: the G-SEND.IO CAD module (Python)
+# G00 CAM (package `gsend_cad`): the G-SEND.IO CAD/CAM module
+
+**G00 CAM** is the working name. It's set once in `gsend_cad/__init__.py` (`APP_NAME`), and
+the logo is the G00 logo from the G-SEND.IO repo (`ui/assets/g00code_logo.png` / `.ico`).
 
 This is the real app that the HTML prototype in `prototypes/gsend-cad/` was sketching out.
-It keeps the same look (dark industrial, blue accent, same layout, fonts and icons) and the
-same sketch-entity data model, and it has a real B-rep kernel (OpenCascade via build123d).
+It keeps the same look (dark industrial, blue accent, same layout and icons) and the same
+sketch-entity data model, and it has a real B-rep kernel (OpenCascade via build123d).
 
-## Run it
+## Try it (Windows)
+
+1. Install **Python 3.12** from python.org and tick "Add python.exe to PATH". Any version
+   from 3.10 to 3.13 works; build123d has no 3.14 build yet.
+2. Get this branch (`claude/new-session-sgzhb7`) onto your PC: `git clone`, or download the ZIP
+   from GitHub.
+3. Double-click **`G00CAM.bat`**. The first run sets up a private `.venv` folder, which takes
+   a few minutes and downloads about 1 GB (Qt, VTK, OpenCascade). After that it opens
+   straight away. Drag a `.gcad` file onto it to open that file.
+
+By hand, on any OS:
 
 ```
 python -m venv .venv
 .venv\Scripts\activate            # Windows  (source .venv/bin/activate on Linux/macOS)
 pip install -e .[ui,dev]
-python -m gsend_cad                # opens the demo Bracket Plate
-python -m gsend_cad part.gcad      # opens a saved document
+g00cam                             # or: python -m gsend_cad [part.gcad]
 ```
 
 On Linux, Qt also needs the system GL/xcb libraries (`libegl1 libgl1 libxkbcommon0
-libxcb-cursor0 ...`). Windows needs nothing extra.
+libxcb-cursor0 ...`).
 
 ## What works
 
@@ -71,8 +83,10 @@ Hole, Fillet, Chamfer and the rest of the ribbon show "not in this build yet".
 ## Fonts
 
 The prototype uses Rajdhani, Share Tech Mono, Squada One and Anton (Google Fonts, OFL).
-Put their `.ttf` files in `gsend_cad/ui/fonts/` and the app loads them. Without them it
-falls back to Bahnschrift / Consolas on Windows.
+Anton and Squada One are included in `ui/fonts/`, copied from the G-SEND.IO repo with
+their licenses. To match the prototype exactly, add `Rajdhani-*.ttf` and
+`ShareTechMono-Regular.ttf` there too. Until then the app falls back to Bahnschrift / Consolas
+on Windows.
 
 ## Screenshots
 

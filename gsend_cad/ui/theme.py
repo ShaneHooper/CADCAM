@@ -23,6 +23,9 @@ BAD = "#ff3b3b"
 BODY = "#b4b9c0"
 
 FONT_DIR = Path(__file__).with_name("fonts")
+ASSETS = Path(__file__).with_name("assets")
+LOGO_PNG = ASSETS / "g00code_logo.png"      # the G00 logo from the G-SEND.IO repo
+LOGO_ICO = ASSETS / "g00code_logo.ico"
 # First family that is installed wins. Drop the Google Fonts TTFs (Rajdhani, Share Tech Mono,
 # Squada One, Anton; all OFL) into ui/fonts/ to get the exact prototype look.
 HEAD = ["Rajdhani", "Bahnschrift", "DejaVu Sans Condensed", "DejaVu Sans"]
@@ -35,6 +38,21 @@ def load_fonts():
     if FONT_DIR.is_dir():
         for f in sorted(FONT_DIR.glob("*.[ot]tf")):
             QFontDatabase.addApplicationFont(str(f))
+
+
+def logo_pixmap(height: int, dpr: float = 2.0):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QPixmap
+    pm = QPixmap(str(LOGO_PNG)).scaledToHeight(int(height * dpr), Qt.SmoothTransformation)
+    pm.setDevicePixelRatio(dpr)
+    return pm
+
+
+def app_icon():
+    from PySide6.QtGui import QIcon
+    ic = QIcon(str(LOGO_ICO)) if LOGO_ICO.exists() else QIcon()
+    ic.addFile(str(LOGO_PNG))
+    return ic
 
 
 def pick(families) -> str:
