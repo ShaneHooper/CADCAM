@@ -58,6 +58,9 @@ libxcb-cursor0 ...`).
   Ctrl+S / Ctrl+O.
 - **Export:** Utilities → Export writes STEP, and 3D Print writes STL.
 - **Properties:** exact volume, bounding box and mass (6061-T6 by default) from the B-rep.
+- **Rename / Delete:** right-click a sketch or body in the browser (or F2 / Delete). Deleting
+  a sketch offers to delete the extrudes made from it; deleting a body adds a `remove`
+  feature (roll back to see it again). Body names live in `Document.body_names`.
 - **Help → Documentation (F1):** how to sketch, edit and hide sketches, and extrude
   (`gsend_cad/ui/docs.py`).
 

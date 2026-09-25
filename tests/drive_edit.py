@@ -195,6 +195,88 @@ check("a consumed sketch can be shown", win.doc.sketch_shown(win.doc.feature(sk_
 key(Qt.Key_Z, Qt.ControlModifier)
 check("Ctrl+Z undoes a show/hide", not win.doc.sketch_shown(win.doc.feature(sk_id)))
 
+# ---- Rename (F2 / right-click → Rename) and Delete (Del key) in the Browser
+from PySide6.QtWidgets import QLineEdit, QMessageBox
+from PySide6.QtCore import QTimer
+tree = win.browser.tree
+
+
+def rename(nid, text):
+    win.browser.start_rename(nid)
+    pump(100)
+    ed = tree.findChild(QLineEdit)
+    ed.selectAll()
+    QTest.keyClicks(ed, text)
+    QTest.keyClick(ed, Qt.Key_Return)
+    pump(200)
+
+
+rename("body1", "Base Plate")
+check("rename a body", win.model.body("body1").name == "Base Plate" and tree_item("body1").text(0) == "Base Plate")
+rename(cons, "Construction")
+check("rename a sketch", win.doc.feature(cons)["name"] == "Construction")
+rename(cons, "Sketch1")
+check("duplicate sketch name refused", win.doc.feature(cons)["name"] == "Construction")
+win.browser.start_rename(cons)
+pump(100)
+QTest.keyClick(tree.findChild(QLineEdit), Qt.Key_Escape)
+pump(100)
+check("Esc cancels a rename", win.doc.feature(cons)["name"] == "Construction")
+
+# Delete key on a sketch nothing uses
+tree.setCurrentItem(tree_item(cons))
+win.browser.selected.emit(cons)
+n = len(win.doc.features)
+QTest.keyClick(tree, Qt.Key_Delete)
+pump()
+check("Del deletes a sketch", len(win.doc.features) == n - 1 and all(f["id"] != cons for f in win.doc.features))
+key(Qt.Key_Z, Qt.ControlModifier)
+check("Ctrl+Z brings the sketch back", any(f["id"] == cons for f in win.doc.features))
+
+# Delete a sketch an extrude uses: asks, deletes both
+def answer(button):
+    def go():
+        m = QApplication.activeModalWidget()
+        if isinstance(m, QMessageBox):
+            asked.append(m.text())
+            m.button(button).click()
+    QTimer.singleShot(300, go)
+
+
+asked = []
+answer(QMessageBox.Cancel)
+win.delete_node(sk_id)
+check("deleting a used sketch asks first; Cancel keeps it", asked and "Extrude" in asked[0]
+      and any(f["id"] == sk_id for f in win.doc.features))
+asked = []
+answer(QMessageBox.Yes)
+n = len(win.doc.features)
+win.delete_node(sk_id)
+check("Yes deletes the sketch and its extrude", len(win.doc.features) == n - 2 and not win.model.errors)
+key(Qt.Key_Z, Qt.ControlModifier)
+
+# Delete a body: selected in the Browser, Del pressed in the 3D view
+win.run_tool("Sketch")
+win.run_tool("Circle")
+click(0, -2.5)
+click(0.4, -2.5)
+key(Qt.Key_Return)
+key(Qt.Key_E)
+win.session.panel.op.setCurrentIndex(2)
+key(Qt.Key_Return)
+check("second body made", len(win.model.bodies) == 2)
+win.browser.selected.emit("body2")
+vp.plotter.setFocus()
+key(Qt.Key_Delete)
+check("Del deletes the selected body", [b.id for b in win.model.bodies] == ["body1"]
+      and win.doc.features[-1]["kind"] == "remove")
+shot("15_body_deleted")
+win.roll_to(len(win.doc.features) - 1)
+check("rolling back before Remove shows the body again", len(win.model.bodies) == 2)
+win.roll_to(len(win.doc.features))
+key(Qt.Key_Z, Qt.ControlModifier)
+check("Ctrl+Z brings the body back", len(win.model.bodies) == 2)
+
 win.dirty = False
 win.close()
 print("FAILURES:", failures)

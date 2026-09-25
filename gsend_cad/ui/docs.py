@@ -79,7 +79,7 @@ down.</p>
 <h3>Open it</h3>
 <ul>
 <li><b>Timeline:</b> right-click the sketch icon → <b>Edit Sketch</b> (or double-click it).</li>
-<li><b>Browser:</b> open <b>Sketches</b>, then double-click the sketch, or right-click → <b>Edit Sketch</b>.</li>
+<li><b>Browser:</b> open <b>Sketches</b>, then right-click the sketch → <b>Edit Sketch</b> (or double-click it).</li>
 </ul>
 <p>The sketch opens with the <b>EDIT SKETCH</b> palette, and its shapes are listed there.</p>
 <h3>Change it</h3>
@@ -106,12 +106,33 @@ extrude again.</p>
 <p>A sketch hides by itself once it is extruded. Any sketch can also be hidden or shown by
 hand, for example a construction sketch drawn on a face that you don't need to see any more.</p>
 <ul>
-<li><b>Browser:</b> under <b>Sketches</b>, click the <b>dot</b> left of the sketch name
-(blue = shown, hollow = hidden). Or right-click → <b>Hide Sketch</b> / <b>Show Sketch</b>.</li>
+<li><b>Browser:</b> under <b>Sketches</b>, right-click the sketch → <b>Hide Sketch</b> /
+<b>Show Sketch</b>. Or click the <b>dot</b> left of its name (blue = shown, hollow = hidden).</li>
 <li><b>Timeline:</b> right-click the sketch → <b>Hide Sketch</b> / <b>Show Sketch</b>.</li>
 </ul>
 <p>Hidden sketches stay in the part and are saved with it. Their shapes can't be picked by
 Extrude until you show the sketch again.</p>
+"""),
+    ("rename", "Rename / Delete", """
+<h1>Rename and Delete</h1>
+<p>Works on sketches and bodies in the <b>Browser</b> (left).</p>
+<h3>Rename</h3>
+<ul>
+<li>Right-click the sketch or body → <b>Rename</b> (or click it and press <b>F2</b>).</li>
+<li>Type the new name and press <b>Enter</b>. <b>Esc</b> keeps the old name.</li>
+</ul>
+<p>Names are saved in the .gcad file. Two sketches can't share a name.</p>
+<h3>Delete</h3>
+<ul>
+<li>Click the sketch or body in the Browser and press <b>Delete</b>, or right-click →
+<b>Delete</b>.</li>
+<li><b>Sketch:</b> if an extrude was made from it, {app} asks first and deletes both
+(otherwise the extrude would have nothing to build from).</li>
+<li><b>Body:</b> a <b>Remove</b> step is added to the timeline, like Fusion. Roll the
+timeline back before it to see the body again.</li>
+<li><b>Ctrl+Z</b> brings back anything you deleted.</li>
+</ul>
+<p class="tip">Any step in the timeline can also be deleted: right-click it → Delete.</p>
 """),
     ("extrude", "Make a Solid (Extrude)", """
 <h1>Make a Solid from a Sketch (Extrude)</h1>
@@ -178,6 +199,8 @@ earlier.</li>
 <tr><td class="k">Ctrl+Z / Ctrl+Y</td><td>Undo / redo</td></tr>
 <tr><td class="k">Ctrl+S / Ctrl+O</td><td>Save / open</td></tr>
 <tr><td class="k">Home</td><td>Home view</td></tr>
+<tr><td class="k">Delete</td><td>Delete the sketch or body picked in the Browser</td></tr>
+<tr><td class="k">F2</td><td>Rename the sketch or body picked in the Browser</td></tr>
 <tr><td class="k">F1</td><td>This documentation</td></tr>
 </table>
 <p class="tip">Hole, Fillet, Chamfer and some other ribbon tools are not in this build yet;

@@ -17,6 +17,8 @@ CONTROLS
   Enter        finish the sketch
   Edit sketch  right-click a sketch in the timeline (or double-click it in the Browser)
   Hide sketch  click the dot next to it in the Browser, or right-click -> Hide Sketch
+  Rename       right-click a sketch or body in the Browser -> Rename (or F2)
+  Delete       click a sketch or body in the Browser, press Delete (Ctrl+Z brings it back)
   E            extrude: click profiles in the view, set Distance / Direction / Operation, OK
   Esc          cancel / end a line chain
   Ctrl+Z / Y   undo / redo

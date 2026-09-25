@@ -32,6 +32,7 @@ class MainWindow(QMainWindow):
         self.undo_stack: list[dict] = []
         self.redo_stack: list[dict] = []
         self.selected = "body1"
+        self.sel_node = None             # last sketch / body picked in the Browser (for Delete)
         self.paint_sel = False           # like the prototype: highlight only after a click
         self.session = None
         fonts = fonts or {"g": "DejaVu Sans", "wm": "DejaVu Sans"}
@@ -70,6 +71,8 @@ class MainWindow(QMainWindow):
         self.timeline.toggle.connect(lambda i: self.toggle_sketch(self.doc.features[i]["id"]))
         self.browser.edit.connect(self.edit_sketch)
         self.browser.toggle.connect(self.toggle_sketch)
+        self.browser.delete.connect(self.delete_node)
+        self.browser.rename.connect(self.rename_node)
         self.topbar.docs.connect(self.show_docs)
         self.topbar.about.connect(self.show_about)
         docs = QAction("Documentation", self, shortcut=QKeySequence(Qt.Key_F1),
@@ -192,6 +195,73 @@ class MainWindow(QMainWindow):
         self.undo_stack.append(self.doc.to_dict())
         self._restore(self.redo_stack.pop())
         self.message("Redo")
+
+    def delete_node(self, nid: str):
+        """Delete key / right-click → Delete on a sketch or body in the Browser."""
+        if self.session is not None:
+            self.viewport.show_toast("Finish the current command first")
+            return
+        if nid.startswith("body"):
+            body = self.model.body(nid)
+            if body is None:
+                self.viewport.show_toast("That body isn't there at this point in the timeline", bad=True)
+                return
+            self._snapshot()
+            f = self.doc.add_remove(nid)
+            self.sel_node = None
+            self.paint_sel = False
+            self.status.sel.setText("SEL: —")
+            self.rebuild()
+            self.document_changed.emit()
+            self.viewport.show_toast(f"{body.name} deleted")
+            self.message(f"{body.name} deleted ({f['name']} in the timeline). Ctrl+Z brings it back.")
+            return
+        try:
+            f = self.doc.feature(nid)
+        except KeyError:
+            return
+        deps = self.doc.dependents(nid)
+        ids = [nid]
+        if deps:
+            names = ", ".join(d["name"] for d in deps)
+            r = QMessageBox.question(
+                self, "Delete sketch",
+                f"{f['name']} was used to make {names}.\n\nDelete {f['name']} and {names}?",
+                QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
+            if r != QMessageBox.Yes:
+                return
+            ids += [d["id"] for d in deps]
+        self._snapshot()
+        gone = self.doc.remove_features(ids)
+        self.sel_node = None
+        self.status.sel.setText("SEL: —")
+        self.rebuild()
+        self.document_changed.emit()
+        what = " and ".join(g["name"] for g in gone)
+        self.viewport.show_toast(f"{what} deleted")
+        self.message(f"{what} deleted. Ctrl+Z brings it back.")
+
+    def rename_node(self, nid: str, name: str):
+        """Right-click → Rename (or F2) on a sketch or body in the Browser."""
+        name = " ".join(name.split())[:40]
+        if nid.startswith("body"):
+            if any(b.name == name and b.id != nid for b in self.kernel.build(self.doc, len(self.doc.features)).bodies):
+                self.viewport.show_toast(f"There is already a body called {name}", bad=True)
+                self.rebuild()
+                return
+            self._snapshot()
+            self.doc.body_names[nid] = name
+        else:
+            f = self.doc.feature(nid)
+            if self.doc.name_taken(name, nid):
+                self.viewport.show_toast(f"There is already a feature called {name}", bad=True)
+                self.rebuild()
+                return
+            self._snapshot()
+            f["name"] = name
+        self.rebuild()
+        self.document_changed.emit()
+        self.message(f"Renamed to {name}")
 
     def delete_feature(self, i: int):
         self.cancel_command()
@@ -404,6 +474,8 @@ class MainWindow(QMainWindow):
 
     # ---------------------------------------------------------- misc actions
     def select_node(self, nid: str):
+        b = self.browser
+        self.sel_node = nid if nid in b.sketch_ids or nid in b.body_ids else None
         if nid.startswith("body"):
             self.selected = nid
             self.paint_sel = True
@@ -479,6 +551,8 @@ class MainWindow(QMainWindow):
             self.redo()
         elif k == Qt.Key_F1:
             self.show_docs()
+        elif k == Qt.Key_Delete and self.session is None and self.sel_node:
+            self.delete_node(self.sel_node)
         elif self.session is not None:
             return
         elif k == Qt.Key_L:

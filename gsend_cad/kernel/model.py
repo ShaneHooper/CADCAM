@@ -167,7 +167,8 @@ class Kernel:
             except Exception as exc:  # a broken feature must not take the whole model down
                 errors[f["id"]] = str(exc)
             self._cache[key] = (state, errors, count)
-        return Model(n, [Body(bid, name, shape) for bid, name, shape in state], errors)
+        names = doc.body_names        # user renames; they never change geometry, so not cached
+        return Model(n, [Body(bid, names.get(bid, name), shape) for bid, name, shape in state], errors)
 
     def _apply(self, f, feats, state, count):
         k = f["kind"]
@@ -182,6 +183,10 @@ class Kernel:
                 bid, name, shape = state[0]
                 return [(bid, name, shape + tool)] + state[1:], count
             return self._cut(state, tool, f), count
+        if k == "remove":
+            if not any(bid == f["body"] for bid, _, _ in state):
+                raise ValueError(f"{f['name']}: body {f['body']} is not there to remove")
+            return [s for s in state if s[0] != f["body"]], count
         if k == "hole":
             if not state:
                 raise ValueError(f"{f['name']}: no body to drill")

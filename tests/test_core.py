@@ -85,3 +85,23 @@ def test_sketch_visibility_default_and_override(tmp_path):
     assert doc.sketch_shown(s3)
     s3["show"] = False
     assert not doc.sketch_shown(s3)
+
+
+def test_remove_features_keeps_marker_and_dependents():
+    doc = bracket_plate()
+    s1 = doc.features[0]
+    assert [f["name"] for f in doc.dependents(s1["id"])] == ["Extrude1"]
+    doc.set_marker(4)
+    gone = doc.remove_features([s1["id"], doc.features[1]["id"]])
+    assert [f["name"] for f in gone] == ["Sketch1", "Extrude1"]
+    assert doc.marker == 2 and doc.features[1]["name"] == "Extrude2"
+
+
+def test_body_names_roundtrip(tmp_path):
+    doc = bracket_plate()
+    doc.body_names["body1"] = "Base Plate"
+    doc.add_remove("body1")
+    assert doc.describe(doc.features[-1]) == "Remove Base Plate"
+    p = tmp_path / "n.gcad"
+    doc.save(p)
+    assert Document.load(p).body_names == {"body1": "Base Plate"}

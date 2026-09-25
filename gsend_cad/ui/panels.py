@@ -4,7 +4,7 @@ from __future__ import annotations
 import getpass
 from functools import partial
 
-from PySide6.QtCore import QEvent, QPoint, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPixmap, QPolygon
 from PySide6.QtWidgets import (QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QScrollArea,
                                QSizePolicy,
@@ -245,6 +245,8 @@ class Browser(QFrame):
     selected = Signal(str)
     edit = Signal(str)            # sketch id: Edit Sketch
     toggle = Signal(str)          # sketch id: show / hide
+    delete = Signal(str)          # sketch or body id
+    rename = Signal(str, str)     # sketch or body id, new name
 
     def __init__(self):
         super().__init__()
@@ -266,7 +268,14 @@ class Browser(QFrame):
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._menu)
         self.tree.viewport().installEventFilter(self)
+        self.tree.installEventFilter(self)                    # Delete / F2 keys
+        self.tree.setEditTriggers(QTreeWidget.NoEditTriggers)  # names edit only via Rename
+        self.tree.itemChanged.connect(self._renamed)
+        self.tree.itemDelegate().closeEditor.connect(self._editor_closed)
+        self._editor = None
         self.sketch_ids: dict[str, bool] = {}     # sketch id -> shown
+        self.body_ids: dict[str, bool] = {}       # body id -> exists at the timeline marker
+        self._renaming = None                     # (id, old name) while the name editor is open
         v.addWidget(self.tree, 1)
         self.props = QFrame()
         self.props.setObjectName("props")
@@ -284,12 +293,69 @@ class Browser(QFrame):
             self.pvals[k] = b
         v.addWidget(self.props)
 
+    def _node(self, it):
+        nid = it.data(0, Qt.UserRole) if it else None
+        return nid if nid in self.sketch_ids or nid in self.body_ids else None
+
+    def start_rename(self, nid: str):
+        it = self._item(nid)
+        if it is None:
+            return
+        self.tree.blockSignals(True)
+        it.setFlags(it.flags() | Qt.ItemIsEditable)
+        self.tree.blockSignals(False)
+        self._renaming = (nid, it.text(0))
+        self.tree.setCurrentItem(it)
+        self.tree.editItem(it, 0)
+        self._editor = self.tree.indexWidget(self.tree.currentIndex())
+
+    def _item(self, nid):
+        from PySide6.QtWidgets import QTreeWidgetItemIterator
+        it = QTreeWidgetItemIterator(self.tree)
+        while it.value():
+            if it.value().data(0, Qt.UserRole) == nid:
+                return it.value()
+            it += 1
+        return None
+
+    def _renamed(self, it, col):
+        if self._renaming and col == 0 and it.data(0, Qt.UserRole) == self._renaming[0]:
+            nid, old = self._renaming
+            new = it.text(0).strip()
+            if new == old:
+                return                      # not a rename (or nothing typed): keep waiting
+            self._renaming = None
+            if new:
+                self.rename.emit(nid, new)
+            else:
+                self.tree.blockSignals(True)
+                it.setText(0, old)
+                self.tree.blockSignals(False)
+
+    def _editor_closed(self, editor, _hint=None):
+        # only this rename's editor ends it (a previous editor can report closing late)
+        if editor is self._editor:
+            self._editor = None
+            QTimer.singleShot(0, self._rename_done)
+
+    def _rename_done(self):
+        if self._editor is None:
+            self._renaming = None       # editor closed with Esc: nothing changed
+
     def _sketch_at(self, pos):
         it = self.tree.itemAt(pos)
         nid = it.data(0, Qt.UserRole) if it else None
         return (it, nid) if nid in self.sketch_ids else (it, None)
 
     def eventFilter(self, obj, ev):
+        if obj is self.tree and ev.type() == QEvent.KeyPress and not self._renaming:
+            nid = self._node(self.tree.currentItem())
+            if nid and ev.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+                self.delete.emit(nid)
+                return True
+            if nid and ev.key() == Qt.Key_F2:
+                self.start_rename(nid)
+                return True
         # a click on a sketch's eye dot shows / hides it, like Fusion's browser
         if ev.type() == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton:
             it, sid = self._sketch_at(ev.position().toPoint())
@@ -306,12 +372,21 @@ class Browser(QFrame):
             self.edit.emit(nid)
 
     def _menu(self, pos):
-        _, sid = self._sketch_at(pos)
-        if not sid:
+        it = self.tree.itemAt(pos)
+        nid = self._node(it)
+        if not nid:
             return
+        self.tree.setCurrentItem(it)
+        self.selected.emit(nid)
         m = QMenu(self)
-        m.addAction("Edit Sketch", partial(self.edit.emit, sid))
-        m.addAction("Hide Sketch" if self.sketch_ids[sid] else "Show Sketch", partial(self.toggle.emit, sid))
+        if nid in self.sketch_ids:
+            m.addAction("Edit Sketch", partial(self.edit.emit, nid))
+            m.addAction("Hide Sketch" if self.sketch_ids[nid] else "Show Sketch", partial(self.toggle.emit, nid))
+            m.addSeparator()
+        m.addAction("Rename\tF2", partial(self.start_rename, nid))
+        d = m.addAction("Delete\tDel", partial(self.delete.emit, nid))
+        if nid in self.body_ids and not self.body_ids[nid]:
+            d.setEnabled(False)          # made later in the timeline: roll forward to delete it
         m.exec(self.tree.viewport().mapToGlobal(pos))
 
     def set_rows(self, doc_name, bodies, sketches, selected, editing=None):
@@ -319,8 +394,11 @@ class Browser(QFrame):
         visible = drawn now and shown = not hidden by the user / an extrude,
         editing: (name, n_ents, sketch id or None) while Sketch mode is open"""
         t = self.tree
+        t.blockSignals(True)               # building items fires itemChanged; only renames count
         t.clear()
+        self._renaming = None
         self.sketch_ids = {sk[0]: sk[4] for sk in sketches}
+        self.body_ids = {bid: vis for bid, _n, vis in bodies}
 
         def node(parent, name, kind, on, nid=None, tag="", dim=False):
             it = QTreeWidgetItem(parent, [name, tag])
@@ -360,6 +438,7 @@ class Browser(QFrame):
             root.child(i - 1).setExpanded(False)
         t.setColumnWidth(0, 204)
         t.setColumnWidth(1, 40)
+        t.blockSignals(False)
 
     def set_props(self, rows: dict):
         for k, v in rows.items():
@@ -418,10 +497,12 @@ class FeatureButton(QWidget):
         self.fi.setAlignment(Qt.AlignCenter)
         self.fn = QLabel(name)
         self.fn.setObjectName("featName")
+        self.fn.ensurePolished()                  # long names get "…" instead of being clipped
+        self.fn.setText(self.fn.fontMetrics().elidedText(name, Qt.ElideRight, 52))
         self.fn.setAlignment(Qt.AlignCenter)
         v.addWidget(self.fi, 0, Qt.AlignHCenter)
         v.addWidget(self.fn, 0, Qt.AlignHCenter)
-        self.setToolTip(desc)
+        self.setToolTip(f"{name} · {desc}")
         self.setCursor(Qt.PointingHandCursor)
         self.state("on", False, None)
 
@@ -451,7 +532,7 @@ class Timeline(QFrame):
     edit = Signal(int)            # feature index of a sketch: Edit Sketch
     toggle = Signal(int)          # feature index of a sketch: show / hide
 
-    ICON = {"sketch": "sketch", "extrude": "extrude", "hole": "hole"}
+    ICON = {"sketch": "sketch", "extrude": "extrude", "hole": "hole", "remove": "trash"}
 
     def __init__(self):
         super().__init__()
