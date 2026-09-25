@@ -54,3 +54,26 @@ jobs:
           name: G00 CAM Rev1
           path: dist/G00 CAM Rev1/
           retention-days: 90
+          # sklearn keeps its DLLs in "sklearn\.libs"; without this the dot-folder is
+          # dropped from the zip and the exe dies on start (vcomp140.dll not found).
+          include-hidden-files: true
+          if-no-files-found: error
+
+      # Self-test what Shane actually downloads, not the local dist folder.
+      - uses: actions/download-artifact@v4
+        with:
+          name: G00 CAM Rev1
+          path: artifact-check/G00 CAM Rev1
+
+      - name: Self-test the downloaded artifact
+        shell: pwsh
+        run: |
+          $dir = "artifact-check\G00 CAM Rev1"
+          if (-not (Test-Path "$dir\_internal\sklearn\.libs\vcomp140.dll")) { throw "artifact is missing sklearn\.libs\vcomp140.dll" }
+          $srcCount = (Get-ChildItem "dist\G00 CAM Rev1" -Recurse -File -Force).Count
+          $dlCount  = (Get-ChildItem $dir -Recurse -File -Force).Count
+          "files: built $srcCount, downloaded $dlCount"
+          if ($srcCount -ne $dlCount) { throw "artifact file count differs from the build" }
+          $p = Start-Process -FilePath "$dir\G00 CAM.exe" -ArgumentList "--selftest", "$PWD\selftest_artifact.txt" -Wait -PassThru
+          Get-Content selftest_artifact.txt
+          if ($p.ExitCode -ne 0) { throw "artifact selftest failed with exit code $($p.ExitCode)" }
