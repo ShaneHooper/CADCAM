@@ -1,7 +1,9 @@
 name: Build G00 CAM (Windows)
 
-# Builds the one-folder Windows app with PyInstaller, checks it with --selftest, and uploads
-# it as the "G00 CAM Rev1" artifact (download it from the run's Summary page).
+# Builds the one-folder Windows app with PyInstaller, checks it with --selftest, wraps it in an
+# installer (G00-CAM-Setup.exe, Inno Setup), installs that and self-tests the installed copy.
+# Artifacts on the run's Summary page: "G00 CAM Setup" (the installer) and "G00 CAM Rev1"
+# (the plain folder, as a fallback).
 on:
   push:
     paths:
@@ -41,6 +43,40 @@ jobs:
           $p = Start-Process -FilePath $exe -ArgumentList "--selftest", "selftest.txt" -Wait -PassThru
           Get-Content selftest.txt
           if ($p.ExitCode -ne 0) { throw "selftest failed with exit code $($p.ExitCode)" }
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $ver = python -c "import gsend_cad; print(gsend_cad.__version__)"
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          & $iscc /Qp "/DAppVersion=$ver" packaging\g00cam.iss
+          if ($LASTEXITCODE -ne 0) { throw "iscc failed" }
+          Get-Item dist\installer\G00-CAM-Setup.exe | Select-Object Name, @{n="MB";e={[math]::Round($_.Length/1MB)}}
+
+      - name: Install silently and self-test the installed copy
+        shell: pwsh
+        run: |
+          $dir = "$env:RUNNER_TEMP\G00 CAM test install"
+          $t = Measure-Command {
+            $p = Start-Process dist\installer\G00-CAM-Setup.exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER", "/DIR=`"$dir`"" -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "installer failed with exit code $($p.ExitCode)" }
+          }
+          "installed in {0:N0} s" -f $t.TotalSeconds
+          $p = Start-Process -FilePath "$dir\G00 CAM.exe" -ArgumentList "--selftest", "$PWD\selftest_installed.txt" -Wait -PassThru
+          Get-Content selftest_installed.txt
+          if ($p.ExitCode -ne 0) { throw "installed selftest failed with exit code $($p.ExitCode)" }
+          $p = Start-Process "$dir\unins000.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES" -Wait -PassThru
+          "uninstall exit code $($p.ExitCode)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: G00 CAM Setup
+          path: dist/installer/G00-CAM-Setup.exe
+          retention-days: 90
+          compression-level: 0          # already compressed
+          if-no-files-found: error
 
       - name: Package folder
         shell: pwsh

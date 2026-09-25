@@ -87,6 +87,7 @@ def selftest(report: str) -> int:
             if shot:
                 win.grab().save(shot)
             lines.append(f"window: {win.width()}x{win.height()}, bodies shown {len(win.model.bodies)}")
+            lines.append(_exercise(win))
             win.dirty = False
             win.close()
     except Exception:
@@ -95,6 +96,41 @@ def selftest(report: str) -> int:
     lines.append("G00 CAM selftest " + ("OK" if ok else "FAILED"))
     Path(report).write_text("\n".join(lines), encoding="utf-8")
     return 0 if ok else 1
+
+
+def _exercise(win) -> str:
+    """Drive the main paths once inside a packaged build (sketch, edit, extrude preview + cut,
+    docs, STL export) so a module left out of the build fails the self-test, not Shane."""
+    import tempfile
+    from ..core import sketch as sk
+    from .commands import ExtrudeSession
+    v0 = win.model.bodies[0].volume
+    win.start_sketch()
+    s = win.session
+    s.ents += [sk.rect((0.75, -0.75), (1.75, 0.75)), sk.circle((1.25, 0), 0.25)]
+    s.origin += [None, None]
+    s.redraw()
+    win.finish_sketch()
+    sid = win.doc.features[-1]["id"]
+    win.edit_sketch(sid)
+    win.run_tool("Cancel")
+    win.start_extrude()
+    ex = win.session
+    assert isinstance(ex, ExtrudeSession), "extrude did not start"
+    ex.sel = [r.key for r in ex.regions if r.sketch == sid and r.holes]
+    ex.panel.op.setCurrentIndex(1)
+    ex.panel.dist.setValue(0.5)
+    ex.update_preview()
+    ex.commit()
+    cut = v0 - win.model.bodies[0].volume
+    assert cut > 0.5 and not win.model.errors, f"cut failed ({cut:.4f}, {win.model.errors})"
+    win.toggle_sketch(sid)
+    win.show_docs()
+    win.docs.close()
+    stl = Path(tempfile.gettempdir()) / "g00cam_selftest.stl"
+    from build123d import export_stl
+    export_stl(win.model.bodies[0].shape, str(stl))
+    return f"exercise: sketch, edit, extrude cut {cut:.4f} in3, hide, docs, stl {stl.stat().st_size} bytes"
 
 
 def main(argv=None):
