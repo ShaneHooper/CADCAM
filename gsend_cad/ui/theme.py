@@ -75,6 +75,19 @@ QToolTip {{ background: {PANEL}; color: {FG}; border: 1px solid {LINE2}; }}
 #units {{ border: 1px solid {LINE2}; padding: 1px 8px; }}
 #user {{ color: {FG2}; }}
 QToolButton#ico {{ border: 1px solid transparent; }}
+QToolButton#menuBtn {{ border: 1px solid transparent; color: {FG2}; font-family: '{head}'; font-weight: 600;
+                      font-size: 12px; letter-spacing: 1px; padding: 2px 8px; }}
+QToolButton#menuBtn:hover, QToolButton#menuBtn:open {{ border-color: {LINE2}; color: {ACCENT}; }}
+QToolButton#menuBtn::menu-indicator {{ image: none; width: 0; }}
+QToolButton#entDel {{ border: 1px solid transparent; color: {FG3}; background: transparent; font-size: 13px; padding: 0; }}
+QToolButton#entDel:hover {{ border-color: {BAD}; color: {BAD}; }}
+#docs, #docs QTextBrowser {{ background: {PANEL}; }}
+#docs QTextBrowser {{ border: 0; border-left: 1px solid {LINE}; }}
+#docs QListWidget {{ background: {PANEL}; border: 0; outline: 0; font-family: '{head}'; font-weight: 600;
+                    font-size: 13px; letter-spacing: 1px; color: {FG2}; }}
+#docs QListWidget::item {{ padding: 6px 12px; border-left: 2px solid transparent; }}
+#docs QListWidget::item:hover {{ color: {FG}; background: {PANEL2}; }}
+#docs QListWidget::item:selected {{ color: {ACCENT}; background: {ACCENT_DIM}; border-left-color: {ACCENT}; }}
 QToolButton#ico:hover {{ border-color: {LINE2}; }}
 #sep {{ background: {LINE}; }}
 
@@ -154,7 +167,9 @@ QPushButton#dlgBtn {{ border: 1px solid {LINE2}; background: transparent; paddin
 QPushButton#dlgBtn[ok="true"] {{ border-color: {ACCENT}; color: {ACCENT}; }}
 QPushButton#dlgBtn:hover {{ background: {PANEL2}; }}
 QMenu {{ background: {PANEL}; border: 1px solid {LINE2}; }}
+QMenu::item {{ padding: 4px 22px 4px 14px; }}
 QMenu::item:selected {{ background: {ACCENT_DIM}; }}
+QMenu::separator {{ height: 1px; background: {LINE}; margin: 3px 6px; }}
 QScrollBar:horizontal {{ height: 6px; background: {PANEL}; }}
 QScrollBar::handle:horizontal {{ background: {LINE2}; }}
 QScrollBar:vertical {{ width: 6px; background: {PANEL}; }}

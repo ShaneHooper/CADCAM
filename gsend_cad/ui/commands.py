@@ -8,8 +8,10 @@ from __future__ import annotations
 import numpy as np
 import pyvista as pv
 from PySide6.QtCore import Qt
+from functools import partial
+
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QPushButton,
-                               QScrollArea, QVBoxLayout, QWidget)
+                               QScrollArea, QToolButton, QVBoxLayout, QWidget)
 
 from ..core import sketch as sk
 from ..core.profiles import region_at, sketch_regions
@@ -70,7 +72,7 @@ class Panel(QFrame):
 # ------------------------------------------------------------------ sketch
 class SketchPalette(Panel):
     def __init__(self, session: "SketchSession"):
-        super().__init__("Sketch Palette", 210)
+        super().__init__("Edit Sketch" if session.edit_id else "Sketch Palette", 210)
         self.s = session
         self.plane = QDoubleSpinBox()
         self.plane.setRange(-100, 100)
@@ -120,16 +122,23 @@ class SketchPalette(Panel):
             e.setAlignment(Qt.AlignCenter)
             e.setStyleSheet(f"color:{theme.FG3};padding:3px;border-bottom:1px solid {theme.LINE};")
             self.lv.addWidget(e)
-        for ent in ents:
+        for i, ent in enumerate(ents):
             kind, detail = sk.entity_label(ent)
             r = QWidget()
             hl = QHBoxLayout(r)
-            hl.setContentsMargins(10, 3, 10, 3)
+            hl.setContentsMargins(10, 3, 4, 3)
             a, b = QLabel(kind), QLabel(detail)
             a.setStyleSheet(f"color:{theme.FG2};")
             hl.addWidget(a)
             hl.addStretch()
             hl.addWidget(b)
+            x = QToolButton()
+            x.setObjectName("entDel")
+            x.setText("×")
+            x.setToolTip(f"Delete this {kind.lower()}")
+            x.setFixedSize(16, 16)
+            x.clicked.connect(partial(self.s.delete_ent, i))
+            hl.addWidget(x)
             r.setStyleSheet(f"border-bottom:1px solid {theme.LINE};")
             self.lv.addWidget(r)
         self.lv.addStretch()
@@ -138,15 +147,31 @@ class SketchPalette(Panel):
 class SketchSession:
     captures_left = True
 
-    def __init__(self, win, name: str, plane_z: float = 0.0):
+    def __init__(self, win, name: str, plane_z: float = 0.0, ents=None, edit_id: str | None = None):
         self.win, self.vp = win, win.viewport
         self.name = name
         self.plane_z = plane_z
-        self.ents: list = []
+        self.edit_id = edit_id               # set when editing a sketch that is already in the timeline
+        self.ents: list = [dict(e) for e in ents or []]
+        self.origin: list = list(range(len(self.ents)))   # old index of each entity; None = drawn now
+        self.start = (list(self.ents), plane_z)
         self.pts: list = []
         self.tool = None
         self.palette = SketchPalette(self)
         self.vp.plane_z = plane_z
+        if self.ents:
+            self.redraw()
+
+    def changed(self) -> bool:
+        return (self.ents, self.plane_z) != self.start
+
+    def delete_ent(self, i: int):
+        if 0 <= i < len(self.ents):
+            kind, _ = sk.entity_label(self.ents[i])
+            del self.ents[i]
+            del self.origin[i]
+            self.redraw()
+            self.vp.show_toast(f"{kind} deleted")
 
     def set_plane(self, z):
         self.plane_z = self.vp.plane_z = float(z)
@@ -159,7 +184,8 @@ class SketchSession:
         self.vp.clear("preview")
         self.win.ribbon.set_active(label)
         name = label.upper() if label else "SELECT A TOOL"
-        self.vp.show_banner(f"SKETCH · XY PLANE · <span style='color:{theme.ACCENT}'>{name}</span>")
+        head = f"EDIT {self.name.upper()}" if self.edit_id else "SKETCH"
+        self.vp.show_banner(f"{head} · XY PLANE · <span style='color:{theme.ACCENT}'>{name}</span>")
         self.win.message(HINTS.get(self.tool, "Pick a sketch tool: L line · R rectangle · C circle · P polygon · Enter finishes"))
 
     def _snap(self, w, ev):
@@ -204,6 +230,7 @@ class SketchSession:
         ent = sk.build_entity(self.tool, self.pts[0], p, int(self.palette.sides.currentText()))
         if ent:
             self.ents.append(ent)
+            self.origin.append(None)
         self.pts = [p] if self.tool == "line" else []
         self.vp.clear("preview", render=False)
         self.redraw()
@@ -214,6 +241,7 @@ class SketchSession:
             self.vp.clear("preview")
         elif self.ents:
             self.ents.pop()
+            self.origin.pop()
             self.redraw()
 
     def on_key(self, ev) -> bool:
@@ -246,12 +274,15 @@ class SketchSession:
         elif label == "Undo":
             self.undo()
         elif label == "Clear":
-            self.ents, self.pts = [], []
+            self.ents, self.origin, self.pts = [], [], []
             self.vp.clear("preview", render=False)
             self.redraw()
             self.vp.show_toast("Sketch cleared")
         elif label == "Finish Sketch":
             self.win.finish_sketch()
+        elif label == "Cancel":
+            self.win.cancel_command()
+            self.vp.show_toast("Edit discarded" if self.edit_id else "Sketch discarded")
         else:
             self.win.not_built(label)
             self.win.ribbon.set_active(None)
@@ -426,7 +457,7 @@ def regions_for(doc):
     """Pickable regions from every applied sketch, plus each sketch's plane height."""
     regions, planes = [], {}
     for f in doc.applied():
-        if f["kind"] == "sketch":
+        if f["kind"] == "sketch" and f.get("show") is not False:     # a hidden sketch can't be picked
             rs = sketch_regions(f["id"], f["ents"])
             if rs:
                 regions += rs

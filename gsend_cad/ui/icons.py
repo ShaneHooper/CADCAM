@@ -38,6 +38,7 @@ PATHS = {
     "save": '<path d="M5 3h11l3 3v15H5z M8 3v6h8V3 M8 21v-7h8v7"/>',
     "trash": '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>',
     "finish": '<path d="M4 12l5 5L20 6"/>',
+    "cancel": '<path d="M6 6l12 12M18 6 6 18"/>',
     "joint": '<circle cx="7" cy="12" r="3"/><circle cx="17" cy="12" r="3"/><path d="M10 12h4"/>',
     "body": '<path d="M4 8l8-4 8 4v8l-8 4-8-4zM4 8l8 4 8-4M12 12v8"/>',
     "folder": '<path d="M3 6h6l2 2h10v11H3z"/>',

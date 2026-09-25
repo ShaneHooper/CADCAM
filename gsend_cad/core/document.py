@@ -89,6 +89,26 @@ class Document:
         return self.add({"kind": "hole", "points": [list(p) for p in points], "diameter": float(diameter),
                          "depth": depth, "top_z": float(top_z), **kw})
 
+    def update_sketch(self, fid: str, ents, plane_z: float, origin=None):
+        """Replace a sketch's entities in place (Edit Sketch) and keep later extrudes pointing
+        at the same shapes. `origin[i]` is the old index of new entity i, or None if it is new.
+        A profile that used a deleted entity is left unresolvable, so its extrude shows red."""
+        f = self.feature(fid)
+        if origin is None:
+            origin = list(range(len(ents)))
+        remap = {old: new for new, old in enumerate(origin) if old is not None}
+        f["ents"] = copy.deepcopy(list(ents))
+        f["plane_z"] = float(plane_z)
+        for g in self.features:
+            if g["kind"] != "extrude":
+                continue
+            for ref in g["profiles"]:
+                if ref["sketch"] == fid:
+                    ref["outer"] = [remap.get(i, -1) for i in ref["outer"]]
+                    ref["holes"] = [[remap.get(i, -1) for i in h] for h in ref.get("holes", [])]
+        self._changed("features")
+        return f
+
     def feature(self, fid: str) -> dict:
         for f in self.features:
             if f["id"] == fid:
@@ -111,6 +131,13 @@ class Document:
         """Sketch ids used by an applied extrude (those sketches hide, like in Fusion)."""
         n = self.marker if upto is None else upto
         return {p["sketch"] for f in self.features[:n] if f["kind"] == "extrude" for p in f["profiles"]}
+
+    def sketch_shown(self, f: dict, consumed: set | None = None) -> bool:
+        """Whether a sketch is drawn. Without a user choice ("show" on the feature) a sketch
+        hides once an extrude uses it, like Fusion; Hide / Show Sketch stores the choice."""
+        if "show" in f:
+            return bool(f["show"])
+        return f["id"] not in (self.consumed_sketches() if consumed is None else consumed)
 
     def describe(self, f: dict) -> str:
         k = f["kind"]

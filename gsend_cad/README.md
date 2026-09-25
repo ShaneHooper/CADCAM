@@ -39,7 +39,14 @@ libxcb-cursor0 ...`).
 - **Sketch (L):** Line (chains until Esc), Rectangle, Center Rect, Circle and Polygon, with
   grid snap. The snap size is set in the palette, and Shift gives 1/4 steps. A live
   dimension tag follows the cursor. The sketch plane is XY at any Z height (Plane field in
-  the palette). Ctrl+Z undoes, Enter finishes.
+  the palette). Ctrl+Z undoes, × in the palette list deletes one shape, Enter finishes,
+  Cancel discards.
+- **Edit Sketch:** right-click (or double-click) a sketch in the timeline or browser. Add or
+  delete shapes, or change its plane; Finish rebuilds the extrudes made from it
+  (`Document.update_sketch` remaps their profile references; one that used a deleted
+  shape turns red).
+- **Hide / Show Sketch:** the browser's eye dot, or right-click in the timeline/browser.
+  Stored as `"show"` on the sketch feature; hidden sketches can't be picked by Extrude.
 - **Extrude (E):** click closed profiles (rect, circle, polygon, closed line chains; loops
   inside other loops become holes). Direction is One side or Symmetric; a negative
   distance flips it. Operation is Join, Cut or New Body. The preview is the real
@@ -51,6 +58,8 @@ libxcb-cursor0 ...`).
   Ctrl+S / Ctrl+O.
 - **Export:** Utilities → Export writes STEP, and 3D Print writes STL.
 - **Properties:** exact volume, bounding box and mass (6061-T6 by default) from the B-rep.
+- **Help → Documentation (F1):** how to sketch, edit and hide sketches, and extrude
+  (`gsend_cad/ui/docs.py`).
 
 Hole, Fillet, Chamfer and the rest of the ribbon show "not in this build yet".
 

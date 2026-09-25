@@ -55,3 +55,33 @@ def test_bad_extrude_rejected():
         doc.add_extrude([], 1.0)
     with pytest.raises(ValueError):
         doc.add_extrude([{"sketch": "x", "outer": [0], "holes": []}], 0.0)
+
+
+def test_edit_sketch_keeps_extrude_refs_and_breaks_deleted_ones():
+    doc = Document()
+    s = doc.add_sketch([sk.rect((0, 0), (2, 1)), sk.circle((1, 0.5), 0.25)])
+    ring = next(r for r in sketch_regions(s["id"], s["ents"]) if r.outer.ents == [0])
+    e = doc.add_extrude([ring], 0.5)
+    # delete nothing, add a shape: refs unchanged
+    doc.update_sketch(s["id"], s["ents"] + [sk.circle((5, 5), 0.1)], 0.25, [0, 1, None])
+    assert e["profiles"][0]["outer"] == [0] and e["profiles"][0]["holes"] == [[1]]
+    assert doc.feature(s["id"])["plane_z"] == 0.25
+    # delete the rect (index 0): the circle moves to index 0 and the ring's outer is gone
+    ents = doc.feature(s["id"])["ents"]
+    doc.update_sketch(s["id"], ents[1:], 0.25, [1, 2])
+    assert e["profiles"][0]["outer"] == [-1] and e["profiles"][0]["holes"] == [[0]]
+
+
+def test_sketch_visibility_default_and_override(tmp_path):
+    doc = bracket_plate()
+    s1 = doc.features[0]
+    assert not doc.sketch_shown(s1)            # used by Extrude1: hidden like Fusion
+    s1["show"] = True
+    assert doc.sketch_shown(s1)
+    p = tmp_path / "v.gcad"
+    doc.save(p)
+    assert Document.load(p).sketch_shown(Document.load(p).features[0])
+    s3 = doc.add_sketch([sk.circle((0, 0), 1)])
+    assert doc.sketch_shown(s3)
+    s3["show"] = False
+    assert not doc.sketch_shown(s3)

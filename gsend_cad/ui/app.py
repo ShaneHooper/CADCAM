@@ -75,7 +75,7 @@ def selftest(report: str) -> int:
         lines.append(f"step: {step.stat().st_size} bytes")
         import pyvista  # noqa: F401
         import pyvistaqt  # noqa: F401
-        from . import commands, main_window, panels, viewport  # noqa: F401
+        from . import commands, docs, main_window, panels, viewport  # noqa: F401
         lines.append("ui modules: imported")
         lines.append(f"logo: {theme.LOGO_PNG.exists()}  fonts: {len(list(theme.FONT_DIR.glob('*.ttf')))}")
         import os
