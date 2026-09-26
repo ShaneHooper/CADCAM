@@ -54,7 +54,10 @@ def vbox(w=None, margins=(0, 0, 0, 0), spacing=0):
 
 
 class TopBar(QFrame):
+    new = Signal()
     save = Signal()
+    save_as = Signal()
+    export = Signal(str)          # "step" | "stl"
     open = Signal()
     undo = Signal()
     redo = Signal()
@@ -75,7 +78,23 @@ class TopBar(QFrame):
         lay.addWidget(logo)
         lay.addWidget(cad)
         lay.addSpacing(8)
-        for name, sig, tip in (("open", self.open, "Open (Ctrl+O)"), ("save", self.save, "Save (Ctrl+S)"),
+        self.file = QToolButton()
+        self.file.setObjectName("menuBtn")
+        self.file.setText("FILE")
+        self.file.setPopupMode(QToolButton.InstantPopup)
+        fm = QMenu(self.file)
+        fm.addAction("New\tCtrl+N", self.new.emit)
+        fm.addAction("Open…\tCtrl+O", self.open.emit)
+        fm.addSeparator()
+        fm.addAction("Save\tCtrl+S", self.save.emit)
+        fm.addAction("Save As…\tCtrl+Shift+S", self.save_as.emit)
+        fm.addSeparator()
+        fm.addAction("Export STEP…", partial(self.export.emit, "step"))
+        fm.addAction("Export STL…", partial(self.export.emit, "stl"))
+        self.file.setMenu(fm)
+        lay.addWidget(self.file)
+        for name, sig, tip in (("new", self.new, "New (Ctrl+N)"), ("open", self.open, "Open (Ctrl+O)"),
+                               ("save", self.save, "Save (Ctrl+S)"),
                                ("undo", self.undo, "Undo (Ctrl+Z)"), ("redo", self.redo, "Redo (Ctrl+Y)")):
             b = QToolButton()
             b.setObjectName("ico")

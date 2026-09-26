@@ -277,6 +277,38 @@ win.roll_to(len(win.doc.features))
 key(Qt.Key_Z, Qt.ControlModifier)
 check("Ctrl+Z brings the body back", len(win.model.bodies) == 2)
 
+# ---- File → New: empty part, sketch → solid, Save As names it, unsaved work is asked about
+import tempfile
+from PySide6.QtWidgets import QFileDialog
+asked = []
+answer(QMessageBox.Discard)
+win.topbar.file.menu().actions()[0].trigger()          # File → New
+pump()
+check("File → New asks about unsaved work", bool(asked))
+check("new part is empty", win.doc.features == [] and win.model.bodies == [] and win.doc.name == "Untitled")
+shot("16_new_part")
+key(Qt.Key_L)
+win.run_tool("Rectangle")
+click(-1, -0.5)
+click(1, 0.5)
+key(Qt.Key_Return)
+key(Qt.Key_E)
+check("extrude picks the only profile by itself", len(win.session.sel) == 1)
+win.session.panel.dist.setValue(0.75)
+key(Qt.Key_Return)
+check("sketch → solid on a new part (2 × 1 × 0.75)", len(win.model.bodies) == 1 and abs(vol() - 1.5) < 1e-6)
+shot("17_first_solid")
+d = tempfile.mkdtemp()
+QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (os.path.join(d, "my block"), ""))
+key(Qt.Key_S, Qt.ControlModifier)
+check("first save asks for a name and uses it", win.path.name == "my block.gcad" and win.doc.name == "my block"
+      and not win.dirty)
+asked = []
+key(Qt.Key_N, Qt.ControlModifier)
+check("Ctrl+N on saved work doesn't ask", not asked and win.doc.features == [])
+win.open(os.path.join(d, "my block.gcad"))
+check("reopen the saved part", len(win.model.bodies) == 1 and abs(vol() - 1.5) < 1e-6)
+
 win.dirty = False
 win.close()
 print("FAILURES:", failures)

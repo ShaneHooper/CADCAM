@@ -13,6 +13,7 @@ HOW TO USE IT
   sketch, hiding a sketch, and making a solid (extrude).
 
 CONTROLS
+  Ctrl+N       new, empty part (FILE menu, top left: New / Open / Save / Save As / Export)
   L            start a sketch (Line, Rectangle, Center Rect, Circle, Polygon; Shift = fine snap)
   Enter        finish the sketch
   Edit sketch  right-click a sketch in the timeline (or double-click it in the Browser)

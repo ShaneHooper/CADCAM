@@ -79,6 +79,9 @@ class MainWindow(QMainWindow):
                        shortcutContext=Qt.ApplicationShortcut, triggered=self.show_docs)
         self.addAction(docs)
         self.docs = None
+        self.topbar.new.connect(self.new_doc)
+        self.topbar.save_as.connect(self.save_as)
+        self.topbar.export.connect(self.export)
         self.topbar.save.connect(self.save)
         self.topbar.open.connect(self.open)
         self.topbar.undo.connect(self.undo)
@@ -133,8 +136,6 @@ class MainWindow(QMainWindow):
         names = {b.id: b.name for b in full.bodies}
         names.update({b.id: b.name for b in self.model.bodies})
         bodies = [(bid, name, bid in have) for bid, name in sorted(names.items(), key=lambda kv: int(kv[0][4:]))]
-        if not bodies:
-            bodies = [("body1", "Body1", False)]
         consumed = self.doc.consumed_sketches()
         sketches = [(f["id"], f["name"], i < n and self.doc.sketch_shown(f, consumed), len(f["ents"]),
                      self.doc.sketch_shown(f, consumed))
@@ -506,19 +507,63 @@ class MainWindow(QMainWindow):
         self.viewport.show_toast(f"Exported {Path(path).name}")
 
     def save(self):
-        path = self.path
-        if path is None:
-            p, _ = QFileDialog.getSaveFileName(self, "Save", f"{self.doc.name}.gcad", FILE_FILTER)
-            if not p:
-                return
-            path = Path(p)
+        if self.path is None:
+            return self.save_as()
+        self._write(self.path)
+
+    def save_as(self):
+        p, _ = QFileDialog.getSaveFileName(self, "Save As", f"{self.doc.name}.gcad", FILE_FILTER)
+        if not p:
+            return
+        path = Path(p)
+        if path.suffix.lower() != ".gcad":
+            path = path.with_suffix(".gcad")
+        if self.doc.name == "Untitled":       # a new part takes its file's name
+            self.doc.name = path.stem
+        self._write(path)
+
+    def _write(self, path: Path):
         self.doc.save(path)
         self.path, self.dirty = path, False
         self.topbar.set_doc(self.doc.name, False)
         self.viewport.show_toast(f"Saved {path.name}")
 
+    def _maybe_save(self) -> bool:
+        """Ask before throwing away unsaved work. False = the user cancelled."""
+        if not self.dirty:
+            return True
+        r = QMessageBox.question(self, APP_NAME, f"Save changes to {self.doc.name}?",
+                                 QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+        if r == QMessageBox.Cancel:
+            return False
+        if r == QMessageBox.Save:
+            self.save()
+            return not self.dirty            # the save dialog was cancelled: keep the work
+        return True
+
+    def new_doc(self):
+        """File → New (Ctrl+N): an empty part."""
+        self.cancel_command()
+        if not self._maybe_save():
+            return
+        self._set_doc(Document("Untitled"), None)
+        self.viewport.show_toast("New part")
+        self.message("New part. Press L to sketch, draw a closed shape, Enter, then E to make it solid.")
+
+    def _set_doc(self, doc: Document, path):
+        self.doc, self.path, self.dirty = doc, (Path(path) if path else None), False
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self.selected, self.paint_sel, self.sel_node = "body1", False, None
+        self.status.sel.setText("SEL: —")
+        self.rebuild(fit=True)
+        self.document_changed.emit()
+
     def open(self, path=None):
         if path is None:
+            self.cancel_command()
+            if not self._maybe_save():
+                return
             p, _ = QFileDialog.getOpenFileName(self, "Open", "", FILE_FILTER)
             if not p:
                 return
@@ -529,11 +574,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Open", f"Could not open {path}:\n{exc}")
             return
         self.cancel_command()
-        self.doc, self.path, self.dirty = doc, Path(path), False
-        self.undo_stack.clear()
-        self.redo_stack.clear()
-        self.rebuild(fit=True)
-        self.document_changed.emit()
+        self._set_doc(doc, path)
 
     # ---------------------------------------------------------- keys (like Fusion)
     def handle_key(self, ev):
@@ -541,8 +582,12 @@ class MainWindow(QMainWindow):
             return
         k, mod = ev.key(), ev.modifiers()
         ctrl = bool(mod & Qt.ControlModifier)
-        if ctrl and k == Qt.Key_S:
+        if ctrl and k == Qt.Key_S and mod & Qt.ShiftModifier:
+            self.save_as()
+        elif ctrl and k == Qt.Key_S:
             self.save()
+        elif ctrl and k == Qt.Key_N:
+            self.new_doc()
         elif ctrl and k == Qt.Key_O:
             self.open()
         elif ctrl and k == Qt.Key_Z:
@@ -568,13 +613,8 @@ class MainWindow(QMainWindow):
         self.handle_key(ev)
 
     def closeEvent(self, ev):
-        if self.dirty and self.isVisible():
-            r = QMessageBox.question(self, APP_NAME, "Save changes before closing?",
-                                     QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
-            if r == QMessageBox.Cancel:
-                ev.ignore()
-                return
-            if r == QMessageBox.Save:
-                self.save()
+        if self.isVisible() and not self._maybe_save():
+            ev.ignore()
+            return
         self.viewport.plotter.close()
         super().closeEvent(ev)

@@ -51,6 +51,7 @@ PATHS = {
     "fit": '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',
     "disp": '<path d="M12 3 3 8l9 5 9-5-9-5zM3 16l9 5 9-5"/>',
     "open": '<path d="M3 6h6l2 2h10v11H3z M3 10h18"/>',
+    "new": '<path d="M6 3h8l4 4v14H6z M14 3v4h4 M12 11v6 M9 14h6"/>',
     # timeline transport (filled)
     "tl_start": '<path fill="C" stroke="none" d="M4 4h4v16H4zM20 4 10 12l10 8z"/>',
     "tl_prev": '<path fill="C" stroke="none" d="M18 4 6 12l12 8z"/>',

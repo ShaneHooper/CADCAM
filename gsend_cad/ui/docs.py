@@ -30,8 +30,13 @@ bottom, so you can go back and change it.</p>
 <tr><td class="k">Mouse wheel</td><td>Zoom</td></tr>
 <tr><td class="k">Home key</td><td>Back to the home view</td></tr>
 </table>
+<h3>Start a new part</h3>
+<p><b>FILE → New</b> (or <b>Ctrl+N</b>, or the page icon next to FILE) gives an empty part.
+Then: <b>L</b> to sketch, draw a closed shape, <b>Enter</b>, <b>E</b> to make it solid (see
+<b>Create a Sketch</b> and <b>Make a Solid</b>). <b>Ctrl+S</b> saves it; the first save asks for
+a name.</p>
 <p class="tip">Units are inches. The demo part (Bracket Plate) opens on start so there is
-something to look at. Draw on it or over it.</p>
+something to look at. FILE → New replaces it with an empty part.</p>
 """),
     ("sketch", "Create a Sketch", """
 <h1>Create a Sketch</h1>
@@ -181,9 +186,11 @@ earlier.</li>
 <p><b>Ctrl+Z</b> undo, <b>Ctrl+Y</b> redo (also the arrows in the top bar).</p>
 <h3>Files</h3>
 <table>
+<tr><td class="k">Ctrl+N</td><td>New, empty part (asks to save unsaved work first).</td></tr>
 <tr><td class="k">Ctrl+S</td><td>Save the part as a <b>.gcad</b> file (keeps the full timeline).</td></tr>
+<tr><td class="k">Ctrl+Shift+S</td><td>Save As: a copy under a new name.</td></tr>
 <tr><td class="k">Ctrl+O</td><td>Open a .gcad file.</td></tr>
-<tr><td class="k">Utilities → Export</td><td>STEP file, for Fusion 360 or any CAM system.</td></tr>
+<tr><td class="k">FILE → Export STEP</td><td>STEP file, for Fusion 360 or any CAM system (also Utilities → Export).</td></tr>
 <tr><td class="k">Utilities → 3D Print</td><td>STL file.</td></tr>
 </table>
 """),
@@ -197,7 +204,8 @@ earlier.</li>
 <tr><td class="k">Esc</td><td>Drop the current shape / end a line chain / cancel Extrude</td></tr>
 <tr><td class="k">E</td><td>Extrude</td></tr>
 <tr><td class="k">Ctrl+Z / Ctrl+Y</td><td>Undo / redo</td></tr>
-<tr><td class="k">Ctrl+S / Ctrl+O</td><td>Save / open</td></tr>
+<tr><td class="k">Ctrl+N</td><td>New part</td></tr>
+<tr><td class="k">Ctrl+S / Ctrl+O</td><td>Save / open (Ctrl+Shift+S = Save As)</td></tr>
 <tr><td class="k">Home</td><td>Home view</td></tr>
 <tr><td class="k">Delete</td><td>Delete the sketch or body picked in the Browser</td></tr>
 <tr><td class="k">F2</td><td>Rename the sketch or body picked in the Browser</td></tr>
