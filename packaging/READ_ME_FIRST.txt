@@ -29,9 +29,15 @@ CONTROLS
   Utilities    Export = STEP, 3D Print = STL
 
 IF IT WON'T START
-  An error message names a crash log, usually:
-      %LOCALAPPDATA%\G00CAM\crash.log
-  Send that file (or a screenshot of the message).
+  A G00 logo appears while it loads. The first start on a new computer can take up to a
+  minute (antivirus scans the program once). Click once and wait.
 
-  Health check without opening the window (writes a short report):
+  Logs are in %LOCALAPPDATA%\G00CAM  (paste that into Win+R):
+      startup.log        how far the last start got
+      crash.log          Python errors (an error box names it)
+      native_crash.log   hard crashes (graphics driver / 3D view)
+      vtk.log            3D view / OpenGL messages
+  If a start dies silently, the next start shows what these caught. Send that (or the files).
+
+  Health check (includes the OpenGL version; the 3D view needs 3.2 or newer):
       "G00 CAM.exe" --selftest "%USERPROFILE%\Desktop\g00cam_check.txt"
