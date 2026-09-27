@@ -5,8 +5,9 @@ RUN IT
   Double-click "G00 CAM.exe".
   Keep the "_internal" folder next to it. The exe needs everything in there.
 
-  First launch: Windows may show "Windows protected your PC" because this test build isn't
-  code-signed. Click "More info", then "Run anyway". It only asks once.
+  If Windows shows "Windows protected your PC", click "More info", then "Run anyway".
+  If Smart App Control blocks it (no Run anyway button), this copy isn't signed. Use the
+  signed build (see HANDOVER_G00CAM_WINDOWS.md, step 6b).
 
 CONTROLS
   L            start a sketch (Line, Rectangle, Center Rect, Circle, Polygon; Shift = fine snap)

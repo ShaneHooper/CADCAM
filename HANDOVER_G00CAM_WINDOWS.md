@@ -102,6 +102,26 @@ Get-Content selftest.txt; $p.ExitCode        # expect "... G00 CAM selftest OK" 
 To also open, render and close the real window:
 `$env:G00CAM_SELFTEST_WINDOW="1"` before the same command (expect a `window: 1400x820 ...` line).
 
+### 6b. Sign it (required: Smart App Control blocks it otherwise)
+Shane's Windows has **Smart App Control** on. It blocked the unsigned Rev1 build outright;
+there's no "Run anyway". It checks every DLL the app loads, not just the exe, so every
+unsigned `.exe/.dll/.pyd` in the folder must be signed (about 800 files).
+
+Shane already has **Azure Trusted Signing** for G-SEND.IO: see `utilities/sign_build.py` and
+`.github/workflows/release.yml` in `ShaneHooper/G-SEND-IO-REV5`. His **home laptop** has the
+working `signing.local.json` (never commit it). Use the same file here:
+```powershell
+copy <path-to-G-SEND.IO-repo>\signing.local.json .        # gitignored in this repo too
+python packaging\sign_folder.py "dist\G00 CAM" --check    # lists what's unsigned
+python packaging\sign_folder.py "dist\G00 CAM"            # signs them, then verifies ALL are Valid
+```
+Rerun the step 6 self-test after signing (signing changes the files). If this laptop has no
+signing setup (the work laptop probably doesn't), build and sign on the home laptop and copy
+the signed folder over, or ask Shane before changing anything in Azure.
+
+Each run uses about 800 of the Trusted Signing plan's monthly signatures (Basic = 5,000/month).
+Don't re-sign needlessly: the script skips files that are already Valid.
+
 ### 7. Deliver the folder
 ```powershell
 $dst = "$env:USERPROFILE\Downloads\G00 CAM Rev1"
@@ -129,7 +149,7 @@ Fix anything he finds on the branch (from source first, then rebuild), commit, a
 
 - **Don't exclude `IPython` or `sklearn` in the spec.** build123d imports both at startup; the
   frozen app dies with `ModuleNotFoundError` without them. `--selftest` catches this.
-- **"Windows protected your PC" (SmartScreen):** the exe is unsigned. More info → Run anyway.
+- **"Windows protected your PC" (SmartScreen):** More info → Run anyway. **Smart App Control** has no override: the folder must be signed (step 6b).
   Work antivirus may quarantine files in `_internal`. If the self-test passes in `dist` but the
   copy fails, check the AV log or ask IT to allow the folder.
 - **Blank or black 3D view, or a crash creating the window:** VTK needs **OpenGL 3.2+**. Remote
