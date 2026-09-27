@@ -81,3 +81,20 @@ def test_display_data(kernel):
     v, t = b.triangles()
     assert v.shape[1] == 3 and t.shape[1] == 3 and t.max() < len(v)
     assert len(b.edge_polylines()) > 10
+
+
+def test_remove_feature_drops_a_body_and_renames_apply():
+    from gsend_cad.core import bracket_plate
+    from gsend_cad.core import sketch as sk
+    doc = bracket_plate()
+    s = doc.add_sketch([sk.circle((5, 0), 0.5)])
+    doc.add_extrude([{"sketch": s["id"], "outer": [0], "holes": []}], 1.0, op="new")
+    doc.body_names["body2"] = "Pin"
+    k = Kernel()
+    assert [b.name for b in k.build(doc).bodies] == ["Body1", "Pin"]
+    doc.add_remove("body2")
+    m = k.build(doc)
+    assert [b.id for b in m.bodies] == ["body1"] and not m.errors
+    doc.add_remove("body2")                 # already gone: that feature fails, model still builds
+    m = k.build(doc)
+    assert len(m.bodies) == 1 and doc.features[-1]["id"] in m.errors

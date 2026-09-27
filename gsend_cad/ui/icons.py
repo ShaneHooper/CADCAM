@@ -38,6 +38,7 @@ PATHS = {
     "save": '<path d="M5 3h11l3 3v15H5z M8 3v6h8V3 M8 21v-7h8v7"/>',
     "trash": '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>',
     "finish": '<path d="M4 12l5 5L20 6"/>',
+    "cancel": '<path d="M6 6l12 12M18 6 6 18"/>',
     "joint": '<circle cx="7" cy="12" r="3"/><circle cx="17" cy="12" r="3"/><path d="M10 12h4"/>',
     "body": '<path d="M4 8l8-4 8 4v8l-8 4-8-4zM4 8l8 4 8-4M12 12v8"/>',
     "folder": '<path d="M3 6h6l2 2h10v11H3z"/>',
@@ -50,6 +51,7 @@ PATHS = {
     "fit": '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',
     "disp": '<path d="M12 3 3 8l9 5 9-5-9-5zM3 16l9 5 9-5"/>',
     "open": '<path d="M3 6h6l2 2h10v11H3z M3 10h18"/>',
+    "new": '<path d="M6 3h8l4 4v14H6z M14 3v4h4 M12 11v6 M9 14h6"/>',
     # timeline transport (filled)
     "tl_start": '<path fill="C" stroke="none" d="M4 4h4v16H4zM20 4 10 12l10 8z"/>',
     "tl_prev": '<path fill="C" stroke="none" d="M18 4 6 12l12 8z"/>',

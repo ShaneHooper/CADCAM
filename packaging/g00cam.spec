@@ -47,6 +47,30 @@ hiddenimports += [
 ]
 hiddenimports += collect_submodules("gsend_cad")
 
+# ---- keep the build small (fewer files = faster unzip / install / antivirus scan) ----
+# VTK ships ~150 compiled modules; G00 CAM imports ~40. The list below is what the app loads
+# (measured by running tests/drive_ui.py, tests/drive_edit.py, export and save/open) plus a
+# few common pyvista filters as margin. Every other compiled vtkmodules.vtk* module is left
+# out, and with it the VTK libraries only those modules need. If a future feature needs one,
+# add it here; --selftest fails on a missing import.
+VTK_KEEP = {
+    "vtkChartsCore", "vtkCommonColor", "vtkCommonComputationalGeometry", "vtkCommonCore",
+    "vtkCommonDataModel", "vtkCommonExecutionModel", "vtkCommonMath", "vtkCommonMisc",
+    "vtkCommonSystem", "vtkCommonTransforms", "vtkFiltersCore", "vtkFiltersExtraction",
+    "vtkFiltersGeneral", "vtkFiltersGeometry", "vtkFiltersModeling", "vtkFiltersPython",
+    "vtkFiltersSources", "vtkFiltersTexture", "vtkIOCore", "vtkIOImage", "vtkIOLegacy", "vtkIOXML",
+    "vtkImagingCore", "vtkImagingMath", "vtkImagingSources", "vtkInteractionStyle",
+    "vtkInteractionWidgets", "vtkParallelCore", "vtkPythonContext2D", "vtkRenderingAnnotation",
+    "vtkRenderingContext2D", "vtkRenderingContextOpenGL2", "vtkRenderingCore",
+    "vtkRenderingFreeType", "vtkRenderingHyperTreeGrid", "vtkRenderingLabel",
+    "vtkRenderingMatplotlib", "vtkRenderingOpenGL2", "vtkRenderingUI", "vtkRenderingVolume",
+    "vtkRenderingVolumeOpenGL2", "vtkViewsContext2D", "vtkViewsCore",
+}
+import vtkmodules
+VTK_DROP = sorted({f"vtkmodules.{f.name.split('.')[0]}" for f in Path(vtkmodules.__file__).parent.iterdir()
+                   if f.name.startswith("vtk") and f.suffix in (".pyd", ".so")
+                   and f.name.split(".")[0] not in VTK_KEEP})
+
 a = Analysis(
     [str(ROOT / "packaging" / "g00cam_main.py")],
     pathex=[str(ROOT)],
@@ -55,9 +79,16 @@ a = Analysis(
     hiddenimports=hiddenimports,
     excludes=["tkinter", "notebook", "trame", "PyQt5", "PyQt6", "PySide2",
               "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.Qt3DCore",
-              "PySide6.QtQuick3D", "PySide6.QtMultimedia", "pytest"],
+              "PySide6.QtQuick3D", "PySide6.QtMultimedia", "pytest",
+              # IPython's code completion; never imported by G00 CAM (jedi alone was 5,500 files)
+              "jedi", "parso", "prompt_toolkit",
+              "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtQuickWidgets", "PySide6.QtPdf",
+              "PySide6.QtNetwork"] + VTK_DROP,
     noarchive=False,
 )
+# Qt plugins that pull in Quick/QML (virtual keyboard) or the PDF engine: not used.
+QT_DROP = ("qt6quick", "qt6qml", "qt6virtualkeyboard", "virtualkeyboard", "qt6pdf", "qpdf")
+a.binaries = [b for b in a.binaries if not any(k in Path(b[0]).name.lower() for k in QT_DROP)]
 pyz = PYZ(a.pure)
 icon = str(UI / "assets" / "g00code_logo.ico") if sys.platform == "win32" else None
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name=NAME, console=False, icon=icon,

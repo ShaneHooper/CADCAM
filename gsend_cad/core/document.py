@@ -8,6 +8,10 @@ of G-SEND.IO without importing Qt or the geometry kernel:
               "direction": "one"|"sym", "profiles": [{"sketch", "outer", "holes"}]}
     hole:    {"id", "kind": "hole",    "name", "points": [[x, y]], "diameter",
               "depth": "through" | float, "top_z"}
+    remove:  {"id", "kind": "remove",  "name", "body": "body2"}     (Delete on a body)
+
+A sketch may also carry "show": true/false (Hide / Show Sketch). `body_names` holds names
+the user gave bodies ({"body1": "Base Plate"}); bodies are otherwise Body1, Body2, ...
 
 `marker` is how many features are applied (the timeline's blue bar), exactly like the
 prototype's `tlPos`.
@@ -32,6 +36,7 @@ class Document:
         self.material = material
         self.features: list[dict] = []
         self.marker = 0
+        self.body_names: dict[str, str] = {}
         self._listeners: list[Callable[[str], None]] = []
         self._next = 1
 
@@ -85,9 +90,49 @@ class Document:
         return self.add({"kind": "extrude", "op": op, "distance": float(distance), "direction": direction,
                          "profiles": refs, **kw})
 
+    def add_remove(self, body_id: str, **kw):
+        return self.add({"kind": "remove", "body": body_id, **kw})
+
+    def remove_features(self, ids) -> list[dict]:
+        """Delete features by id (keeps the marker on the same remaining feature)."""
+        ids = set(ids)
+        gone = [f for f in self.features if f["id"] in ids]
+        before = sum(1 for f in self.features[: self.marker] if f["id"] in ids)
+        self.features = [f for f in self.features if f["id"] not in ids]
+        self.marker -= before
+        self._changed("features")
+        return gone
+
+    def dependents(self, sketch_id: str) -> list[dict]:
+        """Extrudes made from a sketch."""
+        return [f for f in self.features if f["kind"] == "extrude" and any(p["sketch"] == sketch_id for p in f["profiles"])]
+
+    def name_taken(self, name: str, skip_id: str | None = None) -> bool:
+        return any(f["name"] == name and f["id"] != skip_id for f in self.features)
+
     def add_hole(self, points, diameter, depth="through", top_z=0.0, **kw):
         return self.add({"kind": "hole", "points": [list(p) for p in points], "diameter": float(diameter),
                          "depth": depth, "top_z": float(top_z), **kw})
+
+    def update_sketch(self, fid: str, ents, plane_z: float, origin=None):
+        """Replace a sketch's entities in place (Edit Sketch) and keep later extrudes pointing
+        at the same shapes. `origin[i]` is the old index of new entity i, or None if it is new.
+        A profile that used a deleted entity is left unresolvable, so its extrude shows red."""
+        f = self.feature(fid)
+        if origin is None:
+            origin = list(range(len(ents)))
+        remap = {old: new for new, old in enumerate(origin) if old is not None}
+        f["ents"] = copy.deepcopy(list(ents))
+        f["plane_z"] = float(plane_z)
+        for g in self.features:
+            if g["kind"] != "extrude":
+                continue
+            for ref in g["profiles"]:
+                if ref["sketch"] == fid:
+                    ref["outer"] = [remap.get(i, -1) for i in ref["outer"]]
+                    ref["holes"] = [[remap.get(i, -1) for i in h] for h in ref.get("holes", [])]
+        self._changed("features")
+        return f
 
     def feature(self, fid: str) -> dict:
         for f in self.features:
@@ -112,6 +157,13 @@ class Document:
         n = self.marker if upto is None else upto
         return {p["sketch"] for f in self.features[:n] if f["kind"] == "extrude" for p in f["profiles"]}
 
+    def sketch_shown(self, f: dict, consumed: set | None = None) -> bool:
+        """Whether a sketch is drawn. Without a user choice ("show" on the feature) a sketch
+        hides once an extrude uses it, like Fusion; Hide / Show Sketch stores the choice."""
+        if "show" in f:
+            return bool(f["show"])
+        return f["id"] not in (self.consumed_sketches() if consumed is None else consumed)
+
     def describe(self, f: dict) -> str:
         k = f["kind"]
         if k == "sketch":
@@ -121,6 +173,8 @@ class Document:
             sym = " symmetric" if f["direction"] == "sym" else ""
             n = len(f["profiles"])
             return f"{op} · {f['distance']:.3f} in{sym} · {n} profile{'s' if n != 1 else ''}"
+        if k == "remove":
+            return f"Remove {self.body_names.get(f['body'], f['body'].replace('body', 'Body'))}"
         if k == "hole":
             d = "thru" if f["depth"] == "through" else f"{float(f['depth']):.3f} deep"
             n = len(f["points"])
@@ -130,7 +184,8 @@ class Document:
     # ---- save / load ----
     def to_dict(self) -> dict:
         return {"format": FORMAT, "name": self.name, "units": UNITS, "material": self.material,
-                "marker": self.marker, "features": copy.deepcopy(self.features)}
+                "marker": self.marker, "features": copy.deepcopy(self.features),
+                "body_names": dict(self.body_names)}
 
     @classmethod
     def from_dict(cls, d: dict) -> "Document":
@@ -139,6 +194,7 @@ class Document:
         doc = cls(d.get("name", "Untitled"), d.get("material", "6061-T6"))
         doc.features = copy.deepcopy(d["features"])
         doc.marker = min(int(d.get("marker", len(doc.features))), len(doc.features))
+        doc.body_names = dict(d.get("body_names", {}))
         doc._next = len(doc.features) + 1
         return doc
 

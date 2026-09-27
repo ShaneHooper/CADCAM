@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import QFileDialog, QGridLayout, QMainWindow, QMessageBox, QWidget
 
 from .. import APP_NAME
@@ -31,6 +32,7 @@ class MainWindow(QMainWindow):
         self.undo_stack: list[dict] = []
         self.redo_stack: list[dict] = []
         self.selected = "body1"
+        self.sel_node = None             # last sketch / body picked in the Browser (for Delete)
         self.paint_sel = False           # like the prototype: highlight only after a click
         self.session = None
         fonts = fonts or {"g": "DejaVu Sans", "wm": "DejaVu Sans"}
@@ -65,6 +67,21 @@ class MainWindow(QMainWindow):
         self.timeline.roll.connect(self.roll_to)
         self.timeline.play.connect(self.play)
         self.timeline.delete.connect(self.delete_feature)
+        self.timeline.edit.connect(lambda i: self.edit_sketch(self.doc.features[i]["id"]))
+        self.timeline.toggle.connect(lambda i: self.toggle_sketch(self.doc.features[i]["id"]))
+        self.browser.edit.connect(self.edit_sketch)
+        self.browser.toggle.connect(self.toggle_sketch)
+        self.browser.delete.connect(self.delete_node)
+        self.browser.rename.connect(self.rename_node)
+        self.topbar.docs.connect(self.show_docs)
+        self.topbar.about.connect(self.show_about)
+        docs = QAction("Documentation", self, shortcut=QKeySequence(Qt.Key_F1),
+                       shortcutContext=Qt.ApplicationShortcut, triggered=self.show_docs)
+        self.addAction(docs)
+        self.docs = None
+        self.topbar.new.connect(self.new_doc)
+        self.topbar.save_as.connect(self.save_as)
+        self.topbar.export.connect(self.export)
         self.topbar.save.connect(self.save)
         self.topbar.open.connect(self.open)
         self.topbar.undo.connect(self.undo)
@@ -89,8 +106,11 @@ class MainWindow(QMainWindow):
         self.refresh_props()
         idx = {f["id"]: i for i, f in enumerate(self.doc.features)}
         errs = {idx[k]: v for k, v in self.model.errors.items() if k in idx}
+        consumed = self.doc.consumed_sketches()
+        hidden = [i for i, f in enumerate(self.doc.features)
+                  if f["kind"] == "sketch" and not self.doc.sketch_shown(f, consumed)]
         self.timeline.set_features([(f["name"], f["kind"], self.doc.describe(f)) for f in self.doc.features],
-                                   self.doc.marker, errs)
+                                   self.doc.marker, errs, hidden)
         self.topbar.set_doc(self.doc.name, self.dirty)
         if fit:
             self.viewport.set_view("home")
@@ -100,9 +120,11 @@ class MainWindow(QMainWindow):
         vp.clear("sketches", render=False)
         consumed = self.doc.consumed_sketches()
         show_all = isinstance(self.session, ExtrudeSession)
+        editing = getattr(self.session, "edit_id", None)    # that sketch is drawn by the session
         from ..core import sketch as sk
         for f in self.doc.applied():
-            if f["kind"] == "sketch" and (show_all or f["id"] not in consumed):
+            if f["kind"] == "sketch" and f["id"] != editing and f.get("show") is not False \
+                    and (show_all or self.doc.sketch_shown(f, consumed)):
                 z = f["plane_z"] + 0.004
                 vp.add_lines("sketches", [[(x, y, z) for x, y in sk.entity_points(e)] for e in f["ents"]])
         vp.render()
@@ -114,14 +136,13 @@ class MainWindow(QMainWindow):
         names = {b.id: b.name for b in full.bodies}
         names.update({b.id: b.name for b in self.model.bodies})
         bodies = [(bid, name, bid in have) for bid, name in sorted(names.items(), key=lambda kv: int(kv[0][4:]))]
-        if not bodies:
-            bodies = [("body1", "Body1", False)]
         consumed = self.doc.consumed_sketches()
-        sketches = [(f["id"], f["name"], i < n and f["id"] not in consumed, len(f["ents"]))
+        sketches = [(f["id"], f["name"], i < n and self.doc.sketch_shown(f, consumed), len(f["ents"]),
+                     self.doc.sketch_shown(f, consumed))
                     for i, f in enumerate(self.doc.features) if f["kind"] == "sketch"]
         editing = None
         if isinstance(self.session, SketchSession):
-            editing = (self.session.name, len(self.session.ents))
+            editing = (self.session.name, len(self.session.ents), self.session.edit_id)
         self.browser.set_rows(self.doc.name, bodies, sketches, self.selected, editing)
 
     def refresh_props(self):
@@ -175,6 +196,73 @@ class MainWindow(QMainWindow):
         self.undo_stack.append(self.doc.to_dict())
         self._restore(self.redo_stack.pop())
         self.message("Redo")
+
+    def delete_node(self, nid: str):
+        """Delete key / right-click → Delete on a sketch or body in the Browser."""
+        if self.session is not None:
+            self.viewport.show_toast("Finish the current command first")
+            return
+        if nid.startswith("body"):
+            body = self.model.body(nid)
+            if body is None:
+                self.viewport.show_toast("That body isn't there at this point in the timeline", bad=True)
+                return
+            self._snapshot()
+            f = self.doc.add_remove(nid)
+            self.sel_node = None
+            self.paint_sel = False
+            self.status.sel.setText("SEL: —")
+            self.rebuild()
+            self.document_changed.emit()
+            self.viewport.show_toast(f"{body.name} deleted")
+            self.message(f"{body.name} deleted ({f['name']} in the timeline). Ctrl+Z brings it back.")
+            return
+        try:
+            f = self.doc.feature(nid)
+        except KeyError:
+            return
+        deps = self.doc.dependents(nid)
+        ids = [nid]
+        if deps:
+            names = ", ".join(d["name"] for d in deps)
+            r = QMessageBox.question(
+                self, "Delete sketch",
+                f"{f['name']} was used to make {names}.\n\nDelete {f['name']} and {names}?",
+                QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
+            if r != QMessageBox.Yes:
+                return
+            ids += [d["id"] for d in deps]
+        self._snapshot()
+        gone = self.doc.remove_features(ids)
+        self.sel_node = None
+        self.status.sel.setText("SEL: —")
+        self.rebuild()
+        self.document_changed.emit()
+        what = " and ".join(g["name"] for g in gone)
+        self.viewport.show_toast(f"{what} deleted")
+        self.message(f"{what} deleted. Ctrl+Z brings it back.")
+
+    def rename_node(self, nid: str, name: str):
+        """Right-click → Rename (or F2) on a sketch or body in the Browser."""
+        name = " ".join(name.split())[:40]
+        if nid.startswith("body"):
+            if any(b.name == name and b.id != nid for b in self.kernel.build(self.doc, len(self.doc.features)).bodies):
+                self.viewport.show_toast(f"There is already a body called {name}", bad=True)
+                self.rebuild()
+                return
+            self._snapshot()
+            self.doc.body_names[nid] = name
+        else:
+            f = self.doc.feature(nid)
+            if self.doc.name_taken(name, nid):
+                self.viewport.show_toast(f"There is already a feature called {name}", bad=True)
+                self.rebuild()
+                return
+            self._snapshot()
+            f["name"] = name
+        self.rebuild()
+        self.document_changed.emit()
+        self.message(f"Renamed to {name}")
 
     def delete_feature(self, i: int):
         self.cancel_command()
@@ -251,9 +339,13 @@ class MainWindow(QMainWindow):
         self.rebuild()
 
     # sketch
-    def start_sketch(self):
-        n = sum(1 for f in self.doc.features if f["kind"] == "sketch") + 1
-        self.session = SketchSession(self, f"Sketch{n}")
+    def start_sketch(self, edit_id: str | None = None):
+        if edit_id:
+            f = self.doc.feature(edit_id)
+            self.session = SketchSession(self, f["name"], f["plane_z"], f["ents"], edit_id)
+        else:
+            n = sum(1 for f in self.doc.features if f["kind"] == "sketch") + 1
+            self.session = SketchSession(self, f"Sketch{n}")
         vp = self.viewport
         vp.handler = self.session
         vp.set_view("top")
@@ -262,13 +354,59 @@ class MainWindow(QMainWindow):
         self.ribbon.show_sketch_tab(True)
         vp.set_side(self.session.palette)
         self.session.set_tool("Line")
+        self.draw_sketches()
         self.refresh_tree()
+        if edit_id:
+            self.message(f"Editing {self.session.name}: draw to add, × in the palette deletes a shape, "
+                         "Plane moves it. Enter / Finish Sketch saves, Cancel throws the changes away.")
+
+    def toggle_sketch(self, fid: str):
+        """Hide or show a sketch (Browser eye dot, or right-click → Hide / Show Sketch)."""
+        f = self.doc.feature(fid)
+        if isinstance(self.session, SketchSession) and self.session.edit_id == fid:
+            self.viewport.show_toast("Finish editing the sketch first")
+            return
+        self._snapshot()
+        f["show"] = not self.doc.sketch_shown(f)
+        if isinstance(self.session, ExtrudeSession):   # hidden sketches can't be picked; close the picker
+            self.cancel_command()
+        self.rebuild()
+        self.document_changed.emit()
+        self.message(f"{f['name']} {'shown' if f['show'] else 'hidden'}. "
+                     + ("" if f["show"] else "Show it again from the Browser or the timeline (right-click)."))
+
+    def edit_sketch(self, fid: str):
+        """Reopen a sketch that is already in the timeline (right-click it → Edit Sketch)."""
+        try:
+            f = self.doc.feature(fid)
+        except KeyError:
+            return
+        if f["kind"] != "sketch":
+            return
+        self.cancel_command()
+        self.ribbon.set_active(None)
+        self.start_sketch(edit_id=fid)
 
     def finish_sketch(self):
         s = self.session
         if not isinstance(s, SketchSession):
             return
         ents, z = list(s.ents), s.plane_z
+        if s.edit_id:
+            if not ents:
+                self.viewport.show_toast("A sketch needs at least one shape", bad=True)
+                self.message("To remove the whole sketch, finish or cancel, then right-click it in the timeline → Delete.")
+                return
+            self.cancel_command()
+            if s.changed():
+                self._snapshot()
+                self.doc.update_sketch(s.edit_id, ents, z, s.origin)
+                self.rebuild()
+                self.document_changed.emit()
+                self._report_edit(s.edit_id)
+            else:
+                self.message(f"{s.name}: no changes")
+            return
         self.cancel_command()
         if not ents:
             self.viewport.show_toast("Empty sketch discarded")
@@ -279,6 +417,19 @@ class MainWindow(QMainWindow):
         self.document_changed.emit()
         self.viewport.show_toast(f"{f['name']} added · {len(ents)} entities")
         self.message(f"{f['name']} saved to the timeline. Press E to extrude its closed profiles.")
+
+    def _report_edit(self, fid: str):
+        name = self.doc.feature(fid)["name"]
+        users = [g for g in self.doc.features if g["kind"] == "extrude" and any(p["sketch"] == fid for p in g["profiles"])]
+        broken = [g["name"] for g in users if g["id"] in self.kernel.build(self.doc, len(self.doc.features)).errors]
+        if broken:
+            self.viewport.show_toast(f"{name} updated · {', '.join(broken)} lost its profile", bad=True)
+            self.message(f"{', '.join(broken)} used a shape you deleted (red in the timeline). "
+                         "Ctrl+Z undoes the edit, or delete that extrude and extrude again.")
+        else:
+            rebuilt = f" · {', '.join(g['name'] for g in users)} rebuilt" if users else ""
+            self.viewport.show_toast(f"{name} updated{rebuilt}")
+            self.message(f"{name} updated{rebuilt}. New closed shapes can be extruded with E.")
 
     # extrude
     def start_extrude(self):
@@ -307,8 +458,25 @@ class MainWindow(QMainWindow):
             self.viewport.show_toast(f"{feat['name']} · {self.doc.describe(feat)}")
             self.message(f"{feat['name']} added to the timeline. Roll back to compare.")
 
+    # ---------------------------------------------------------- help
+    def show_docs(self):
+        from .docs import DocsWindow
+        if self.docs is None:
+            self.docs = DocsWindow(self)
+        self.docs.show()
+        self.docs.raise_()
+        self.docs.activateWindow()
+
+    def show_about(self):
+        from .. import __version__
+        QMessageBox.about(self, f"About {APP_NAME}",
+                          f"<b>{APP_NAME}</b> {__version__}<br>Test build (Rev 1).<br><br>"
+                          "Sketch, extrude and export parts for G-SEND.IO.<br>Help → Documentation (F1) explains how.")
+
     # ---------------------------------------------------------- misc actions
     def select_node(self, nid: str):
+        b = self.browser
+        self.sel_node = nid if nid in b.sketch_ids or nid in b.body_ids else None
         if nid.startswith("body"):
             self.selected = nid
             self.paint_sel = True
@@ -339,19 +507,63 @@ class MainWindow(QMainWindow):
         self.viewport.show_toast(f"Exported {Path(path).name}")
 
     def save(self):
-        path = self.path
-        if path is None:
-            p, _ = QFileDialog.getSaveFileName(self, "Save", f"{self.doc.name}.gcad", FILE_FILTER)
-            if not p:
-                return
-            path = Path(p)
+        if self.path is None:
+            return self.save_as()
+        self._write(self.path)
+
+    def save_as(self):
+        p, _ = QFileDialog.getSaveFileName(self, "Save As", f"{self.doc.name}.gcad", FILE_FILTER)
+        if not p:
+            return
+        path = Path(p)
+        if path.suffix.lower() != ".gcad":
+            path = path.with_suffix(".gcad")
+        if self.doc.name == "Untitled":       # a new part takes its file's name
+            self.doc.name = path.stem
+        self._write(path)
+
+    def _write(self, path: Path):
         self.doc.save(path)
         self.path, self.dirty = path, False
         self.topbar.set_doc(self.doc.name, False)
         self.viewport.show_toast(f"Saved {path.name}")
 
+    def _maybe_save(self) -> bool:
+        """Ask before throwing away unsaved work. False = the user cancelled."""
+        if not self.dirty:
+            return True
+        r = QMessageBox.question(self, APP_NAME, f"Save changes to {self.doc.name}?",
+                                 QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+        if r == QMessageBox.Cancel:
+            return False
+        if r == QMessageBox.Save:
+            self.save()
+            return not self.dirty            # the save dialog was cancelled: keep the work
+        return True
+
+    def new_doc(self):
+        """File → New (Ctrl+N): an empty part."""
+        self.cancel_command()
+        if not self._maybe_save():
+            return
+        self._set_doc(Document("Untitled"), None)
+        self.viewport.show_toast("New part")
+        self.message("New part. Press L to sketch, draw a closed shape, Enter, then E to make it solid.")
+
+    def _set_doc(self, doc: Document, path):
+        self.doc, self.path, self.dirty = doc, (Path(path) if path else None), False
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self.selected, self.paint_sel, self.sel_node = "body1", False, None
+        self.status.sel.setText("SEL: —")
+        self.rebuild(fit=True)
+        self.document_changed.emit()
+
     def open(self, path=None):
         if path is None:
+            self.cancel_command()
+            if not self._maybe_save():
+                return
             p, _ = QFileDialog.getOpenFileName(self, "Open", "", FILE_FILTER)
             if not p:
                 return
@@ -362,11 +574,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Open", f"Could not open {path}:\n{exc}")
             return
         self.cancel_command()
-        self.doc, self.path, self.dirty = doc, Path(path), False
-        self.undo_stack.clear()
-        self.redo_stack.clear()
-        self.rebuild(fit=True)
-        self.document_changed.emit()
+        self._set_doc(doc, path)
 
     # ---------------------------------------------------------- keys (like Fusion)
     def handle_key(self, ev):
@@ -374,14 +582,22 @@ class MainWindow(QMainWindow):
             return
         k, mod = ev.key(), ev.modifiers()
         ctrl = bool(mod & Qt.ControlModifier)
-        if ctrl and k == Qt.Key_S:
+        if ctrl and k == Qt.Key_S and mod & Qt.ShiftModifier:
+            self.save_as()
+        elif ctrl and k == Qt.Key_S:
             self.save()
+        elif ctrl and k == Qt.Key_N:
+            self.new_doc()
         elif ctrl and k == Qt.Key_O:
             self.open()
         elif ctrl and k == Qt.Key_Z:
             self.undo()
         elif ctrl and k == Qt.Key_Y:
             self.redo()
+        elif k == Qt.Key_F1:
+            self.show_docs()
+        elif k == Qt.Key_Delete and self.session is None and self.sel_node:
+            self.delete_node(self.sel_node)
         elif self.session is not None:
             return
         elif k == Qt.Key_L:
@@ -397,13 +613,8 @@ class MainWindow(QMainWindow):
         self.handle_key(ev)
 
     def closeEvent(self, ev):
-        if self.dirty and self.isVisible():
-            r = QMessageBox.question(self, APP_NAME, "Save changes before closing?",
-                                     QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
-            if r == QMessageBox.Cancel:
-                ev.ignore()
-                return
-            if r == QMessageBox.Save:
-                self.save()
+        if self.isVisible() and not self._maybe_save():
+            ev.ignore()
+            return
         self.viewport.plotter.close()
         super().closeEvent(ev)

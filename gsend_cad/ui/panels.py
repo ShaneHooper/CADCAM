@@ -4,9 +4,10 @@ from __future__ import annotations
 import getpass
 from functools import partial
 
-from PySide6.QtCore import QPoint, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPixmap, QPolygon
-from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QScrollArea, QSizePolicy,
+from PySide6.QtWidgets import (QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QScrollArea,
+                               QSizePolicy,
                                QStackedWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from .. import APP_NAME
@@ -33,7 +34,7 @@ RIBBON = {
                            ("poly", "Polygon")]),
                ("Modify", [("undo", "Undo"), ("trash", "Clear")]),
                ("Inspect", [("measure", "Measure")]),
-               ("Finish", [("finish", "Finish Sketch")])],
+               ("Finish", [("cancel", "Cancel"), ("finish", "Finish Sketch")])],
 }
 TABS = [("solid", "Solid"), ("surface", "Surface"), ("util", "Utilities"), ("sketch", "Sketch")]
 
@@ -53,10 +54,15 @@ def vbox(w=None, margins=(0, 0, 0, 0), spacing=0):
 
 
 class TopBar(QFrame):
+    new = Signal()
     save = Signal()
+    save_as = Signal()
+    export = Signal(str)          # "step" | "stl"
     open = Signal()
     undo = Signal()
     redo = Signal()
+    docs = Signal()
+    about = Signal()
 
     def __init__(self, fonts):
         super().__init__()
@@ -72,7 +78,23 @@ class TopBar(QFrame):
         lay.addWidget(logo)
         lay.addWidget(cad)
         lay.addSpacing(8)
-        for name, sig, tip in (("open", self.open, "Open (Ctrl+O)"), ("save", self.save, "Save (Ctrl+S)"),
+        self.file = QToolButton()
+        self.file.setObjectName("menuBtn")
+        self.file.setText("FILE")
+        self.file.setPopupMode(QToolButton.InstantPopup)
+        fm = QMenu(self.file)
+        fm.addAction("New\tCtrl+N", self.new.emit)
+        fm.addAction("Open…\tCtrl+O", self.open.emit)
+        fm.addSeparator()
+        fm.addAction("Save\tCtrl+S", self.save.emit)
+        fm.addAction("Save As…\tCtrl+Shift+S", self.save_as.emit)
+        fm.addSeparator()
+        fm.addAction("Export STEP…", partial(self.export.emit, "step"))
+        fm.addAction("Export STL…", partial(self.export.emit, "stl"))
+        self.file.setMenu(fm)
+        lay.addWidget(self.file)
+        for name, sig, tip in (("new", self.new, "New (Ctrl+N)"), ("open", self.open, "Open (Ctrl+O)"),
+                               ("save", self.save, "Save (Ctrl+S)"),
                                ("undo", self.undo, "Undo (Ctrl+Z)"), ("redo", self.redo, "Redo (Ctrl+Y)")):
             b = QToolButton()
             b.setObjectName("ico")
@@ -96,6 +118,17 @@ class TopBar(QFrame):
         units.setObjectName("units")
         user = QLabel(getpass.getuser().upper())
         user.setObjectName("user")
+        self.help = QToolButton()
+        self.help.setObjectName("menuBtn")
+        self.help.setText("HELP")
+        self.help.setPopupMode(QToolButton.InstantPopup)
+        m = QMenu(self.help)
+        m.addAction("Documentation\tF1", self.docs.emit)
+        m.addSeparator()
+        m.addAction(f"About {APP_NAME}", self.about.emit)
+        self.help.setMenu(m)
+        lay.addWidget(self.help)
+        lay.addSpacing(4)
         lay.addWidget(units)
         lay.addWidget(user)
 
@@ -229,6 +262,10 @@ def eye_icon(on: bool, kind: str) -> QPixmap:
 
 class Browser(QFrame):
     selected = Signal(str)
+    edit = Signal(str)            # sketch id: Edit Sketch
+    toggle = Signal(str)          # sketch id: show / hide
+    delete = Signal(str)          # sketch or body id
+    rename = Signal(str, str)     # sketch or body id, new name
 
     def __init__(self):
         super().__init__()
@@ -246,6 +283,18 @@ class Browser(QFrame):
         self.tree.setIconSize(QSize(34, 14))
         self.tree.setRootIsDecorated(True)
         self.tree.itemClicked.connect(lambda it, _c: self.selected.emit(it.data(0, Qt.UserRole) or ""))
+        self.tree.itemDoubleClicked.connect(self._double)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._menu)
+        self.tree.viewport().installEventFilter(self)
+        self.tree.installEventFilter(self)                    # Delete / F2 keys
+        self.tree.setEditTriggers(QTreeWidget.NoEditTriggers)  # names edit only via Rename
+        self.tree.itemChanged.connect(self._renamed)
+        self.tree.itemDelegate().closeEditor.connect(self._editor_closed)
+        self._editor = None
+        self.sketch_ids: dict[str, bool] = {}     # sketch id -> shown
+        self.body_ids: dict[str, bool] = {}       # body id -> exists at the timeline marker
+        self._renaming = None                     # (id, old name) while the name editor is open
         v.addWidget(self.tree, 1)
         self.props = QFrame()
         self.props.setObjectName("props")
@@ -263,10 +312,112 @@ class Browser(QFrame):
             self.pvals[k] = b
         v.addWidget(self.props)
 
+    def _node(self, it):
+        nid = it.data(0, Qt.UserRole) if it else None
+        return nid if nid in self.sketch_ids or nid in self.body_ids else None
+
+    def start_rename(self, nid: str):
+        it = self._item(nid)
+        if it is None:
+            return
+        self.tree.blockSignals(True)
+        it.setFlags(it.flags() | Qt.ItemIsEditable)
+        self.tree.blockSignals(False)
+        self._renaming = (nid, it.text(0))
+        self.tree.setCurrentItem(it)
+        self.tree.editItem(it, 0)
+        self._editor = self.tree.indexWidget(self.tree.currentIndex())
+
+    def _item(self, nid):
+        from PySide6.QtWidgets import QTreeWidgetItemIterator
+        it = QTreeWidgetItemIterator(self.tree)
+        while it.value():
+            if it.value().data(0, Qt.UserRole) == nid:
+                return it.value()
+            it += 1
+        return None
+
+    def _renamed(self, it, col):
+        if self._renaming and col == 0 and it.data(0, Qt.UserRole) == self._renaming[0]:
+            nid, old = self._renaming
+            new = it.text(0).strip()
+            if new == old:
+                return                      # not a rename (or nothing typed): keep waiting
+            self._renaming = None
+            if new:
+                self.rename.emit(nid, new)
+            else:
+                self.tree.blockSignals(True)
+                it.setText(0, old)
+                self.tree.blockSignals(False)
+
+    def _editor_closed(self, editor, _hint=None):
+        # only this rename's editor ends it (a previous editor can report closing late)
+        if editor is self._editor:
+            self._editor = None
+            QTimer.singleShot(0, self._rename_done)
+
+    def _rename_done(self):
+        if self._editor is None:
+            self._renaming = None       # editor closed with Esc: nothing changed
+
+    def _sketch_at(self, pos):
+        it = self.tree.itemAt(pos)
+        nid = it.data(0, Qt.UserRole) if it else None
+        return (it, nid) if nid in self.sketch_ids else (it, None)
+
+    def eventFilter(self, obj, ev):
+        if obj is self.tree and ev.type() == QEvent.KeyPress and not self._renaming:
+            nid = self._node(self.tree.currentItem())
+            if nid and ev.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+                self.delete.emit(nid)
+                return True
+            if nid and ev.key() == Qt.Key_F2:
+                self.start_rename(nid)
+                return True
+        # a click on a sketch's eye dot shows / hides it, like Fusion's browser
+        if ev.type() == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton:
+            it, sid = self._sketch_at(ev.position().toPoint())
+            if sid:
+                x = ev.position().x() - self.tree.visualItemRect(it).x()
+                if 0 <= x <= 14:
+                    self.toggle.emit(sid)
+                    return True
+        return super().eventFilter(obj, ev)
+
+    def _double(self, it, _c):
+        nid = it.data(0, Qt.UserRole)
+        if nid in self.sketch_ids:
+            self.edit.emit(nid)
+
+    def _menu(self, pos):
+        it = self.tree.itemAt(pos)
+        nid = self._node(it)
+        if not nid:
+            return
+        self.tree.setCurrentItem(it)
+        self.selected.emit(nid)
+        m = QMenu(self)
+        if nid in self.sketch_ids:
+            m.addAction("Edit Sketch", partial(self.edit.emit, nid))
+            m.addAction("Hide Sketch" if self.sketch_ids[nid] else "Show Sketch", partial(self.toggle.emit, nid))
+            m.addSeparator()
+        m.addAction("Rename\tF2", partial(self.start_rename, nid))
+        d = m.addAction("Delete\tDel", partial(self.delete.emit, nid))
+        if nid in self.body_ids and not self.body_ids[nid]:
+            d.setEnabled(False)          # made later in the timeline: roll forward to delete it
+        m.exec(self.tree.viewport().mapToGlobal(pos))
+
     def set_rows(self, doc_name, bodies, sketches, selected, editing=None):
-        """bodies: [(id, name, visible)], sketches: [(id, name, visible, n_ents)]"""
+        """bodies: [(id, name, visible)], sketches: [(id, name, visible, n_ents, shown)] where
+        visible = drawn now and shown = not hidden by the user / an extrude,
+        editing: (name, n_ents, sketch id or None) while Sketch mode is open"""
         t = self.tree
+        t.blockSignals(True)               # building items fires itemChanged; only renames count
         t.clear()
+        self._renaming = None
+        self.sketch_ids = {sk[0]: sk[4] for sk in sketches}
+        self.body_ids = {bid: vis for bid, _n, vis in bodies}
 
         def node(parent, name, kind, on, nid=None, tag="", dim=False):
             it = QTreeWidgetItem(parent, [name, tag])
@@ -293,15 +444,20 @@ class Browser(QFrame):
         for bid, name, vis in bodies:
             node(bf, name, "body", vis, bid, "SOLID" if vis else "—", dim=not vis)
         sf = node(root, "Sketches", "folder", True, "sketches")
-        for sid, name, vis, n in sketches:
-            node(sf, name, "sketch", vis, sid, f"{n} ENT")
-        if editing:
+        for sid, name, vis, n, shown in sketches:
+            if editing and sid == editing[2]:
+                node(sf, name + " (editing)", "sketch", True, "skedit", f"{editing[1]} ENT")
+            else:
+                it = node(sf, name, "sketch", vis, sid, f"{n} ENT", dim=not vis)
+                it.setToolTip(0, "Double-click to edit · click the dot to " + ("hide" if shown else "show"))
+        if editing and not editing[2]:
             node(sf, editing[0] + " (editing)", "sketch", True, "skedit", f"{editing[1]} ENT")
         t.expandAll()
         for i in (1, 2):   # keep Document Settings / Named Views collapsed like the prototype
             root.child(i - 1).setExpanded(False)
         t.setColumnWidth(0, 204)
         t.setColumnWidth(1, 40)
+        t.blockSignals(False)
 
     def set_props(self, rows: dict):
         for k, v in rows.items():
@@ -360,10 +516,12 @@ class FeatureButton(QWidget):
         self.fi.setAlignment(Qt.AlignCenter)
         self.fn = QLabel(name)
         self.fn.setObjectName("featName")
+        self.fn.ensurePolished()                  # long names get "…" instead of being clipped
+        self.fn.setText(self.fn.fontMetrics().elidedText(name, Qt.ElideRight, 52))
         self.fn.setAlignment(Qt.AlignCenter)
         v.addWidget(self.fi, 0, Qt.AlignHCenter)
         v.addWidget(self.fn, 0, Qt.AlignHCenter)
-        self.setToolTip(desc)
+        self.setToolTip(f"{name} · {desc}")
         self.setCursor(Qt.PointingHandCursor)
         self.state("on", False, None)
 
@@ -390,8 +548,10 @@ class Timeline(QFrame):
     roll = Signal(int)            # new marker position
     play = Signal()
     delete = Signal(int)          # feature index
+    edit = Signal(int)            # feature index of a sketch: Edit Sketch
+    toggle = Signal(int)          # feature index of a sketch: show / hide
 
-    ICON = {"sketch": "sketch", "extrude": "extrude", "hole": "hole"}
+    ICON = {"sketch": "sketch", "extrude": "extrude", "hole": "hole", "remove": "trash"}
 
     def __init__(self):
         super().__init__()
@@ -432,10 +592,28 @@ class Timeline(QFrame):
         self.body.setObjectName("tlBody")
         self.scroll.setWidget(self.body)
         v.addWidget(self.scroll, 1)
+        self._last = None             # (feature index, marker before the click, time) for double-click
 
-    def set_features(self, feats, marker, errors):
-        """feats: [(name, kind, desc)], errors: {index: message}"""
+    def _clicked(self, i):
+        # A click rolls the timeline, which rebuilds these buttons, so a double-click is spotted
+        # here (same feature twice, quickly) rather than by the button. On a sketch it undoes the
+        # first click's roll and opens Edit Sketch.
+        from time import monotonic
+        now = monotonic()
+        last, self._last = self._last, (i, self.marker_pos, now)
+        if (last and last[0] == i and self.kinds[i] == "sketch"
+                and now - last[2] < QApplication.doubleClickInterval() / 1000):
+            self._last = None
+            self.roll.emit(last[1])
+            self.edit.emit(i)
+            return
+        self.roll.emit(i + 1)
+
+    def set_features(self, feats, marker, errors, hidden=()):
+        """feats: [(name, kind, desc)], errors: {index: message}, hidden: indexes of hidden sketches"""
         self.n, self.marker_pos = len(feats), marker
+        self.kinds = [k for _n, k, _d in feats]
+        self.hidden = set(hidden)
         old = self.scroll.takeWidget()
         if old is not None:
             old.deleteLater()        # may be the button being clicked right now
@@ -448,7 +626,7 @@ class Timeline(QFrame):
                 lay.addWidget(Marker())
             fb = FeatureButton(name, self.ICON.get(kind, "sketch"), desc)
             fb.state("on" if i < marker else "off", i == marker - 1, errors.get(i))
-            fb.clicked.connect(partial(self.roll.emit, i + 1))
+            fb.clicked.connect(partial(self._clicked, i))
             fb.context.connect(partial(self._menu, i))
             lay.addWidget(fb)
         if marker >= len(feats):
@@ -458,6 +636,10 @@ class Timeline(QFrame):
 
     def _menu(self, i, gp):
         m = QMenu(self)
+        if self.kinds[i] == "sketch":
+            m.addAction("Edit Sketch", partial(self.edit.emit, i))
+            m.addAction("Show Sketch" if i in self.hidden else "Hide Sketch", partial(self.toggle.emit, i))
+            m.addSeparator()
         m.addAction("Roll to here", partial(self.roll.emit, i + 1))
         m.addAction("Roll to before", partial(self.roll.emit, i))
         m.addSeparator()
