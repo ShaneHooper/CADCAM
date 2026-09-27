@@ -119,6 +119,11 @@ Rerun the step 6 self-test after signing (signing changes the files). If this la
 signing setup (the work laptop probably doesn't), build and sign on the home laptop and copy
 the signed folder over, or ask Shane before changing anything in Azure.
 
+**Installer (`packaging/g00cam.iss` → `dist\installer\G00-CAM-Setup.exe`):** sign the
+`dist\G00 CAM` folder FIRST, then build the installer, then sign the installer too:
+`python packaging\sign_folder.py dist\installer`. Signing the installer does not sign
+what's inside it, and Smart App Control checks the installed files when they run.
+
 Each run uses about 800 of the Trusted Signing plan's monthly signatures (Basic = 5,000/month).
 Don't re-sign needlessly: the script skips files that are already Valid.
 
