@@ -54,6 +54,18 @@ G00 CAM\  G00 CAM.exe + _internal\   RUNTIME: Python, Qt, VTK, OpenCascade (~800
 - A new *import* of a library the runtime doesn't bundle yet does need a runtime rebuild.
   `--selftest` catches it (ModuleNotFoundError).
 
+## Signing (Smart App Control)
+CI signs with Azure Artifact Signing exactly like G-SEND.IO's `release.yml` (same account
+`gsendio-prod-signing`, profile `gsendio-public-trust`, OIDC, no stored certificate). The job
+runs in this repo's **`production-signing`** environment. For it to sign, Shane must (once):
+1. GitHub → CADCAM → Settings → Environments → `production-signing`: add secrets
+   `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (same values as REV5's).
+2. Azure → the Entra app REV5 uses → Certificates & secrets → Federated credentials → add one
+   for GitHub: org `ShaneHooper`, repo `CADCAM`, entity **Environment**, name `production-signing`.
+Without these the build still runs but is UNSIGNED (a warning says so). The runtime (~800
+binaries) is signed once per runtime rebuild and cached signed; each build then signs only the
+installer (1 signature).
+
 ## Git rules
 Branch `claude/new-session-sgzhb7` (PR #1). Never commit to `main`. If `main` moves, merge it in
 (no rebase). Commit messages end with the harness's Co-Authored-By line; no model names.

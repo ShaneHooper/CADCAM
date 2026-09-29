@@ -20,6 +20,7 @@ Signing setup on Shane's home laptop works unchanged:
 Usage (Windows):
     python packaging\\sign_folder.py "dist\\G00 CAM"            # sign what needs it, then verify all
     python packaging\\sign_folder.py "dist\\G00 CAM" --check    # just report what is unsigned
+    python packaging\\sign_folder.py "dist\\G00 CAM" --list unsigned.txt   # write the list (CI)
 
 Exit 0 only when every binary in the folder ends up with a Valid signature.
 """
@@ -87,6 +88,17 @@ def main(argv):
     if len(argv) < 2:
         sys.exit(__doc__)
     folder, check_only = argv[1], "--check" in argv[2:]
+    if "--list" in argv[2:]:
+        # write the unsigned binaries, one path per line (for azure/artifact-signing-action's
+        # files-catalog), then exit 0: CI signs exactly these, nothing already valid
+        out = argv[argv.index("--list") + 1]
+        files = binaries(folder)
+        status = signature_status(files)
+        todo = [f for f in files if status.get(f) != "Valid"]
+        with open(out, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(os.path.abspath(f) for f in todo) + ("\n" if todo else ""))
+        print(f"{len(files)} binaries, {len(todo)} unsigned -> {out}")
+        return 0
     files = binaries(folder)
     status = signature_status(files)
     todo = [f for f in files if status.get(f) != "Valid"]
