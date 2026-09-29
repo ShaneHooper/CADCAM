@@ -30,12 +30,23 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     environment: production-signing     # scopes the AZURE_* secrets; the OIDC subject Azure trusts
-    env:
-      # Signing is on only when this repo's production-signing environment has the secrets.
-      # Without them the build still runs and says UNSIGNED loudly (like G-SEND.IO's sign step).
-      CAN_SIGN: ${{ secrets.AZURE_CLIENT_ID != '' }}
     steps:
       - uses: actions/checkout@v4
+
+      # Signing is on only when this repo's production-signing environment has the secrets.
+      # Checked in a step (where environment secrets are always visible); sets env.CAN_SIGN for
+      # the rest of the job. Without them the build still runs and says UNSIGNED loudly.
+      - name: Signing secrets present?
+        shell: pwsh
+        env:
+          A: ${{ secrets.AZURE_CLIENT_ID }}
+          B: ${{ secrets.AZURE_TENANT_ID }}
+          C: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          $have = @{ AZURE_CLIENT_ID = [bool]$env:A; AZURE_TENANT_ID = [bool]$env:B; AZURE_SUBSCRIPTION_ID = [bool]$env:C }
+          $have.GetEnumerator() | Sort-Object Name | ForEach-Object { "{0,-22} {1}" -f $_.Name, $(if ($_.Value) { "present" } else { "MISSING" }) }
+          $ok = $have.Values -notcontains $false
+          "CAN_SIGN=$($ok.ToString().ToLower())" >> $env:GITHUB_ENV
 
       - uses: actions/setup-python@v5
         with:
