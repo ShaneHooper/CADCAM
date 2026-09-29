@@ -127,6 +127,11 @@ what's inside it, and Smart App Control checks the installed files when they run
 Each run uses about 800 of the Trusted Signing plan's monthly signatures (Basic = 5,000/month).
 Don't re-sign needlessly: the script skips files that are already Valid.
 
+### Normal changes after the first build: don't rebuild
+Once a signed runtime exists, code/font/logo changes only need
+`python packaging\update_app.py "<the G00 CAM folder>"` (seconds, nothing to re-sign).
+See CLAUDE.md, "two layers". Rebuild + re-sign only when dependencies or the spec change.
+
 ### 7. Deliver the folder
 ```powershell
 $dst = "$env:USERPROFILE\Downloads\G00 CAM Rev1"

@@ -11,7 +11,7 @@ ROOT = Path(SPECPATH).parent
 UI = ROOT / "gsend_cad" / "ui"
 NAME = "G00 CAM"
 
-datas = [(str(UI / "assets"), "gsend_cad/ui/assets"), (str(UI / "fonts"), "gsend_cad/ui/fonts")]
+datas = []          # gsend_cad's own assets ship in app/ (see the end of this file)
 binaries = []
 hiddenimports = []
 
@@ -89,8 +89,18 @@ a = Analysis(
 # Qt plugins that pull in Quick/QML (virtual keyboard) or the PDF engine: not used.
 QT_DROP = ("qt6quick", "qt6qml", "qt6virtualkeyboard", "virtualkeyboard", "qt6pdf", "qpdf")
 a.binaries = [b for b in a.binaries if not any(k in Path(b[0]).name.lower() for k in QT_DROP)]
+# ---- two layers: runtime (this exe + _internal, signed once) and app (plain files) ----
+# gsend_cad is analysed above only so its dependencies get bundled; its own modules are taken
+# out of the exe and copied as plain files to "G00 CAM/app/" after COLLECT. A code, font or
+# logo change then only needs packaging/update_app.py: no PyInstaller run, no re-signing.
+a.pure = [m for m in a.pure if not (m[0] == "gsend_cad" or m[0].startswith("gsend_cad."))]
 pyz = PYZ(a.pure)
 icon = str(UI / "assets" / "g00code_logo.ico") if sys.platform == "win32" else None
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name=NAME, console=False, icon=icon,
           upx=False, disable_windowed_traceback=False)
 coll = COLLECT(exe, a.binaries, a.datas, name=NAME, upx=False)
+
+sys.path.insert(0, str(ROOT / "packaging"))
+from update_app import copy_app  # noqa: E402
+
+copy_app(Path(DISTPATH) / NAME)

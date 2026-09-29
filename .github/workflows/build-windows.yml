@@ -33,8 +33,43 @@ jobs:
       - name: Core and kernel tests
         run: python -m pytest -q tests/test_core.py tests/test_kernel.py
 
-      - name: Build exe
+      # The runtime (exe + _internal: Python, Qt, VTK, OpenCascade) only changes when the spec,
+      # the entry script or the dependencies change. Reuse it otherwise: a code/font/logo change
+      # then skips PyInstaller entirely and only refreshes the app/ layer.
+      - name: Runtime fingerprint
+        id: rt
+        shell: pwsh
+        run: |
+          $parts = (Get-FileHash packaging\g00cam.spec, packaging\g00cam_main.py, pyproject.toml).Hash -join ""
+          $sha = [Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($parts))
+          "key=g00cam-runtime-py312-" + ([BitConverter]::ToString($sha) -replace "-", "").Substring(0, 16) >> $env:GITHUB_OUTPUT
+
+      - uses: actions/cache/restore@v4
+        id: runtime
+        with:
+          path: dist/G00 CAM
+          key: ${{ steps.rt.outputs.key }}
+
+      - name: Build runtime (PyInstaller; skipped when cached)
+        if: steps.runtime.outputs.cache-hit != 'true'
         run: pyinstaller packaging/g00cam.spec --noconfirm
+
+      # saved now, before later steps rename the folder
+      - uses: actions/cache/save@v4
+        if: steps.runtime.outputs.cache-hit != 'true'
+        with:
+          path: dist/G00 CAM
+          key: ${{ steps.rt.outputs.key }}
+
+      - name: Refresh the app layer (gsend_cad code, fonts, logo)
+        run: python packaging/update_app.py "dist/G00 CAM"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: G00 CAM app update
+          path: dist/G00 CAM/app/
+          retention-days: 90
+          if-no-files-found: error
 
       - name: Self-test the built exe
         shell: pwsh
