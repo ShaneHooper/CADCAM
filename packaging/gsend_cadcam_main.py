@@ -1,4 +1,4 @@
-"""Entry point for the frozen G00 CAM app (PyInstaller).
+"""Entry point for the frozen G-SEND CADCAM app (PyInstaller).
 
 The app's own code is NOT frozen into the exe: it lives as plain files in <exe folder>/app/
 (see packaging/update_app.py), so code/font/logo changes never need a rebuild or re-signing.

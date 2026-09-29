@@ -73,7 +73,7 @@ class TopBar(QFrame):
         logo = QLabel()
         logo.setPixmap(theme.logo_pixmap(30))
         logo.setToolTip(APP_NAME)
-        cad = QLabel("CAM")
+        cad = QLabel("CAD/CAM")
         cad.setObjectName("brandCad")
         lay.addWidget(logo)
         lay.addWidget(cad)

@@ -1,18 +1,18 @@
-"""Copy G00 CAM's own code (gsend_cad: Python, fonts, logo, docs) into a built folder.
+"""Copy G-SEND CADCAM's own code (gsend_cad: Python, fonts, logo, docs) into a built folder.
 
 The Windows build is two layers:
 
-    G00 CAM\\
-      G00 CAM.exe, _internal\\   RUNTIME: Python, Qt, VTK, OpenCascade (~800 binaries).
+    G-SEND CADCAM\\
+      G-SEND CADCAM.exe, _internal\\   RUNTIME: Python, Qt, VTK, OpenCascade (~800 binaries).
                                  Built with PyInstaller and signed once. Rebuild only when a
-                                 dependency or packaging/g00cam.spec changes.
+                                 dependency or packaging/gsend_cadcam.spec changes.
       app\\gsend_cad\\            APP: plain .py files + assets. Any code, font, logo or colour
                                  change only replaces this folder: no PyInstaller, no re-signing
                                  (Smart App Control checks .exe/.dll files, not .py files).
 
 Usage:
-    python packaging/update_app.py "dist/G00 CAM"                         # after a code change
-    python packaging/update_app.py "%USERPROFILE%\\Downloads\\G00 CAM Rev1"  # patch an installed copy
+    python packaging/update_app.py "dist/G-SEND CADCAM"                         # after a code change
+    python packaging/update_app.py "%USERPROFILE%\\Downloads\\G-SEND CADCAM Rev1"  # patch an installed copy
 """
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def app_version() -> str:
 def copy_app(folder) -> Path:
     folder = Path(folder)
     if not folder.is_dir():
-        raise SystemExit(f"{folder} is not a built G00 CAM folder")
+        raise SystemExit(f"{folder} is not a built G-SEND CADCAM folder")
     dest = folder / "app" / "gsend_cad"
     if dest.exists():
         shutil.rmtree(dest)

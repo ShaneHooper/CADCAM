@@ -1,6 +1,6 @@
-# G00 CAM (package `gsend_cad`): the G-SEND.IO CAD/CAM module
+# G-SEND CADCAM (package `gsend_cad`): the G-SEND.IO CAD/CAM module
 
-**G00 CAM** is the working name. It's set once in `gsend_cad/__init__.py` (`APP_NAME`), and
+**G-SEND CADCAM** is the working name. It's set once in `gsend_cad/__init__.py` (`APP_NAME`), and
 the logo is the G00 logo from the G-SEND.IO repo (`ui/assets/g00code_logo.png` / `.ico`).
 
 This is the real app that the HTML prototype in `prototypes/gsend-cad/` was sketching out.
@@ -13,7 +13,7 @@ sketch-entity data model, and it has a real B-rep kernel (OpenCascade via build1
    from 3.10 to 3.13 works; build123d has no 3.14 build yet.
 2. Get this branch (`claude/new-session-sgzhb7`) onto your PC: `git clone`, or download the ZIP
    from GitHub.
-3. Double-click **`G00CAM.bat`**. The first run sets up a private `.venv` folder, which takes
+3. Double-click **`GSEND_CADCAM.bat`**. The first run sets up a private `.venv` folder, which takes
    a few minutes and downloads about 1 GB (Qt, VTK, OpenCascade). After that it opens
    straight away. Drag a `.gcad` file onto it to open that file.
 
@@ -23,7 +23,7 @@ By hand, on any OS:
 python -m venv .venv
 .venv\Scripts\activate            # Windows  (source .venv/bin/activate on Linux/macOS)
 pip install -e .[ui,dev]
-g00cam                             # or: python -m gsend_cad [part.gcad]
+gsend_cadcam                             # or: python -m gsend_cad [part.gcad]
 ```
 
 On Linux, Qt also needs the system GL/xcb libraries (`libegl1 libgl1 libxkbcommon0

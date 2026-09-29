@@ -1,5 +1,5 @@
 @echo off
-rem G00 CAM launcher for Windows. Double-click it.
+rem G-SEND CADCAM launcher for Windows. Double-click it.
 rem First run: builds a private Python environment in .venv (takes a few minutes, ~1 GB download).
 rem After that it just starts the app. Pass a .gcad file to open it (or drag one onto this file).
 setlocal
@@ -19,7 +19,7 @@ if not defined PY (
 )
 if not defined PY goto nopython
 
-echo First run: setting up G00 CAM with %PY% ... this takes a few minutes.
+echo First run: setting up G-SEND CADCAM with %PY% ... this takes a few minutes.
 %PY% -m venv .venv || goto fail
 ".venv\Scripts\python.exe" -m pip install --upgrade pip || goto fail
 ".venv\Scripts\python.exe" -m pip install -e ".[ui]" || goto fail
@@ -33,7 +33,7 @@ exit /b 0
 echo.
 echo Could not find Python 3.10 - 3.13.
 echo Install Python 3.12 from https://www.python.org/downloads/ (tick "Add python.exe to PATH"),
-echo then double-click G00CAM.bat again.
+echo then double-click GSEND_CADCAM.bat again.
 pause
 exit /b 1
 

@@ -1,20 +1,21 @@
-; Inno Setup script for G00 CAM: one "G00-CAM-Setup.exe" instead of a zip.
-;   iscc /DAppVersion=0.1.0 packaging\g00cam.iss      (after pyinstaller packaging/g00cam.spec)
+; Inno Setup script for G-SEND CADCAM: one "G-SEND-CADCAM-Setup.exe" instead of a zip.
+;   iscc /DAppVersion=0.1.0 packaging\gsend_cadcam.iss      (after pyinstaller packaging/gsend_cadcam.spec)
 ; Installs per user (no admin rights needed on a work laptop) into
-; %LOCALAPPDATA%\Programs\G00 CAM, with a Start menu entry and an optional desktop icon.
+; %LOCALAPPDATA%\Programs\G-SEND CADCAM, with a Start menu entry and an optional desktop icon.
 
 #ifndef AppVersion
   #define AppVersion "0.1.0"
 #endif
-#define AppName "G00 CAM"
-#define AppExe "G00 CAM.exe"
+#define AppName "G-SEND CADCAM"      ; file-safe: used in folders and shortcuts
+#define AppTitle "G-SEND CAD/CAM"    ; shown in the setup wizard
+#define AppExe "G-SEND CADCAM.exe"
 
 [Setup]
 ; Keep AppId fixed: a new setup then upgrades the installed copy instead of adding a second one.
 AppId={{5C0A7E61-2F9B-4F00-9C0D-6A3D5F1B2E47}
-AppName={#AppName}
+AppName={#AppTitle}
 AppVersion={#AppVersion}
-AppVerName={#AppName} {#AppVersion}
+AppVerName={#AppTitle} {#AppVersion}
 AppPublisher=G-SEND.IO
 DefaultDirName={localappdata}\Programs\{#AppName}
 DefaultGroupName={#AppName}
@@ -22,7 +23,7 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=..\dist\installer
-OutputBaseFilename=G00-CAM-Setup
+OutputBaseFilename=G-SEND-CADCAM-Setup
 SetupIconFile=..\gsend_cad\ui\assets\g00code_logo.ico
 UninstallDisplayIcon={app}\{#AppExe}
 Compression=lzma2/max
@@ -41,7 +42,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 Type: filesandordirs; Name: "{app}\_internal"
 
 [Files]
-Source: "..\dist\G00 CAM\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\G-SEND CADCAM\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "READ_ME_FIRST.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

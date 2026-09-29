@@ -1,12 +1,12 @@
-# HANDOVER: build and test the G00 CAM .exe on Shane's Windows laptop
+# HANDOVER: build and test the G-SEND CADCAM .exe on Shane's Windows laptop
 
 **To the local Claude Code session:** you're on Shane's Windows work laptop. Your job is to
-build **G00 CAM** into a Windows program with PyInstaller, check that it runs, and put the
+build **G-SEND CADCAM** into a Windows program with PyInstaller, check that it runs, and put the
 finished folder at:
 
 ```
-%USERPROFILE%\Downloads\G00 CAM Rev1\
-    G00 CAM.exe
+%USERPROFILE%\Downloads\G-SEND CADCAM Rev1\
+    G-SEND CADCAM.exe
     _internal\            (everything the exe needs; keep it next to the exe)
     READ_ME_FIRST.txt
 ```
@@ -34,16 +34,16 @@ ShaneHooper/CADCAM#1).
 
 | Path | What it is |
 |---|---|
-| `gsend_cad/` | The Python app. **G00 CAM** is the working name; `APP_NAME` in `gsend_cad/__init__.py` is the one place to change it. The package name stays `gsend_cad` because it's meant to become a G-SEND.IO module. |
+| `gsend_cad/` | The Python app. **G-SEND CADCAM** is the working name; `APP_NAME` in `gsend_cad/__init__.py` is the one place to change it. The package name stays `gsend_cad` because it's meant to become a G-SEND.IO module. |
 | `gsend_cad/core/` | Pure Python (stdlib only): sketch entities, profile detection, feature timeline `Document`, `.gcad` JSON files |
 | `gsend_cad/kernel/` | build123d / OpenCascade: builds real B-rep solids from the timeline, volume/bbox/mass, STEP export |
 | `gsend_cad/ui/` | PySide6 + pyvista window. `ui/assets/` holds the G00 logo (`g00code_logo.png` / `.ico`, copied from `ShaneHooper/G-SEND-IO-REV5/assets`). `ui/fonts/` has Anton + Squada One (OFL). |
 | `gsend_cad/README.md` | Full feature list and G-SEND.IO integration notes |
-| `packaging/g00cam.spec` | **PyInstaller spec** (one-folder build, windowed, G00 icon) |
-| `packaging/g00cam_main.py` | Frozen entry point |
+| `packaging/gsend_cadcam.spec` | **PyInstaller spec** (one-folder build, windowed, G00 icon) |
+| `packaging/gsend_cadcam_main.py` | Frozen entry point |
 | `packaging/READ_ME_FIRST.txt` | Goes into the finished folder for Shane |
 | `.github/workflows/build-windows.yml` | Same build on a GitHub Windows runner (backup route, see the end) |
-| `G00CAM.bat` | Run-from-source launcher (makes a `.venv` on first run). Not the exe. |
+| `GSEND_CADCAM.bat` | Run-from-source launcher (makes a `.venv` on first run). Not the exe. |
 | `prototypes/gsend-cad/` | The HTML prototype and its HANDOVER: the visual spec |
 | `tests/` | `test_core.py`, `test_kernel.py` (pytest); `drive_ui.py` drives the real window (Linux/xvfb script, see below) |
 
@@ -53,7 +53,7 @@ ShaneHooper/CADCAM#1).
 - **Extrude (E):** click closed profiles; Join / Cut / New Body; one side or symmetric; live OpenCascade preview.
 - **Timeline:** rollback, play, and right-click delete. Failed features turn red.
 - **Editing and files:** undo/redo, save/open `.gcad`, and Export STEP / STL (Utilities tab).
-- **Crash handling and self-test:** crash log at `%LOCALAPPDATA%\G00CAM\crash.log` plus an error box. `--selftest REPORT` mode (see below).
+- **Crash handling and self-test:** crash log at `%LOCALAPPDATA%\GSEND_CADCAM\crash.log` plus an error box. `--selftest REPORT` mode (see below).
 
 ## Steps
 
@@ -90,17 +90,17 @@ building; see Troubleshooting.
 
 ### 5. Build the exe
 ```powershell
-pyinstaller packaging/g00cam.spec --noconfirm
+pyinstaller packaging/gsend_cadcam.spec --noconfirm
 ```
-Output: `dist\G00 CAM\` (about 1.4 GB; OpenCascade, VTK and Qt are big). It takes several minutes.
+Output: `dist\G-SEND CADCAM\` (about 1.4 GB; OpenCascade, VTK and Qt are big). It takes several minutes.
 
 ### 6. Self-test the built exe (it's windowed, so results go to a file)
 ```powershell
-$p = Start-Process "dist\G00 CAM\G00 CAM.exe" -ArgumentList "--selftest","$PWD\selftest.txt" -Wait -PassThru
-Get-Content selftest.txt; $p.ExitCode        # expect "... G00 CAM selftest OK" and 0
+$p = Start-Process "dist\G-SEND CADCAM\G-SEND CADCAM.exe" -ArgumentList "--selftest","$PWD\selftest.txt" -Wait -PassThru
+Get-Content selftest.txt; $p.ExitCode        # expect "... G-SEND CADCAM selftest OK" and 0
 ```
 To also open, render and close the real window:
-`$env:G00CAM_SELFTEST_WINDOW="1"` before the same command (expect a `window: 1400x820 ...` line).
+`$env:GSEND_CADCAM_SELFTEST_WINDOW="1"` before the same command (expect a `window: 1400x820 ...` line).
 
 ### 6b. Sign it (required: Smart App Control blocks it otherwise)
 Shane's Windows has **Smart App Control** on. It blocked the unsigned Rev1 build outright;
@@ -112,15 +112,15 @@ Shane already has **Azure Trusted Signing** for G-SEND.IO: see `utilities/sign_b
 working `signing.local.json` (never commit it). Use the same file here:
 ```powershell
 copy <path-to-G-SEND.IO-repo>\signing.local.json .        # gitignored in this repo too
-python packaging\sign_folder.py "dist\G00 CAM" --check    # lists what's unsigned
-python packaging\sign_folder.py "dist\G00 CAM"            # signs them, then verifies ALL are Valid
+python packaging\sign_folder.py "dist\G-SEND CADCAM" --check    # lists what's unsigned
+python packaging\sign_folder.py "dist\G-SEND CADCAM"            # signs them, then verifies ALL are Valid
 ```
 Rerun the step 6 self-test after signing (signing changes the files). If this laptop has no
 signing setup (the work laptop probably doesn't), build and sign on the home laptop and copy
 the signed folder over, or ask Shane before changing anything in Azure.
 
-**Installer (`packaging/g00cam.iss` → `dist\installer\G00-CAM-Setup.exe`):** sign the
-`dist\G00 CAM` folder FIRST, then build the installer, then sign the installer too:
+**Installer (`packaging/gsend_cadcam.iss` → `dist\installer\G-SEND-CADCAM-Setup.exe`):** sign the
+`dist\G-SEND CADCAM` folder FIRST, then build the installer, then sign the installer too:
 `python packaging\sign_folder.py dist\installer`. Signing the installer does not sign
 what's inside it, and Smart App Control checks the installed files when they run.
 
@@ -129,21 +129,21 @@ Don't re-sign needlessly: the script skips files that are already Valid.
 
 ### Normal changes after the first build: don't rebuild
 Once a signed runtime exists, code/font/logo changes only need
-`python packaging\update_app.py "<the G00 CAM folder>"` (seconds, nothing to re-sign).
+`python packaging\update_app.py "<the G-SEND CADCAM folder>"` (seconds, nothing to re-sign).
 See CLAUDE.md, "two layers". Rebuild + re-sign only when dependencies or the spec change.
 
 ### 7. Deliver the folder
 ```powershell
-$dst = "$env:USERPROFILE\Downloads\G00 CAM Rev1"
+$dst = "$env:USERPROFILE\Downloads\G-SEND CADCAM Rev1"
 New-Item -ItemType Directory -Force $dst | Out-Null
-robocopy "dist\G00 CAM" $dst /E /NFL /NDL /NJH /NJS
+robocopy "dist\G-SEND CADCAM" $dst /E /NFL /NDL /NJH /NJS
 Copy-Item packaging\READ_ME_FIRST.txt $dst
 ```
 If Shane already made the folder, copy into it. Don't delete anything else he put there.
-Then have him double-click `G00 CAM.exe`.
+Then have him double-click `G-SEND CADCAM.exe`.
 
 ### 8. Test checklist with Shane
-1. It starts, the taskbar shows the G00 logo (not the Python logo), and the title is "G00 CAM".
+1. It starts, the taskbar shows the G00 logo (not the Python logo), and the title is "G-SEND CADCAM".
 2. Orbit (left drag), pan (right drag), zoom (wheel). View cube buttons and Home work.
 3. **L**, then a rectangle, then a circle inside it, then **Enter**, then **E**. Click the ring
    between the two, set Operation **Cut**, Distance **0.5**, **OK**. You get a pocket with a pin
@@ -165,7 +165,7 @@ Fix anything he finds on the branch (from source first, then rebuild), commit, a
 - **Blank or black 3D view, or a crash creating the window:** VTK needs **OpenGL 3.2+**. Remote
   Desktop sessions and some VMs only offer OpenGL 1.1. Test at the laptop itself, not over
   RDP. If it's really missing, the fallback is Mesa's software `opengl32.dll`
-  (mesa-dist-win, the "llvmpipe" build) placed next to `G00 CAM.exe`.
+  (mesa-dist-win, the "llvmpipe" build) placed next to `G-SEND CADCAM.exe`.
 - **Qt platform plugin error:** make sure `_internal\PySide6\plugins\platforms\qwindows.dll`
   exists. If not, reinstall PySide6 in the venv and rebuild.
 - **Path length:** keep the repo in a short path (e.g. `C:\src\CADCAM`) if pip or PyInstaller
@@ -177,9 +177,9 @@ Fix anything he finds on the branch (from source first, then rebuild), commit, a
 ## Backup route: GitHub builds it
 
 The last push to the branch includes `.github/workflows/build-windows.yml`, which runs the same
-build and self-test on a GitHub Windows runner. It uploads an artifact named **"G00 CAM Rev1"**
+build and self-test on a GitHub Windows runner. It uploads an artifact named **"G-SEND CADCAM Rev1"**
 from the run's Summary page in ShaneHooper/CADCAM → Actions. Download the zip and extract it
-into `Downloads\G00 CAM Rev1`. It's useful if the laptop can't build (no admin rights, proxy
+into `Downloads\G-SEND CADCAM Rev1`. It's useful if the laptop can't build (no admin rights, proxy
 blocks PyPI). Its self-test skips the window check, because the runner has no GPU.
 
 ## Linux-only bits you can ignore on Windows

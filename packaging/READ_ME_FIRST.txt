@@ -1,13 +1,13 @@
-G00 CAM  -  Rev 1 (test build)
-==============================
+G-SEND CAD/CAM  -  Rev 1 (test build)
+=====================================
 
 RUN IT
-  Double-click "G00 CAM.exe".
+  Double-click "G-SEND CADCAM.exe".
   Keep the "_internal" folder next to it. The exe needs everything in there.
 
   If Windows shows "Windows protected your PC", click "More info", then "Run anyway".
   If Smart App Control blocks it (no Run anyway button), this copy isn't signed. Use the
-  signed build (see HANDOVER_G00CAM_WINDOWS.md, step 6b).
+  signed build (see HANDOVER_GSEND_CADCAM_WINDOWS.md, step 6b).
 
 HOW TO USE IT
   Help (top right) -> Documentation, or press F1: step by step for sketching, editing a
@@ -34,7 +34,7 @@ IF IT WON'T START
   A G00 logo appears while it loads. The first start on a new computer can take up to a
   minute (antivirus scans the program once). Click once and wait.
 
-  Logs are in %LOCALAPPDATA%\G00CAM  (paste that into Win+R):
+  Logs are in %LOCALAPPDATA%\GSEND_CADCAM  (paste that into Win+R):
       startup.log        how far the last start got
       crash.log          Python errors (an error box names it)
       native_crash.log   hard crashes (graphics driver / 3D view)
@@ -42,4 +42,4 @@ IF IT WON'T START
   If a start dies silently, the next start shows what these caught. Send that (or the files).
 
   Health check (includes the OpenGL version; the 3D view needs 3.2 or newer):
-      "G00 CAM.exe" --selftest "%USERPROFILE%\Desktop\g00cam_check.txt"
+      "G-SEND CADCAM.exe" --selftest "%USERPROFILE%\Desktop\gsend_cadcam_check.txt"

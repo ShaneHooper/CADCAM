@@ -20,12 +20,12 @@ def _style(app: QApplication) -> dict:
     return {"head": head, "mono": mono, "g": theme.pick(theme.BRAND_G), "wm": theme.pick(theme.BRAND_WM)}
 
 
-_TRACE: Path | None = None       # startup.log, only when G00 CAM runs as its own program
+_TRACE: Path | None = None       # startup.log, only when G-SEND CADCAM runs as its own program
 _NATIVE = None                    # open file faulthandler writes hard crashes to
 
 
 def _trace(msg: str):
-    """Breadcrumbs in %LOCALAPPDATA%\\G00CAM\\startup.log: when the windowed .exe dies without a
+    """Breadcrumbs in %LOCALAPPDATA%\\GSEND_CADCAM\\startup.log: when the windowed .exe dies without a
     word (a crash inside OpenGL / VTK), the last line says how far it got."""
     if _TRACE:
         try:
@@ -110,7 +110,7 @@ def launch(document: Document | str | None = None, block: bool | None = None):
     if created:
         if sys.platform == "win32":     # own taskbar entry, so Windows shows the G00 logo, not Python's
             import ctypes
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("G00.CAM")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("GSEND.CADCAM")
         app = QApplication(sys.argv[:1])
         app.setApplicationName(APP_NAME)
     app.setWindowIcon(theme.app_icon())
@@ -192,7 +192,7 @@ def log_dir():
     import os
     from pathlib import Path
     base = os.environ.get("LOCALAPPDATA") or os.path.join(Path.home(), ".local", "state")
-    d = Path(base) / "G00CAM"
+    d = Path(base) / "GSEND_CADCAM"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -208,7 +208,7 @@ def selftest(report: str) -> int:
         from ..kernel import Kernel
         m = Kernel().build(bracket_plate())
         lines.append(f"kernel: {len(m.bodies)} body, volume {m.bodies[0].volume:.4f} in3")
-        step = Path(tempfile.gettempdir()) / "g00cam_selftest.step"
+        step = Path(tempfile.gettempdir()) / "gsend_cadcam_selftest.step"
         m.export_step(step)
         lines.append(f"step: {step.stat().st_size} bytes")
         import pyvista  # noqa: F401
@@ -216,15 +216,15 @@ def selftest(report: str) -> int:
         from . import commands, docs, main_window, panels, viewport  # noqa: F401
         lines.append("ui modules: imported")
         lines.append(f"logo: {theme.LOGO_PNG.exists()}  fonts: {len(list(theme.FONT_DIR.glob('*.ttf')))}")
-        if os.environ.get("G00CAM_SELFTEST_WINDOW") or sys.platform == "win32":
+        if os.environ.get("GSEND_CADCAM_SELFTEST_WINDOW") or sys.platform == "win32":
             app = QApplication.instance() or QApplication(sys.argv[:1])
             gl = opengl_info()
             lines.append(f"opengl: {gl['version']} {'OK' if gl['ok'] else 'TOO OLD (needs 3.2)'} · {gl['renderer']}")
-        if os.environ.get("G00CAM_SELFTEST_WINDOW"):      # also open, render and close the real window
+        if os.environ.get("GSEND_CADCAM_SELFTEST_WINDOW"):      # also open, render and close the real window
             from PySide6.QtTest import QTest
             win = launch(None, block=False)
             QTest.qWait(1500)
-            shot = os.environ.get("G00CAM_SELFTEST_SHOT")
+            shot = os.environ.get("GSEND_CADCAM_SELFTEST_SHOT")
             if shot:
                 win.grab().save(shot)
             lines.append(f"window: {win.width()}x{win.height()}, bodies shown {len(win.model.bodies)}")
@@ -234,7 +234,7 @@ def selftest(report: str) -> int:
     except Exception:
         ok = False
         lines.append(traceback.format_exc())
-    lines.append("G00 CAM selftest " + ("OK" if ok else "FAILED"))
+    lines.append("G-SEND CADCAM selftest " + ("OK" if ok else "FAILED"))
     Path(report).write_text("\n".join(lines), encoding="utf-8")
     return 0 if ok else 1
 
@@ -268,7 +268,7 @@ def _exercise(win) -> str:
     win.toggle_sketch(sid)
     win.show_docs()
     win.docs.close()
-    stl = Path(tempfile.gettempdir()) / "g00cam_selftest.stl"
+    stl = Path(tempfile.gettempdir()) / "gsend_cadcam_selftest.stl"
     from build123d import export_stl
     export_stl(win.model.bodies[0].shape, str(stl))
     return f"exercise: sketch, edit, extrude cut {cut:.4f} in3, hide, docs, stl {stl.stat().st_size} bytes"
@@ -298,7 +298,7 @@ def _start_logs():
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="g00cam", description=APP_NAME)
+    ap = argparse.ArgumentParser(prog="gsend_cadcam", description=APP_NAME)
     ap.add_argument("file", nargs="?", help=".gcad document to open")
     ap.add_argument("--selftest", metavar="REPORT", help="check the install, write results to REPORT, exit")
     args = ap.parse_args(argv)

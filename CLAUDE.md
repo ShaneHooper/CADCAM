@@ -1,4 +1,4 @@
-# CLAUDE.md: G00 CAM (ShaneHooper/CADCAM)
+# CLAUDE.md: G-SEND CADCAM (ShaneHooper/CADCAM)
 
 Owner: Shane (CNC programmer, owner of G-SEND.IO). Big, long-running project: **keep every change
 small and cheap.** Read only the file(s) the task needs, change only what he asks, keep the look.
@@ -38,19 +38,19 @@ Layers: `core` (stdlib only) ← `kernel` (build123d/OCC) ← `ui` (PySide6/pyvi
 
 ## The Windows build has two layers: DON'T rebuild the exe for normal changes
 ```
-G00 CAM\  G00 CAM.exe + _internal\   RUNTIME: Python, Qt, VTK, OpenCascade (~800 binaries).
+G-SEND CADCAM\  G-SEND CADCAM.exe + _internal\   RUNTIME: Python, Qt, VTK, OpenCascade (~800 binaries).
                                      PyInstaller + signing. Minutes, and signing costs quota.
           app\gsend_cad\             APP: our code, fonts, logo as plain files. Seconds.
 ```
 - Code / font / logo / colour change: `python packaging/update_app.py "<built folder>"`.
   **No PyInstaller, no re-signing** (Smart App Control checks .exe/.dll, not .py).
-- Rebuild the runtime (`pyinstaller packaging/g00cam.spec`) **only** when a dependency is
-  added or upgraded, or the spec / `packaging/g00cam_main.py` changes. Then re-sign it:
-  `python packaging/sign_folder.py "dist/G00 CAM"` (Azure Trusted Signing, same
+- Rebuild the runtime (`pyinstaller packaging/gsend_cadcam.spec`) **only** when a dependency is
+  added or upgraded, or the spec / `packaging/gsend_cadcam_main.py` changes. Then re-sign it:
+  `python packaging/sign_folder.py "dist/G-SEND CADCAM"` (Azure Trusted Signing, same
   `signing.local.json` as G-SEND.IO; never commit that file).
 - CI (`.github/workflows/build-windows.yml`) caches the runtime by a hash of spec + entry +
   pyproject, so a code-only push skips PyInstaller and also uploads a small
-  "G00 CAM app update" artifact (just `app/`).
+  "G-SEND CADCAM app update" artifact (just `app/`).
 - A new *import* of a library the runtime doesn't bundle yet does need a runtime rebuild.
   `--selftest` catches it (ModuleNotFoundError).
 

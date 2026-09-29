@@ -1,5 +1,5 @@
-# PyInstaller spec for G00 CAM.   pyinstaller packaging/g00cam.spec --noconfirm
-# Builds a one-folder app: dist/G00 CAM/ holding "G00 CAM.exe" plus _internal/.
+# PyInstaller spec for G-SEND CADCAM.   pyinstaller packaging/gsend_cadcam.spec --noconfirm
+# Builds a one-folder app: dist/G-SEND CADCAM/ holding "G-SEND CADCAM.exe" plus _internal/.
 # One-folder (not one-file) on purpose: OpenCascade + VTK + Qt are several hundred MB and a
 # one-file exe would unpack all of that to %TEMP% on every start.
 import sys
@@ -9,7 +9,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, co
 
 ROOT = Path(SPECPATH).parent
 UI = ROOT / "gsend_cad" / "ui"
-NAME = "G00 CAM"
+NAME = "G-SEND CADCAM"
 
 datas = []          # gsend_cad's own assets ship in app/ (see the end of this file)
 binaries = []
@@ -48,7 +48,7 @@ hiddenimports += [
 hiddenimports += collect_submodules("gsend_cad")
 
 # ---- keep the build small (fewer files = faster unzip / install / antivirus scan) ----
-# VTK ships ~150 compiled modules; G00 CAM imports ~40. The list below is what the app loads
+# VTK ships ~150 compiled modules; G-SEND CADCAM imports ~40. The list below is what the app loads
 # (measured by running tests/drive_ui.py, tests/drive_edit.py, export and save/open) plus a
 # few common pyvista filters as margin. Every other compiled vtkmodules.vtk* module is left
 # out, and with it the VTK libraries only those modules need. If a future feature needs one,
@@ -72,7 +72,7 @@ VTK_DROP = sorted({f"vtkmodules.{f.name.split('.')[0]}" for f in Path(vtkmodules
                    and f.name.split(".")[0] not in VTK_KEEP})
 
 a = Analysis(
-    [str(ROOT / "packaging" / "g00cam_main.py")],
+    [str(ROOT / "packaging" / "gsend_cadcam_main.py")],
     pathex=[str(ROOT)],
     binaries=binaries,
     datas=datas,
@@ -80,7 +80,7 @@ a = Analysis(
     excludes=["tkinter", "notebook", "trame", "PyQt5", "PyQt6", "PySide2",
               "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.Qt3DCore",
               "PySide6.QtQuick3D", "PySide6.QtMultimedia", "pytest",
-              # IPython's code completion; never imported by G00 CAM (jedi alone was 5,500 files)
+              # IPython's code completion; never imported by G-SEND CADCAM (jedi alone was 5,500 files)
               "jedi", "parso", "prompt_toolkit",
               "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtQuickWidgets", "PySide6.QtPdf",
               "PySide6.QtNetwork"] + VTK_DROP,
@@ -91,7 +91,7 @@ QT_DROP = ("qt6quick", "qt6qml", "qt6virtualkeyboard", "virtualkeyboard", "qt6pd
 a.binaries = [b for b in a.binaries if not any(k in Path(b[0]).name.lower() for k in QT_DROP)]
 # ---- two layers: runtime (this exe + _internal, signed once) and app (plain files) ----
 # gsend_cad is analysed above only so its dependencies get bundled; its own modules are taken
-# out of the exe and copied as plain files to "G00 CAM/app/" after COLLECT. A code, font or
+# out of the exe and copied as plain files to "G-SEND CADCAM/app/" after COLLECT. A code, font or
 # logo change then only needs packaging/update_app.py: no PyInstaller run, no re-signing.
 a.pure = [m for m in a.pure if not (m[0] == "gsend_cad" or m[0].startswith("gsend_cad."))]
 pyz = PYZ(a.pure)

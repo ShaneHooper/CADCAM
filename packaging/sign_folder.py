@@ -1,9 +1,9 @@
-"""Sign a built G00 CAM folder so Windows Smart App Control lets it run.
+"""Sign a built G-SEND CADCAM folder so Windows Smart App Control lets it run.
 
 Smart App Control has no "Run anyway": it blocks any exe *or DLL* without a trusted
 signature. A PyInstaller folder loads hundreds of binaries (OpenCascade, VTK, Qt, numpy...),
 so every .exe/.dll/.pyd that isn't already validly signed gets signed here, not just
-"G00 CAM.exe". Files that already carry a valid signature (Python, Qt, Microsoft runtime
+"G-SEND CADCAM.exe". Files that already carry a valid signature (Python, Qt, Microsoft runtime
 DLLs) are left alone.
 
 Uses the same config format as G-SEND.IO's utilities/sign_build.py, so the Azure Trusted
@@ -18,9 +18,9 @@ Signing setup on Shane's home laptop works unchanged:
     }
 
 Usage (Windows):
-    python packaging\\sign_folder.py "dist\\G00 CAM"            # sign what needs it, then verify all
-    python packaging\\sign_folder.py "dist\\G00 CAM" --check    # just report what is unsigned
-    python packaging\\sign_folder.py "dist\\G00 CAM" --list unsigned.txt   # write the list (CI)
+    python packaging\\sign_folder.py "dist\\G-SEND CADCAM"            # sign what needs it, then verify all
+    python packaging\\sign_folder.py "dist\\G-SEND CADCAM" --check    # just report what is unsigned
+    python packaging\\sign_folder.py "dist\\G-SEND CADCAM" --list unsigned.txt   # write the list (CI)
 
 Exit 0 only when every binary in the folder ends up with a Valid signature.
 """
@@ -50,7 +50,7 @@ def signature_status(paths):
     status = {}
     for i in range(0, len(paths), 200):
         chunk = paths[i:i + 200]
-        listing = os.path.join(os.environ.get("TEMP", "."), "g00cam_sig_list.txt")
+        listing = os.path.join(os.environ.get("TEMP", "."), "gsend_cadcam_sig_list.txt")
         with open(listing, "w", encoding="utf-8") as fh:
             fh.write("\n".join(chunk))
         ps = ("Get-Content -LiteralPath '%s' | ForEach-Object { $s = Get-AuthenticodeSignature -LiteralPath $_; "

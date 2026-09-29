@@ -1,8 +1,8 @@
-name: Build G00 CAM (Windows)
+name: Build G-SEND CADCAM (Windows)
 
 # Builds the one-folder Windows app with PyInstaller, checks it with --selftest, wraps it in an
-# installer (G00-CAM-Setup.exe, Inno Setup), installs that and self-tests the installed copy.
-# Artifacts on the run's Summary page: "G00 CAM Setup" (the installer) and "G00 CAM Rev1"
+# installer (G-SEND-CADCAM-Setup.exe, Inno Setup), installs that and self-tests the installed copy.
+# Artifacts on the run's Summary page: "G-SEND CADCAM Setup" (the installer) and "G-SEND CADCAM Rev1"
 # (the plain folder, as a fallback).
 on:
   push:
@@ -57,10 +57,10 @@ jobs:
         id: rt
         shell: pwsh
         run: |
-          $parts = (Get-FileHash packaging\g00cam.spec, packaging\g00cam_main.py, pyproject.toml).Hash -join ""
+          $parts = (Get-FileHash packaging\gsend_cadcam.spec, packaging\gsend_cadcam_main.py, pyproject.toml).Hash -join ""
           $sha = [Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($parts))
           $state = if ($env:CAN_SIGN -eq 'true') { "signed" } else { "unsigned" }
-          "key=g00cam-runtime-py312-$state-" + ([BitConverter]::ToString($sha) -replace "-", "").Substring(0, 16) >> $env:GITHUB_OUTPUT
+          "key=gsend_cadcam-runtime-py312-$state-" + ([BitConverter]::ToString($sha) -replace "-", "").Substring(0, 16) >> $env:GITHUB_OUTPUT
           if ($env:CAN_SIGN -ne 'true') { "::warning::UNSIGNED BUILD: CADCAM's production-signing environment has no AZURE_* secrets, so Smart App Control will block this build." }
 
       - name: Azure login (OIDC)
@@ -74,19 +74,19 @@ jobs:
       - uses: actions/cache/restore@v4
         id: runtime
         with:
-          path: dist/G00 CAM
+          path: dist/G-SEND CADCAM
           key: ${{ steps.rt.outputs.key }}
 
       - name: Build runtime (PyInstaller; skipped when cached)
         if: steps.runtime.outputs.cache-hit != 'true'
-        run: pyinstaller packaging/g00cam.spec --noconfirm
+        run: pyinstaller packaging/gsend_cadcam.spec --noconfirm
 
       # Sign the runtime once, right after it is built: only files without a valid signature
       # (Python, Qt and Microsoft DLLs already carry one). The signed runtime is then cached, so
       # later code-only builds reuse it and spend no signatures on it.
       - name: List unsigned runtime binaries
         if: steps.runtime.outputs.cache-hit != 'true' && env.CAN_SIGN == 'true'
-        run: python packaging/sign_folder.py "dist/G00 CAM" --list "${{ runner.temp }}\unsigned.txt"
+        run: python packaging/sign_folder.py "dist/G-SEND CADCAM" --list "${{ runner.temp }}\unsigned.txt"
 
       - name: Sign the runtime
         if: steps.runtime.outputs.cache-hit != 'true' && env.CAN_SIGN == 'true'
@@ -112,29 +112,29 @@ jobs:
 
       - name: Verify every runtime binary is signed
         if: env.CAN_SIGN == 'true'
-        run: python packaging/sign_folder.py "dist/G00 CAM" --check
+        run: python packaging/sign_folder.py "dist/G-SEND CADCAM" --check
 
       # saved now, before later steps rename the folder
       - uses: actions/cache/save@v4
         if: steps.runtime.outputs.cache-hit != 'true'
         with:
-          path: dist/G00 CAM
+          path: dist/G-SEND CADCAM
           key: ${{ steps.rt.outputs.key }}
 
       - name: Refresh the app layer (gsend_cad code, fonts, logo)
-        run: python packaging/update_app.py "dist/G00 CAM"
+        run: python packaging/update_app.py "dist/G-SEND CADCAM"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: G00 CAM app update
-          path: dist/G00 CAM/app/
+          name: G-SEND CADCAM app update
+          path: dist/G-SEND CADCAM/app/
           retention-days: 90
           if-no-files-found: error
 
       - name: Self-test the built exe
         shell: pwsh
         run: |
-          $exe = "dist\G00 CAM\G00 CAM.exe"
+          $exe = "dist\G-SEND CADCAM\G-SEND CADCAM.exe"
           $p = Start-Process -FilePath $exe -ArgumentList "--selftest", "selftest.txt" -Wait -PassThru
           Get-Content selftest.txt
           if ($p.ExitCode -ne 0) { throw "selftest failed with exit code $($p.ExitCode)" }
@@ -146,9 +146,9 @@ jobs:
           $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
           if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
-          & $iscc /Qp "/DAppVersion=$ver" packaging\g00cam.iss
+          & $iscc /Qp "/DAppVersion=$ver" packaging\gsend_cadcam.iss
           if ($LASTEXITCODE -ne 0) { throw "iscc failed" }
-          Get-Item dist\installer\G00-CAM-Setup.exe | Select-Object Name, @{n="MB";e={[math]::Round($_.Length/1MB)}}
+          Get-Item dist\installer\G-SEND-CADCAM-Setup.exe | Select-Object Name, @{n="MB";e={[math]::Round($_.Length/1MB)}}
 
       - name: Sign the installer (1 signature per build)
         if: env.CAN_SIGN == 'true'
@@ -157,7 +157,7 @@ jobs:
           endpoint: ${{ env.SIGNING_ENDPOINT }}
           signing-account-name: ${{ env.SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ env.SIGNING_CERTIFICATE_PROFILE }}
-          files: ${{ github.workspace }}\dist\installer\G00-CAM-Setup.exe
+          files: ${{ github.workspace }}\dist\installer\G-SEND-CADCAM-Setup.exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -175,13 +175,13 @@ jobs:
       - name: Install silently and self-test the installed copy
         shell: pwsh
         run: |
-          $dir = "$env:RUNNER_TEMP\G00 CAM test install"
+          $dir = "$env:RUNNER_TEMP\G-SEND CADCAM test install"
           $t = Measure-Command {
-            $p = Start-Process dist\installer\G00-CAM-Setup.exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER", "/DIR=`"$dir`"" -Wait -PassThru
+            $p = Start-Process dist\installer\G-SEND-CADCAM-Setup.exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER", "/DIR=`"$dir`"" -Wait -PassThru
             if ($p.ExitCode -ne 0) { throw "installer failed with exit code $($p.ExitCode)" }
           }
           "installed in {0:N0} s" -f $t.TotalSeconds
-          $p = Start-Process -FilePath "$dir\G00 CAM.exe" -ArgumentList "--selftest", "$PWD\selftest_installed.txt" -Wait -PassThru
+          $p = Start-Process -FilePath "$dir\G-SEND CADCAM.exe" -ArgumentList "--selftest", "$PWD\selftest_installed.txt" -Wait -PassThru
           Get-Content selftest_installed.txt
           if ($p.ExitCode -ne 0) { throw "installed selftest failed with exit code $($p.ExitCode)" }
           $p = Start-Process "$dir\unins000.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES" -Wait -PassThru
@@ -189,8 +189,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: G00 CAM Setup
-          path: dist/installer/G00-CAM-Setup.exe
+          name: G-SEND CADCAM Setup
+          path: dist/installer/G-SEND-CADCAM-Setup.exe
           retention-days: 90
           compression-level: 0          # already compressed
           if-no-files-found: error
@@ -198,14 +198,14 @@ jobs:
       - name: Package folder
         shell: pwsh
         run: |
-          Copy-Item packaging\READ_ME_FIRST.txt "dist\G00 CAM\"
-          Rename-Item "dist\G00 CAM" "G00 CAM Rev1"
-          "{0:N0} MB" -f ((Get-ChildItem "dist\G00 CAM Rev1" -Recurse | Measure-Object Length -Sum).Sum / 1MB)
+          Copy-Item packaging\READ_ME_FIRST.txt "dist\G-SEND CADCAM\"
+          Rename-Item "dist\G-SEND CADCAM" "G-SEND CADCAM Rev1"
+          "{0:N0} MB" -f ((Get-ChildItem "dist\G-SEND CADCAM Rev1" -Recurse | Measure-Object Length -Sum).Sum / 1MB)
 
       - uses: actions/upload-artifact@v4
         with:
-          name: G00 CAM Rev1
-          path: dist/G00 CAM Rev1/
+          name: G-SEND CADCAM Rev1
+          path: dist/G-SEND CADCAM Rev1/
           retention-days: 90
           # sklearn keeps its DLLs in "sklearn\.libs"; without this the dot-folder is
           # dropped from the zip and the exe dies on start (vcomp140.dll not found).
@@ -215,18 +215,18 @@ jobs:
       # Self-test what Shane actually downloads, not the local dist folder.
       - uses: actions/download-artifact@v4
         with:
-          name: G00 CAM Rev1
-          path: artifact-check/G00 CAM Rev1
+          name: G-SEND CADCAM Rev1
+          path: artifact-check/G-SEND CADCAM Rev1
 
       - name: Self-test the downloaded artifact
         shell: pwsh
         run: |
-          $dir = "artifact-check\G00 CAM Rev1"
+          $dir = "artifact-check\G-SEND CADCAM Rev1"
           if (-not (Test-Path "$dir\_internal\sklearn\.libs\vcomp140.dll")) { throw "artifact is missing sklearn\.libs\vcomp140.dll" }
-          $srcCount = (Get-ChildItem "dist\G00 CAM Rev1" -Recurse -File -Force).Count
+          $srcCount = (Get-ChildItem "dist\G-SEND CADCAM Rev1" -Recurse -File -Force).Count
           $dlCount  = (Get-ChildItem $dir -Recurse -File -Force).Count
           "files: built $srcCount, downloaded $dlCount"
           if ($srcCount -ne $dlCount) { throw "artifact file count differs from the build" }
-          $p = Start-Process -FilePath "$dir\G00 CAM.exe" -ArgumentList "--selftest", "$PWD\selftest_artifact.txt" -Wait -PassThru
+          $p = Start-Process -FilePath "$dir\G-SEND CADCAM.exe" -ArgumentList "--selftest", "$PWD\selftest_artifact.txt" -Wait -PassThru
           Get-Content selftest_artifact.txt
           if ($p.ExitCode -ne 0) { throw "artifact selftest failed with exit code $($p.ExitCode)" }
