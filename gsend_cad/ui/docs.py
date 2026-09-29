@@ -53,11 +53,27 @@ draws on its top face. Leave it at 0 to draw on the bottom (XY) plane.</li>
 <tr><td class="k">Center Rect</td><td>Click the center, then a corner (ribbon button).</td></tr>
 <tr><td class="k">Circle &nbsp;<b>C</b></td><td>Click the center, then a point on the circle.</td></tr>
 <tr><td class="k">Polygon &nbsp;<b>P</b></td><td>Click the center, then a corner. Set the number of sides in the palette first.</td></tr>
+<tr><td class="k">Point</td><td>Click once. A reference point (later: hole centers). Never part of a profile.</td></tr>
 </table>
 The blue tag next to the cursor shows the size as you move (width × height, Ø, length).</li>
 <li>Press <b>Enter</b> (or <b>Finish Sketch</b>). The sketch is added to the timeline as
 <b>Sketch1</b>, <b>Sketch2</b>, and so on.</li>
 </ol>
+<h3>Exact sizes and positions (from the origin)</h3>
+<ul>
+<li>Every position is measured from the <b>origin</b> (X0 Y0, where the red and green axes meet).</li>
+<li>A shape you just drew is <b>selected</b>: the palette shows its values. Click a value, type
+the exact number, press <b>Enter</b> (<b>Tab</b> goes to the next one). The shape updates at once.</li>
+<li><b>Rectangle:</b> X / Y of its lower-left corner (Center Rect: of its center), Width, Height,
+Corner R. <b>Circle:</b> center X / Y, Diameter. <b>Line:</b> start X / Y, end X / Y, Length,
+Angle (Length and Angle keep the start where it is). <b>Polygon:</b> center X / Y, Radius, Sides,
+Angle. <b>Point:</b> X / Y.</li>
+<li>To change a shape later: press <b>Esc</b> until the banner says <b>SELECT</b> (or click
+<b>Select</b>), then click the shape's outline in the view, or click its row in the palette list.</li>
+<li>The selected shape is white and shows its dimensions: <b>X</b> and <b>Y</b> from the origin,
+and its size. Tick <b>Dimensions: All</b> to see every shape's dimensions at once.</li>
+<li><b>Delete</b> removes the selected shape. <b>Ctrl+Z</b> undoes a typed value too.</li>
+</ul>
 <h3>Snapping and accuracy</h3>
 <ul>
 <li><b>Grid snap</b> is on, at 0.250 in. Change <b>Snap size</b> in the palette (0.125, 0.0625, 0.010).</li>
@@ -66,7 +82,7 @@ The blue tag next to the cursor shows the size as you move (width × height, Ø,
 </ul>
 <h3>Fixing mistakes while sketching</h3>
 <ul>
-<li><b>Ctrl+Z</b> or <b>Undo</b> removes the last shape.</li>
+<li><b>Ctrl+Z</b> or <b>Undo</b> undoes the last change (a shape, a typed value, a delete).</li>
 <li>Click <b>×</b> next to any shape in the palette list to delete that one.</li>
 <li><b>Clear</b> removes everything; <b>Cancel</b> leaves without keeping the sketch.</li>
 <li><b>Esc</b> drops a half-drawn shape; press it again to put the tool down.</li>

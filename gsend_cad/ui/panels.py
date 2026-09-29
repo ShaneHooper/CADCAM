@@ -31,8 +31,8 @@ RIBBON = {
              ("Add-Ins", [("pt", "Scripts")]),
              ("Select", [("select", "Select")])],
     "sketch": [("Create", [("line", "Line"), ("rect", "Rectangle"), ("crect", "Center Rect"), ("circle", "Circle"),
-                           ("poly", "Polygon")]),
-               ("Modify", [("undo", "Undo"), ("trash", "Clear")]),
+                           ("poly", "Polygon"), ("pt", "Point")]),
+               ("Modify", [("select", "Select"), ("undo", "Undo"), ("trash", "Clear")]),
                ("Inspect", [("measure", "Measure")]),
                ("Finish", [("cancel", "Cancel"), ("finish", "Finish Sketch")])],
 }

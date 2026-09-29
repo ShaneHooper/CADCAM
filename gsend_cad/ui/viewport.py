@@ -10,7 +10,7 @@ from pyvistaqt import QtInteractor
 from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QToolButton, QVBoxLayout, QWidget
 from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
-from vtkmodules.vtkRenderingCore import vtkMapper, vtkRenderer
+from vtkmodules.vtkRenderingCore import vtkBillboardTextActor3D, vtkMapper, vtkRenderer
 
 from . import icons, theme
 
@@ -134,6 +134,29 @@ class Viewport(QWidget):
         actor.prop.lighting = False
         self.top.AddActor(actor)
         self._groups.setdefault(group, []).append(actor)
+
+    def add_labels(self, group: str, items, color=theme.FG):
+        """Screen-facing text at world points: items = [((x, y, z), text)]. Dimension values."""
+        rgb = pv.Color(color).float_rgb
+        bg = pv.Color(theme.BG).float_rgb
+        for pos, text in items:
+            a = vtkBillboardTextActor3D()
+            a.SetInput(text)
+            a.SetPosition(*pos)
+            tp = a.GetTextProperty()
+            tp.SetFontSize(13)
+            tp.SetColor(*rgb)
+            tp.SetBackgroundColor(*bg)
+            tp.SetBackgroundOpacity(0.85)
+            tp.SetJustificationToCentered()
+            tp.SetVerticalJustificationToCentered()
+            self.top.AddActor(a)
+            self._groups.setdefault(group, []).append(a)
+
+    def pixel_size(self, pos: QPoint) -> float:
+        """World inches covered by one screen pixel on the active plane near `pos` (for picking)."""
+        a, b = self.world_at(pos), self.world_at(pos + QPoint(10, 0))
+        return float(np.hypot(b[0] - a[0], b[1] - a[1])) / 10 if a and b else 0.01
 
     def add_surface(self, group: str, mesh: pv.PolyData, color=theme.ACCENT, opacity=0.35, lit=True):
         actor = pv.Actor(mapper=pv.DataSetMapper(mesh))

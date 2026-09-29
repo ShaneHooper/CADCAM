@@ -18,10 +18,14 @@ from ..core.profiles import region_at, sketch_regions
 from ..kernel import extrude_tool, region_face, triangles
 from . import theme
 
-TOOL_KEYS = {"Line": "line", "Rectangle": "rect", "Center Rect": "center_rect", "Circle": "circle", "Polygon": "polygon"}
+TOOL_KEYS = {"Line": "line", "Rectangle": "rect", "Center Rect": "center_rect", "Circle": "circle",
+             "Polygon": "polygon", "Point": "point"}
 HINTS = {"line": "Click start, click end. Keep clicking to chain. Esc ends the chain.",
          "rect": "Click two opposite corners.", "center_rect": "Click center, then a corner.",
-         "circle": "Click center, then a point on the circle.", "polygon": "Click center, then a vertex."}
+         "circle": "Click center, then a point on the circle.", "polygon": "Click center, then a vertex.",
+         "point": "Click to place a point."}
+SELECT_HINT = ("Click a line or shape (or its row in the palette) to type exact values. "
+               "Delete removes it. L line · R rectangle · C circle · P polygon · Enter finishes")
 
 
 def mesh_of(shape) -> pv.PolyData:
@@ -70,9 +74,46 @@ class Panel(QFrame):
 
 
 # ------------------------------------------------------------------ sketch
+class NumBox(QDoubleSpinBox):
+    """Exact-value field. Enter applies it, Esc puts the old value back; keys stay here
+    (so typing never triggers a sketch shortcut or finishes the sketch)."""
+
+    def __init__(self, value: float, decimals=4):
+        super().__init__()
+        self.setRange(-1000, 1000)
+        self.setDecimals(decimals)
+        self.setButtonSymbols(QDoubleSpinBox.NoButtons)
+        self.setKeyboardTracking(False)
+        self.setFixedWidth(84)
+        self.setAlignment(Qt.AlignRight)
+        self.setValue(value)
+
+    def keyPressEvent(self, ev):
+        if ev.key() == Qt.Key_Escape:
+            self.setValue(self.value())     # drops the half-typed text
+            self.clearFocus()
+        elif ev.key() in (Qt.Key_Tab, Qt.Key_Backtab):
+            return super().keyPressEvent(ev)
+        else:
+            super().keyPressEvent(ev)
+        ev.accept()
+
+    def wheelEvent(self, ev):
+        ev.ignore()                         # scrolling the palette must not change a size
+
+
+class EntRow(QWidget):
+    def __init__(self, on_click):
+        super().__init__()
+        self._on_click = on_click
+
+    def mousePressEvent(self, ev):
+        self._on_click()
+
+
 class SketchPalette(Panel):
     def __init__(self, session: "SketchSession"):
-        super().__init__("Edit Sketch" if session.edit_id else "Sketch Palette", 210)
+        super().__init__("Edit Sketch" if session.edit_id else "Sketch Palette", 230)
         self.s = session
         self.plane = QDoubleSpinBox()
         self.plane.setRange(-100, 100)
@@ -95,18 +136,28 @@ class SketchPalette(Panel):
         self.sides.setCurrentText("6")
         self.sides.setStyleSheet("min-width: 36px;")
         self.row("Polygon sides", self.sides)
+        self.all_dims = QCheckBox("All")
+        self.all_dims.toggled.connect(lambda _on: session.draw_dims())
+        self.row("Dimensions", self.all_dims)
         self.list = QWidget()
         self.list.setObjectName("entList")
         self.lv = QVBoxLayout(self.list)
         self.lv.setContentsMargins(0, 0, 0, 0)
         self.lv.setSpacing(0)
-        sc = QScrollArea()
+        self.sc = sc = QScrollArea()
         sc.setWidget(self.list)
         sc.setWidgetResizable(True)
-        sc.setMaximumHeight(140)
         sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.v.addWidget(sc)
+        # exact values of the selected entity (built by show_selected)
+        self.edit = QWidget()
+        self.ev = QVBoxLayout(self.edit)
+        self.ev.setContentsMargins(0, 0, 0, 0)
+        self.ev.setSpacing(0)
+        self.v.addWidget(self.edit)
+        self.boxes: dict[str, NumBox] = {}
         self.update_list([])
+        self.show_selected(None)
 
     def step(self) -> float:
         return self.size.currentData() if self.snap.isChecked() else 0.0
@@ -124,7 +175,8 @@ class SketchPalette(Panel):
             self.lv.addWidget(e)
         for i, ent in enumerate(ents):
             kind, detail = sk.entity_label(ent)
-            r = QWidget()
+            r = EntRow(partial(self.s.select, i))
+            r.setCursor(Qt.PointingHandCursor)
             hl = QHBoxLayout(r)
             hl.setContentsMargins(10, 3, 4, 3)
             a, b = QLabel(kind), QLabel(detail)
@@ -139,9 +191,61 @@ class SketchPalette(Panel):
             x.setFixedSize(16, 16)
             x.clicked.connect(partial(self.s.delete_ent, i))
             hl.addWidget(x)
-            r.setStyleSheet(f"border-bottom:1px solid {theme.LINE};")
+            sel = i == self.s.sel
+            r.setAttribute(Qt.WA_StyledBackground, True)
+            r.setStyleSheet(f"border-bottom:1px solid {theme.LINE};"
+                            + (f"background:{theme.ACCENT_DIM};" if sel else ""))
             self.lv.addWidget(r)
         self.lv.addStretch()
+        self.sc.setFixedHeight(min(154, 22 * max(1, len(ents)) + 2))   # up to 7 rows, then scroll
+        self.fit()
+
+    def show_selected(self, ent):
+        """Fields for the selected entity (X/Y from the origin, then its size)."""
+        while self.ev.count():
+            w = self.ev.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
+        self.boxes = {}
+        self.edit.setVisible(ent is not None)
+        if ent is not None:
+            kind, _ = sk.entity_label(ent)
+            head = QLabel(f"{kind.upper()} · FROM ORIGIN")
+            head.setStyleSheet(f"color:{theme.ACCENT};font-weight:700;padding:6px 10px 2px 10px;")
+            self.ev.addWidget(head)
+            gen = self.s.gen
+            for key, val in sk.params(ent).items():
+                box = NumBox(val, 0 if key == "sides" else 4)
+                if key == "sides":
+                    box.setRange(3, 64)
+                box.editingFinished.connect(partial(self.s.set_value, gen, key, box))
+                self.boxes[key] = box
+                r = QWidget()
+                r.setObjectName("panelRow")
+                hl = QHBoxLayout(r)
+                hl.setContentsMargins(10, 2, 10, 2)
+                hl.addWidget(QLabel(sk.LABELS[key]))
+                hl.addStretch()
+                hl.addWidget(box)
+                self.ev.addWidget(r)
+            tip = QLabel("Type a value, Enter applies · Tab next · Delete removes")
+            tip.setWordWrap(True)
+            tip.setStyleSheet(f"color:{theme.FG3};padding:4px 10px 6px 10px;")
+            self.ev.addWidget(tip)
+        self.fit()
+
+    def fit(self):
+        """Overlay panels aren't in a layout, so grow/shrink to the content by hand."""
+        self.layout().activate()
+        self.resize(self.width(), self.sizeHint().height())
+
+    def refresh_values(self, ent):
+        for key, val in sk.params(ent).items():
+            box = self.boxes.get(key)
+            if box is not None and not box.hasFocus():
+                box.blockSignals(True)
+                box.setValue(val)
+                box.blockSignals(False)
 
 
 class SketchSession:
@@ -155,8 +259,11 @@ class SketchSession:
         self.ents: list = [dict(e) for e in ents or []]
         self.origin: list = list(range(len(self.ents)))   # old index of each entity; None = drawn now
         self.start = (list(self.ents), plane_z)
+        self.hist: list = []                 # (ents, origin) before each change, for Ctrl+Z
         self.pts: list = []
         self.tool = None
+        self.sel: int | None = None          # entity whose exact values are in the palette
+        self.gen = 0                         # bumps when the palette's fields are rebuilt
         self.palette = SketchPalette(self)
         self.vp.plane_z = plane_z
         if self.ents:
@@ -165,11 +272,46 @@ class SketchSession:
     def changed(self) -> bool:
         return (self.ents, self.plane_z) != self.start
 
+    def _push(self):
+        self.hist.append((list(self.ents), list(self.origin)))
+
+    def select(self, i: int | None):
+        i = i if i is not None and 0 <= i < len(self.ents) else None
+        self.sel = i
+        self.gen += 1
+        self.palette.show_selected(self.ents[i] if i is not None else None)
+        self.vp.set_side(self.palette)
+        self.redraw()
+
+    def set_value(self, gen: int, key: str, box):
+        """A palette field was typed into (Enter / Tab / click away)."""
+        if gen != self.gen or self.sel is None:
+            return                          # field of an entity that is no longer selected
+        e = self.ents[self.sel]
+        if abs(sk.params(e)[key] - box.value()) < 1e-10:
+            return
+        try:
+            new = sk.set_param(e, key, box.value())
+        except ValueError as exc:
+            self.vp.show_toast(str(exc), bad=True)
+            self.palette.refresh_values(e)
+            box.blockSignals(True)
+            box.setValue(sk.params(e)[key])
+            box.blockSignals(False)
+            return
+        self._push()
+        self.ents[self.sel] = new
+        self.palette.refresh_values(new)
+        self.redraw()
+
     def delete_ent(self, i: int):
         if 0 <= i < len(self.ents):
             kind, _ = sk.entity_label(self.ents[i])
+            self._push()
             del self.ents[i]
             del self.origin[i]
+            if self.sel is not None:
+                self.select(None if self.sel == i else self.sel - (self.sel > i))
             self.redraw()
             self.vp.show_toast(f"{kind} deleted")
 
@@ -182,11 +324,12 @@ class SketchSession:
         self.tool = TOOL_KEYS.get(label) if label else None
         self.pts = []
         self.vp.clear("preview")
+        self.vp.dim.hide()
         self.win.ribbon.set_active(label)
-        name = label.upper() if label else "SELECT A TOOL"
+        name = label.upper() if label else "SELECT"
         head = f"EDIT {self.name.upper()}" if self.edit_id else "SKETCH"
         self.vp.show_banner(f"{head} · XY PLANE · <span style='color:{theme.ACCENT}'>{name}</span>")
-        self.win.message(HINTS.get(self.tool, "Pick a sketch tool: L line · R rectangle · C circle · P polygon · Enter finishes"))
+        self.win.message(HINTS.get(self.tool, SELECT_HINT))
 
     def _snap(self, w, ev):
         step = self.palette.step()
@@ -194,23 +337,44 @@ class SketchSession:
             step /= 4
         return [sk.snap(w[0], step), sk.snap(w[1], step)]
 
-    def _lines(self, ents):
-        z = self.plane_z + 0.004
+    def _lines(self, ents, dz=0.004):
+        z = self.plane_z + dz
         return [[(x, y, z) for x, y in sk.entity_points(e)] for e in ents]
 
     def redraw(self):
         self.vp.clear("sketch", render=False)
-        self.vp.add_lines("sketch", self._lines(self.ents))
+        self.vp.clear("sel", render=False)
+        others = [e for i, e in enumerate(self.ents) if i != self.sel]
+        self.vp.add_lines("sketch", self._lines(others))
+        if self.sel is not None:
+            self.vp.add_lines("sel", self._lines([self.ents[self.sel]], 0.005), color=theme.FG, width=2.6)
         self.palette.update_list(self.ents)
+        self.draw_dims(render=False)
         self.win.refresh_tree()
         self.vp.render()
+
+    def draw_dims(self, render=True):
+        """Dimensions from the origin (and sizes) for the selected entity, or all with 'All'."""
+        self.vp.clear("dims", render=False)
+        show = range(len(self.ents)) if self.palette.all_dims.isChecked() else \
+            ([self.sel] if self.sel is not None else [])
+        z = self.plane_z + 0.006
+        lines, labels = [], []
+        for i in show:
+            for d in sk.dimensions(self.ents[i]):
+                lines += [[(x, y, z) for x, y in ln] for ln in d["lines"]]
+                labels.append(((d["at"][0], d["at"][1], z), d["text"]))
+        self.vp.add_lines("dims", lines, color=theme.FG2, width=1.0)
+        self.vp.add_labels("dims", labels)
+        if render:
+            self.vp.render()
 
     def on_move(self, w, ev):
         p = self._snap(w, ev)
         pos = ev.position().toPoint()
         if not self.tool:
             return
-        if not self.pts:
+        if not self.pts or self.tool == "point":
             self.vp.show_dim(f"X {sk.fmt(p[0])}  Y {sk.fmt(p[1])}", pos)
             return
         ent = sk.build_entity(self.tool, self.pts[0], p, int(self.palette.sides.currentText()))
@@ -220,29 +384,40 @@ class SketchSession:
         self.vp.show_dim(sk.preview_label(self.tool, self.pts[0], p, int(self.palette.sides.currentText())), pos)
         self.vp.render()
 
+    def _add(self, ent):
+        self._push()
+        self.ents.append(ent)
+        self.origin.append(None)
+        self.select(len(self.ents) - 1)     # its exact values show right away
+
     def on_click(self, w, ev):
-        if not self.tool:
+        self.vp.plotter.setFocus()           # take keys back from a palette field
+        if not self.tool:                    # select mode: pick what's under the cursor
+            pos = ev.position().toPoint()
+            self.select(sk.nearest(self.ents, w, 8 * self.vp.pixel_size(pos)))
             return
         p = self._snap(w, ev)
+        if self.tool == "point":
+            self._add(sk.point(p))
+            return
         if not self.pts:
             self.pts = [p]
             return
         ent = sk.build_entity(self.tool, self.pts[0], p, int(self.palette.sides.currentText()))
-        if ent:
-            self.ents.append(ent)
-            self.origin.append(None)
         self.pts = [p] if self.tool == "line" else []
         self.vp.clear("preview", render=False)
-        self.redraw()
+        if ent:
+            self._add(ent)
+        else:
+            self.redraw()
 
     def undo(self):
         if self.pts:
             self.pts = []
             self.vp.clear("preview")
-        elif self.ents:
-            self.ents.pop()
-            self.origin.pop()
-            self.redraw()
+        elif self.hist:
+            self.ents, self.origin = self.hist.pop()
+            self.select(None)
 
     def on_key(self, ev) -> bool:
         k = ev.key()
@@ -250,12 +425,17 @@ class SketchSession:
             if self.pts:
                 self.pts = []
                 self.vp.clear("preview")
-            else:
+                self.vp.dim.hide()
+            elif self.tool:
                 self.set_tool(None)
+            else:
+                self.select(None)
         elif k in (Qt.Key_Return, Qt.Key_Enter):
             self.win.finish_sketch()
         elif k == Qt.Key_Z and ev.modifiers() & Qt.ControlModifier:
             self.undo()
+        elif k in (Qt.Key_Delete, Qt.Key_Backspace) and self.sel is not None:
+            self.delete_ent(self.sel)
         elif k == Qt.Key_L:
             self.set_tool("Line")
         elif k == Qt.Key_R:
@@ -271,12 +451,16 @@ class SketchSession:
     def ribbon_tool(self, label: str):
         if label in TOOL_KEYS:
             self.set_tool(label)
+        elif label == "Select":
+            self.set_tool(None)
         elif label == "Undo":
             self.undo()
         elif label == "Clear":
+            if self.ents:
+                self._push()
             self.ents, self.origin, self.pts = [], [], []
             self.vp.clear("preview", render=False)
-            self.redraw()
+            self.select(None)
             self.vp.show_toast("Sketch cleared")
         elif label == "Finish Sketch":
             self.win.finish_sketch()
@@ -288,8 +472,8 @@ class SketchSession:
             self.win.ribbon.set_active(None)
 
     def close(self):
-        self.vp.clear("sketch", render=False)
-        self.vp.clear("preview", render=False)
+        for g in ("sketch", "sel", "dims", "preview"):
+            self.vp.clear(g, render=False)
         self.vp.dim.hide()
         self.vp.show_banner(None)
 

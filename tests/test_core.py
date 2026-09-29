@@ -105,3 +105,53 @@ def test_body_names_roundtrip(tmp_path):
     p = tmp_path / "n.gcad"
     doc.save(p)
     assert Document.load(p).body_names == {"body1": "Base Plate"}
+
+
+# ---- exact values from the origin (sketch palette fields)
+def test_rect_params_and_edit():
+    r = sk.rect((1, 1), (3, 2))
+    assert sk.params(r) == {"x": 1, "y": 1, "w": 2, "h": 1, "cr": 0.0}
+    r = sk.set_param(sk.set_param(r, "w", 2.5), "x", 0.5)
+    assert r["pts"][0] == [0.5, 1] and r["pts"][2] == [3.0, 2]
+
+
+def test_center_rect_positions_by_center():
+    r = sk.center_rect((0, 0), (1, 0.5))
+    assert sk.params(r)["x"] == 0 and sk.params(r)["w"] == 2
+    r = sk.set_param(r, "x", 2)
+    assert r["anchor"] == "center" and r["pts"][0] == [1.0, -0.5]
+
+
+def test_line_length_and_angle_keep_start():
+    ln = sk.set_param(sk.line((1, 1), (2, 1)), "len", 3)
+    assert ln["pts"] == [[1, 1], [4.0, 1.0]]
+    ln = sk.set_param(ln, "ang", 90)
+    assert ln["pts"] == [[1, 1], [1.0, 4.0]]          # float noise rounded off
+
+
+def test_circle_polygon_point_edit():
+    c = sk.set_param(sk.circle((0, 0), 1), "dia", 0.5)
+    assert c["r"] == 0.25
+    pg = sk.set_param(sk.polygon((1, 1), (2, 1), 6), "sides", 8)
+    assert len(pg["pts"]) == 8 and abs(sk.params(pg)["r"] - 1) < 1e-9
+    assert sk.set_param(sk.point((1, 2)), "y", 3) == {"type": "point", "p": [1.0, 3.0]}
+
+
+def test_bad_sizes_refused():
+    for e, k in ((sk.circle((0, 0), 1), "dia"), (sk.rect((0, 0), (1, 1)), "w"), (sk.line((0, 0), (1, 0)), "len")):
+        with pytest.raises(ValueError):
+            sk.set_param(e, k, 0)
+
+
+def test_dimensions_from_origin():
+    texts = [d["text"] for d in sk.dimensions(sk.rect((1, 2), (3, 3)))]
+    assert texts == ["X 1.0000", "Y 2.0000", "2.0000", "1.0000"]
+    assert [d["text"] for d in sk.dimensions(sk.circle((0, 0), 1))] == ["Ø 2.0000"]   # at origin: no X/Y
+
+
+def test_points_are_not_profiles_and_pick():
+    ents = [sk.rect((0, 0), (2, 2)), sk.point((1, 1))]
+    assert len(sketch_regions("s", ents)) == 1
+    assert sk.nearest(ents, (2.02, 1), 0.05) == 0
+    assert sk.nearest(ents, (1.01, 1), 0.05) == 1
+    assert sk.nearest(ents, (1.5, 1.5), 0.05) is None
