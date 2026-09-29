@@ -133,5 +133,28 @@ f = win.doc.features[-1]
 check("finished sketch keeps 4 entities incl. the point",
       f["kind"] == "sketch" and [e["type"] for e in f["ents"]] == ["rect", "circle", "point", "line"])
 shot("dims_03_done")
+
+# ---- fast clicks must draw, never leave the view stuck orbiting; Undo button with Line armed
+key(Qt.Key_L)
+s = win.session
+win.run_tool("Line")
+a, b = screen(0, 0), screen(1, 0)
+QTest.mouseClick(vp.plotter, Qt.LeftButton, Qt.NoModifier, a)
+QTest.mouseDClick(vp.plotter, Qt.LeftButton, Qt.NoModifier, b)     # second click comes as a double-click
+QTest.mouseRelease(vp.plotter, Qt.LeftButton, Qt.NoModifier, b)
+pump()
+check("fast second click draws the line", len(s.ents) == 1)
+check("view is not left orbiting", vp.plotter.iren.interactor.GetInteractorStyle().GetState() == 0)
+click(1, 1)
+check("line chain has 2 lines, next start still armed", len(s.ents) == 2 and s.pts)
+win.undo()                                          # the top bar's Undo button
+check("Undo button removes the last line even with the chain armed", len(s.ents) == 1)
+win.run_tool("Undo")                                # the ribbon's Undo
+check("ribbon Undo removes the first line", len(s.ents) == 0)
+win.redo()
+check("Redo brings a line back", len(s.ents) == 1)
+key(Qt.Key_Escape)
+key(Qt.Key_Escape)
+win.run_tool("Cancel")
 print("FAILURES:", failures or "none")
 sys.exit(1 if failures else 0)

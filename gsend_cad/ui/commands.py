@@ -260,6 +260,7 @@ class SketchSession:
         self.origin: list = list(range(len(self.ents)))   # old index of each entity; None = drawn now
         self.start = (list(self.ents), plane_z)
         self.hist: list = []                 # (ents, origin) before each change, for Ctrl+Z
+        self.redo_stack: list = []
         self.pts: list = []
         self.tool = None
         self.sel: int | None = None          # entity whose exact values are in the palette
@@ -274,6 +275,7 @@ class SketchSession:
 
     def _push(self):
         self.hist.append((list(self.ents), list(self.origin)))
+        self.redo_stack.clear()
 
     def select(self, i: int | None):
         i = i if i is not None and 0 <= i < len(self.ents) else None
@@ -412,12 +414,29 @@ class SketchSession:
             self.redraw()
 
     def undo(self):
-        if self.pts:
-            self.pts = []
-            self.vp.clear("preview")
-        elif self.hist:
+        """Undo the last change (shape, typed value, delete, clear). Also drops a half-drawn
+        shape; with nothing drawn yet it just drops that."""
+        had_pts, self.pts = bool(self.pts), []
+        self.vp.clear("preview", render=False)
+        self.vp.dim.hide()
+        if self.hist:
+            self.redo_stack.append((list(self.ents), list(self.origin)))
             self.ents, self.origin = self.hist.pop()
             self.select(None)
+            self.vp.show_toast("Undo")
+        elif not had_pts:
+            self.vp.show_toast("Nothing to undo")
+        self.vp.render()
+
+    def redo(self):
+        if not self.redo_stack:
+            self.vp.show_toast("Nothing to redo")
+            return
+        self.hist.append((list(self.ents), list(self.origin)))
+        self.ents, self.origin = self.redo_stack.pop()
+        self.pts = []
+        self.select(None)
+        self.vp.show_toast("Redo")
 
     def on_key(self, ev) -> bool:
         k = ev.key()
@@ -434,6 +453,8 @@ class SketchSession:
             self.win.finish_sketch()
         elif k == Qt.Key_Z and ev.modifiers() & Qt.ControlModifier:
             self.undo()
+        elif k == Qt.Key_Y and ev.modifiers() & Qt.ControlModifier:
+            self.redo()
         elif k in (Qt.Key_Delete, Qt.Key_Backspace) and self.sel is not None:
             self.delete_ent(self.sel)
         elif k == Qt.Key_L:

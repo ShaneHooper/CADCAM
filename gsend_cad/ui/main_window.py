@@ -191,6 +191,9 @@ class MainWindow(QMainWindow):
         self.message("Undo")
 
     def redo(self):
+        if isinstance(self.session, SketchSession):
+            self.session.redo()
+            return
         if self.session or not self.redo_stack:
             return
         self.undo_stack.append(self.doc.to_dict())

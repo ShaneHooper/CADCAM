@@ -82,7 +82,7 @@ and its size. Tick <b>Dimensions: All</b> to see every shape's dimensions at onc
 </ul>
 <h3>Fixing mistakes while sketching</h3>
 <ul>
-<li><b>Ctrl+Z</b> or <b>Undo</b> undoes the last change (a shape, a typed value, a delete).</li>
+<li><b>Ctrl+Z</b> or <b>Undo</b> undoes the last change (a shape, a typed value, a delete); <b>Ctrl+Y</b> redoes it.</li>
 <li>Click <b>×</b> next to any shape in the palette list to delete that one.</li>
 <li><b>Clear</b> removes everything; <b>Cancel</b> leaves without keeping the sketch.</li>
 <li><b>Esc</b> drops a half-drawn shape; press it again to put the tool down.</li>

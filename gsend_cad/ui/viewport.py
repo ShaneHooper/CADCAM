@@ -226,7 +226,9 @@ class Viewport(QWidget):
             if self.handler and w:
                 self.handler.on_move(w, ev)
             return False
-        if t == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton:
+        if t in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick) and ev.button() == Qt.LeftButton:
+            # a fast second click arrives as DblClick: it must count as a click, and VTK must
+            # never see it (it starts an orbit whose release we swallow = stuck rotating)
             self._press = ev.position().toPoint()
             if self.handler and self.handler.captures_left:
                 w = self.world_at(self._press)
@@ -237,6 +239,7 @@ class Viewport(QWidget):
         if t == QEvent.MouseButtonRelease and ev.button() == Qt.LeftButton:
             p0, self._press = self._press, None
             if self.handler and self.handler.captures_left:
+                self.plotter.iren.interactor.GetInteractorStyle().OnLeftButtonUp()   # never leave VTK orbiting
                 return True
             if self.handler and p0 is not None and (ev.position().toPoint() - p0).manhattanLength() <= 4:
                 w = self.world_at(ev.position().toPoint())
