@@ -31,7 +31,7 @@ HINTS = {"line": "Click start, click end. Keep clicking to chain. Esc ends the c
          "rect": "Click two opposite corners.", "center_rect": "Click center, then a corner.",
          "circle": "Click center, then a point on the circle.", "polygon": "Click center, then a vertex.",
          "point": "Click to place a point.",
-         "fillet": "Click a sharp corner to round it (radius: Corner size in the palette).",
+         "fillet": "Click a sharp corner to round it (radius: Fillet R in the palette).",
          "chamfer": "Click a sharp corner to bevel it (Chamfer H × V in the palette)."}
 SNAP_PX = 8         # how close (screen px) the cursor must come to an end / mid / center to snap
 SELECT_HINT = ("Click a line or shape (or its row in the palette) to type exact values; right-click a "
@@ -290,7 +290,7 @@ class SketchPalette(Panel):
         self.edit.setVisible(ent is not None)
         if ent is not None:
             kind, _ = sk.entity_label(ent)
-            head = QLabel(f"{kind.upper()} · " + ("LEGS" if ent.get("corner") else "FROM ORIGIN"))
+            head = QLabel(f"{kind.upper()} · " + (("SIZE" if ent["type"] == "arc" else "LEGS") if ent.get("corner") else "FROM ORIGIN"))
             head.setStyleSheet(f"color:{theme.ACCENT};font-weight:700;padding:6px 10px 2px 10px;")
             head.setFixedHeight(head.sizeHint().height())
             self.ev.addWidget(head)

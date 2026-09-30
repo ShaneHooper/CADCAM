@@ -80,6 +80,16 @@ s.palette.corner.setValue(0.25)
 win.run_tool("Fillet")
 click(2, 1)
 check("sketch fillet makes an arc", any(e["type"] == "arc" and abs(e["r"] - 0.25) < 1e-9 for e in s.ents))
+fil = s.ents[-1]
+check("fillet shows only its radius (no X/Y from origin)", sk.params(fil) == {"r": 0.25}
+      and [d["key"] for d in sk.dimensions(fil)] == ["r"])
+others = [e for e in s.ents if e is not fil]
+s.apply_dim(len(s.ents) - 1, "r", 0.4)
+check("right-click R 0.4 re-rounds the same corner, nothing shifts",
+      s.ents[-1]["r"] == 0.4 and s.ents[-1]["corner"] == [2, 1] and s.ents[-1]["c"] == [1.6, 0.6]
+      and len(s.ents) == len(others) + 1)
+s.apply_dim(len(s.ents) - 1, "r", 0.25)
+check("and back to 0.25", s.ents[-1]["c"] == [1.75, 0.75])
 s.palette.cham_h.setValue(0.4)
 s.palette.cham_v.setValue(0.1)
 win.run_tool("Chamfer")

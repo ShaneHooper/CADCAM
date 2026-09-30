@@ -164,6 +164,17 @@ def test_sketch_chamfer_horizontal_vertical_legs():
     assert not m.errors and abs(m.bodies[0].volume - (2 - 0.125) * 0.5) < 1e-6
 
 
+def test_sketch_fillet_resize_keeps_the_rest():
+    d, s = _plate([sk.rect((0, 0), (2, 1))])
+    ents, origin = sk.corner_op(s["ents"], [0], (2, 1), 0.125, "fillet", 0.05)
+    ents, origin, i = sk.edit(ents, origin, len(ents) - 1, "r", 0.5)
+    assert ents[i]["c"] == [1.5, 0.5] and sk.params(ents[i]) == {"r": 0.5}
+    assert [0, 0] in [p for e in ents if e["type"] == "line" for p in e["pts"]]     # far corner untouched
+    d.update_sketch(s["id"], ents, 0.0, origin)
+    m = Kernel().build(d)
+    assert not m.errors and abs(m.bodies[0].volume - (2 - 0.25 * (1 - math.pi / 4)) * 0.5) < 1e-6
+
+
 def test_revolve_about_sketch_y_axis():
     d = Document()
     s = d.add_sketch([sk.rect((1, 0), (2, 1))])

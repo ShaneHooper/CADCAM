@@ -157,7 +157,7 @@ def entity_label(e):
     if t == "circle":
         return "Circle", "Ø " + fmt(e["r"] * 2)
     if t == "arc":
-        return "Arc", "R " + fmt(e["r"])
+        return ("Fillet" if e.get("corner") else "Arc"), "R " + fmt(e["r"])
     if t == "rect":
         p = e["pts"]
         return "Rect", f"{fmt(abs(p[2][0] - p[0][0]))} × {fmt(abs(p[2][1] - p[0][1]))}"
@@ -211,6 +211,8 @@ def params(e) -> dict:
                 "ang": math.degrees(math.atan2(y1 - y0, x1 - x0))}
     if t == "circle":
         return {"x": e["c"][0], "y": e["c"][1], "dia": e["r"] * 2}
+    if t == "arc" and e.get("corner"):              # fillet: just its radius (the corner places it)
+        return {"r": e["r"]}
     if t == "arc":
         return {"x": e["c"][0], "y": e["c"][1], "r": e["r"]}
     if t == "rect":
@@ -310,6 +312,8 @@ def dimensions(e) -> list[dict]:
     (its value is params(e)[key]); set_param(e, key, new) is how a right-click edits it."""
     v = params(e)
     g = DIM_GAP
+    if e.get("corner") and e["type"] == "arc":
+        return [_dim(e["c"], arc_mid(e), 0, "R " + fmt(e["r"]), key="r")]
     if e.get("corner"):
         return _chamfer_dims(e, g)
     ax, ay = v["x"], v["y"]
@@ -359,7 +363,8 @@ def _chamfer_dims(e, g):
 
 def edit(ents, origin, i: int, key: str, value: float):
     """Change one value of entity i: new (ents, origin, index of the changed entity).
-    A chamfer's legs move the two sides it cuts, so this works on the whole sketch."""
+    A fillet's radius or a chamfer's legs move the two sides it cuts, so this works on the whole
+    sketch: the corner is put back sharp and cut again, nothing else moves."""
     e = ents[i]
     if not e.get("corner"):
         ents = list(ents)
@@ -367,7 +372,8 @@ def edit(ents, origin, i: int, key: str, value: float):
         return ents, list(origin), i
     v = params(e)
     v[key] = float(value)
-    ents, origin = rechamfer(ents, origin, i, v["ch"], v["cv"])
+    size = v["r"] if e["type"] == "arc" else (v["ch"], v["cv"])
+    ents, origin = recorner(ents, origin, i, size)
     return ents, origin, len(ents) - 1
 
 
@@ -589,7 +595,7 @@ def corner_op(ents, origin, p, size, kind: str, tol: float):
         if abs(L - t) < 1e-9:                     # the side is used up entirely
             ents[k] = None
         else:
-            ents[k] = line(tp, other) if at_start else line(other, tp)
+            ents[k] = _clean(line(tp, other) if at_start else line(other, tp))
     if kind == "fillet":
         bis = [u1[0] + u2[0], u1[1] + u2[1]]
         bl = math.hypot(*bis)
@@ -599,6 +605,7 @@ def corner_op(ents, origin, p, size, kind: str, tol: float):
         a1 = math.degrees(math.atan2(T[1][1] - c[1], T[1][0] - c[0]))
         span = (a1 - a0) % 360
         new = arc(c, size, a0, a1, T) if span <= 180 else arc(c, size, a1, a0, [T[1], T[0]])
+        new["corner"] = list(P)
     else:
         new = line(T[0], T[1])
         new["corner"] = list(P)               # remembered, so the legs can be changed later
@@ -626,8 +633,9 @@ def _legs(u1, u2, hv):
     return best
 
 
-def rechamfer(ents, origin, i: int, h: float, v: float):
-    """Chamfer i with new legs: its two sides go back to the sharp corner, then it is cut again."""
+def recorner(ents, origin, i: int, size):
+    """Fillet (size = radius) or chamfer (size = (h, v)) i resized: its two sides go back to the
+    sharp corner, then it is cut again there. The rest of the sketch stays where it is."""
     c = ents[i]
     P = c["corner"]
     ents, origin = [dict(e) for e in ents], list(origin)
@@ -644,4 +652,4 @@ def rechamfer(ents, origin, i: int, h: float, v: float):
         origin.append(origin[i])
     del ents[i]
     del origin[i]
-    return corner_op(ents, origin, P, (h, v), "chamfer", 1e-6)
+    return corner_op(ents, origin, P, size, "fillet" if c["type"] == "arc" else "chamfer", 1e-6)

@@ -117,9 +117,9 @@ and its size. Tick <b>Dimensions: All</b> to see every shape's dimensions at onc
 shows which corner a click will change. Keep clicking corners; each one is its own Ctrl+Z.</li>
 <li>A rectangle or polygon is split into lines when you round one of its corners (like Fusion).
 Extrudes already made from it keep working.</li>
-<li>The new arc or bevel line is selected, so its values can be typed: arc radius, or the chamfer's
-<b>Horizontal</b> and <b>Vertical</b> legs (its dimensions show them too; right-click one to change it,
-and the two sides follow).</li>
+<li>The new fillet or chamfer is selected, so its size can be typed: the fillet's <b>Radius</b>, or the
+chamfer's <b>Horizontal</b> and <b>Vertical</b> legs. Its dimensions show them too; right-click one to
+change it. The corner stays put: the two sides are trimmed back to the new size and nothing else moves.</li>
 </ul>
 <h3>Closed shapes (what can be extruded)</h3>
 <p>Only closed shapes can become solid: a rectangle, circle, polygon, or lines that join
