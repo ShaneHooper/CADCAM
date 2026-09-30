@@ -271,6 +271,27 @@ def _find_edges(shape, mids, tol=1e-4):
     return edges, missing
 
 
+def bodies_bbox(bodies):
+    """((xmin, ymin, zmin), (xmax, ymax, zmax)) around several bodies (a CAM setup's part)."""
+    boxes = [b.bbox() for b in bodies]
+    return (tuple(min(bx[0][i] for bx in boxes) for i in range(3)),
+            tuple(max(bx[1][i] for bx in boxes) for i in range(3)))
+
+
+def max_radius(bodies, point, direction) -> float:
+    """Largest distance of the bodies from an axis line (turning stock size). Measured on the
+    shape's vertices plus a light surface mesh; arcs are sampled to within 0.002 in."""
+    p, d = np.asarray(point, float), np.asarray(direction, float)
+    d = d / np.linalg.norm(d)
+    r = 0.0
+    for b in bodies:
+        v, _ = triangles(b.shape, 0.002, 0.1)
+        if len(v):
+            w = v - p
+            r = max(r, float(np.sqrt(((w - np.outer(w @ d, d)) ** 2).sum(1)).max()))
+    return r
+
+
 def _tangent_chain(shape, edges, tol=1e-6, cos_tol=0.9999):
     """The picked edges plus every edge running on smoothly from them (like Fusion's default
     "tangent chain"): a straight edge that flows into a rounded corner takes the corner too."""

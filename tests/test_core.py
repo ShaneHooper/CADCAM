@@ -236,3 +236,43 @@ def test_document_keeps_a_face_plane_and_describes_it():
     assert "plane" not in xy and doc.describe(xy) == "1 entities · XY plane Z 0.500"   # old shape kept
     doc.update_sketch(s["id"], s["ents"], 0.0, plane=pl.xy(0.0))
     assert "plane" not in doc.feature(s["id"])
+
+
+# ---- CAM setups
+def test_setup_defaults_and_document_roundtrip():
+    from gsend_cad.core import cam
+    d = Document()
+    a = d.add_setup(cam.new_setup("milling"))
+    b = d.add_setup(cam.new_setup("turning"))
+    assert (a["id"], a["name"], b["name"]) == ("setup1", "Setup1", "Setup2")
+    d2 = Document.from_dict(d.to_dict())
+    assert [s["type"] for s in d2.setups] == ["milling", "turning"]
+    d2.remove_setup("setup1")
+    assert [s["id"] for s in d2.setups] == ["setup2"]
+    with pytest.raises(ValueError):
+        cam.new_setup("mill")
+
+
+def test_milling_stock_and_wcs():
+    from gsend_cad.core import cam
+    s = cam.new_setup("milling")
+    box = ((0, 0, 0), (4, 3, 0.5))
+    lo, hi = cam.stock_box(box, s)
+    assert lo == pytest.approx((-0.1, -0.1, 0.0)) and hi == pytest.approx((4.1, 3.1, 0.55))
+    assert cam.wcs(box, s)["origin"] == pytest.approx([2.0, 1.5, 0.55])
+    s["wcs"] = "top-corner"
+    assert cam.wcs(box, s)["origin"] == pytest.approx([-0.1, -0.1, 0.55])
+
+
+def test_turning_stock_and_wcs():
+    from gsend_cad.core import cam
+    box = ((-1, -1, 0), (1, 1, 3))                    # Ø2 x 3 long along Z
+    assert cam.guess_axis(box) == "z"
+    s = cam.new_setup("turning")
+    c = cam.stock_cylinder(box, 1.0, s)
+    assert abs(c["r"] - 1.05) < 1e-12 and abs(c["length"] - 3.55) < 1e-12 and c["front"] == [0.0, 0.0, 3.05]
+    w = cam.wcs(box, s, 1.0)
+    assert w["origin"] == [0.0, 0.0, 3.05] and w["z"] == [0.0, 0.0, 1.0]
+    s["wcs"], s["front"] = "part-face", "-"
+    w = cam.wcs(box, s, 1.0)
+    assert w["origin"] == [0.0, 0.0, 0] and w["z"] == [0.0, 0.0, -1.0]

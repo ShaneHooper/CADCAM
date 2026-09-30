@@ -239,6 +239,27 @@ Left drag still orbits.</li>
 reason; Ctrl+Z, or edit the size smaller.</li>
 </ul>
 """),
+    ("setup", "CAM: Create a Setup", """
+<h1>CAM Setup: Milling or Turning</h1>
+<p>A setup says how the part is held and machined: the machine type, the stock around the part and
+where the work zero (WCS) is. Toolpaths will belong to a setup.</p>
+<ol>
+<li>Flip the switch under the logo to <b>CAM</b>. Click <b>Setup</b> (Milling or Turning tab).</li>
+<li>At the top of the panel pick <b>MILLING</b> or <b>TURNING</b> (it starts on the tab you came from).</li>
+<li><b>Part</b>: all bodies, or one body.</li>
+<li><b>Milling</b>: stock added on the <b>sides</b>, <b>top</b> and <b>bottom</b> of the part's box, and the
+<b>WCS origin</b>: stock top center, stock top front-left corner, or the model origin. Z points up.</li>
+<li><b>Turning</b>: the <b>spindle axis</b> (it guesses the axis the part is round about), which end is the
+<b>front</b> (toward the tool), bar stock on the <b>OD</b> (per side), <b>front face</b> and
+<b>chuck side</b>, and where <b>Z0</b> is: stock front face or part front face. Z runs along the spindle.</li>
+<li>The yellow outline is the stock; the arrows are the WCS (red X, green Y, blue Z). <b>OK</b> or Enter.</li>
+</ol>
+<ul>
+<li>Setups are listed under <b>CAM Setups</b> in the Browser. Double-click one to change it; Delete
+removes it (Ctrl+Z brings it back); F2 renames it. Click one to show its stock.</li>
+<li>Setups are saved in the .gcad file. They don't change the design timeline.</li>
+</ul>
+"""),
     ("timeline", "Timeline, Undo, Files", """
 <h1>Timeline, Undo and Files</h1>
 <h3>Timeline</h3>

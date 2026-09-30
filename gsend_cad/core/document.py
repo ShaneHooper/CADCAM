@@ -25,6 +25,7 @@ import copy
 import json
 from typing import Callable
 
+from . import cam
 from . import plane as pl
 from . import sketch as sk
 
@@ -41,6 +42,7 @@ class Document:
         self.features: list[dict] = []
         self.marker = 0
         self.body_names: dict[str, str] = {}
+        self.setups: list[dict] = []           # CAM setups (core.cam); not part of the design timeline
         self._listeners: list[Callable[[str], None]] = []
         self._next = 1
 
@@ -242,11 +244,41 @@ class Document:
             return f"{n}× Ø{f['diameter']:.3f} {d}" if n > 1 else f"Ø{f['diameter']:.3f} {d}"
         return k
 
+    # ---- CAM setups (see core.cam) ----
+    def add_setup(self, setup: dict) -> dict:
+        s = cam.validate(setup)
+        n = 1
+        while any(x["id"] == f"setup{n}" for x in self.setups):
+            n += 1
+        s["id"] = f"setup{n}"
+        taken = {x["name"] for x in self.setups}
+        k = len(self.setups) + 1
+        while f"Setup{k}" in taken:
+            k += 1
+        s.setdefault("name", f"Setup{k}")
+        self.setups.append(s)
+        self._changed("setups")
+        return s
+
+    def update_setup(self, sid: str, setup: dict) -> dict:
+        i = next(i for i, x in enumerate(self.setups) if x["id"] == sid)
+        s = cam.validate({**setup, "id": sid, "name": setup.get("name", self.setups[i]["name"])})
+        self.setups[i] = s
+        self._changed("setups")
+        return s
+
+    def remove_setup(self, sid: str):
+        self.setups = [x for x in self.setups if x["id"] != sid]
+        self._changed("setups")
+
+    def setup(self, sid: str) -> dict | None:
+        return next((x for x in self.setups if x["id"] == sid), None)
+
     # ---- save / load ----
     def to_dict(self) -> dict:
         return {"format": FORMAT, "name": self.name, "units": UNITS, "material": self.material,
                 "marker": self.marker, "features": copy.deepcopy(self.features),
-                "body_names": dict(self.body_names)}
+                "body_names": dict(self.body_names), "setups": copy.deepcopy(self.setups)}
 
     @classmethod
     def from_dict(cls, d: dict) -> "Document":
@@ -256,6 +288,7 @@ class Document:
         doc.features = copy.deepcopy(d["features"])
         doc.marker = min(int(d.get("marker", len(doc.features))), len(doc.features))
         doc.body_names = dict(d.get("body_names", {}))
+        doc.setups = copy.deepcopy(d.get("setups", []))
         doc._next = len(doc.features) + 1
         return doc
 

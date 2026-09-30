@@ -419,6 +419,7 @@ class Browser(QFrame):
         self._editor = None
         self.sketch_ids: dict[str, bool] = {}     # sketch id -> shown
         self.body_ids: dict[str, bool] = {}       # body id -> exists at the timeline marker
+        self.setup_ids: set[str] = set()          # CAM setups
         self._renaming = None                     # (id, old name) while the name editor is open
         v.addWidget(self.tree, 1)
         self.props = QFrame()
@@ -439,7 +440,7 @@ class Browser(QFrame):
 
     def _node(self, it):
         nid = it.data(0, Qt.UserRole) if it else None
-        return nid if nid in self.sketch_ids or nid in self.body_ids else None
+        return nid if nid in self.sketch_ids or nid in self.body_ids or nid in self.setup_ids else None
 
     def start_rename(self, nid: str):
         it = self._item(nid)
@@ -512,7 +513,7 @@ class Browser(QFrame):
 
     def _double(self, it, _c):
         nid = it.data(0, Qt.UserRole)
-        if nid in self.sketch_ids:
+        if nid in self.sketch_ids or nid in self.setup_ids:
             self.edit.emit(nid)
 
     def _menu(self, pos):
@@ -527,22 +528,27 @@ class Browser(QFrame):
             m.addAction("Edit Sketch", partial(self.edit.emit, nid))
             m.addAction("Hide Sketch" if self.sketch_ids[nid] else "Show Sketch", partial(self.toggle.emit, nid))
             m.addSeparator()
+        if nid in self.setup_ids:
+            m.addAction("Edit Setup", partial(self.edit.emit, nid))
+            m.addSeparator()
         m.addAction("Rename\tF2", partial(self.start_rename, nid))
         d = m.addAction("Delete\tDel", partial(self.delete.emit, nid))
         if nid in self.body_ids and not self.body_ids[nid]:
             d.setEnabled(False)          # made later in the timeline: roll forward to delete it
         m.exec(self.tree.viewport().mapToGlobal(pos))
 
-    def set_rows(self, doc_name, bodies, sketches, selected, editing=None):
+    def set_rows(self, doc_name, bodies, sketches, selected, editing=None, setups=()):
         """bodies: [(id, name, visible)], sketches: [(id, name, visible, n_ents, shown)] where
         visible = drawn now and shown = not hidden by the user / an extrude,
-        editing: (name, n_ents, sketch id or None) while Sketch mode is open"""
+        editing: (name, n_ents, sketch id or None) while Sketch mode is open,
+        setups: [(id, name, "milling" | "turning")] - CAM setups, in their own folder"""
         t = self.tree
         t.blockSignals(True)               # building items fires itemChanged; only renames count
         t.clear()
         self._renaming = None
         self.sketch_ids = {sk[0]: sk[4] for sk in sketches}
         self.body_ids = {bid: vis for bid, _n, vis in bodies}
+        self.setup_ids = {sid for sid, _n, _t in setups}
 
         def node(parent, name, kind, on, nid=None, tag="", dim=False):
             it = QTreeWidgetItem(parent, [name, tag])
@@ -577,6 +583,11 @@ class Browser(QFrame):
                 it.setToolTip(0, "Double-click to edit · click the dot to " + ("hide" if shown else "show"))
         if editing and not editing[2]:
             node(sf, editing[0] + " (editing)", "sketch", True, "skedit", f"{editing[1]} ENT")
+        if setups:
+            cf = node(root, "CAM Setups", "folder", True, "setups")
+            for sid, name, kind in setups:
+                it = node(cf, name, "setup", True, sid, kind.upper())
+                it.setToolTip(0, "Double-click to edit · Delete removes it")
         t.expandAll()
         for i in (1, 2):   # keep Document Settings / Named Views collapsed like the prototype
             root.child(i - 1).setExpanded(False)

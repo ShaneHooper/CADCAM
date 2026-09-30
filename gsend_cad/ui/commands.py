@@ -13,10 +13,11 @@ from functools import partial
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QToolButton, QVBoxLayout, QWidget)
 
+from ..core import cam
 from ..core import plane as pl
 from ..core import sketch as sk
 from ..core.profiles import region_at, sketch_regions
-from ..kernel import (edge_list, extrude_tool, face_outline, planar_face_at, plane_edges, region_face, revolve_axis,
+from ..kernel import (bodies_bbox, edge_list, max_radius, extrude_tool, face_outline, planar_face_at, plane_edges, region_face, revolve_axis,
                       revolve_tool, triangles)
 from . import theme
 
@@ -1170,6 +1171,261 @@ class EdgeSession:
     def close(self):
         self.vp.clear("edges", render=False)
         self.vp.plotter.setCursor(Qt.ArrowCursor)
+
+
+# ------------------------------------------------------------------ CAM setup
+def setup_bodies(win, setup):
+    bodies = win.model.bodies
+    return bodies if setup.get("body", "all") == "all" else [b for b in bodies if b.id == setup["body"]]
+
+
+def turning_radius(win, setup, bodies):
+    """The part's largest radius about the setup's spindle axis (cached per model + axis)."""
+    i, center, _ = cam.turning_frame(bodies_bbox(bodies), setup)
+    key = (id(win.model), tuple(b.id for b in bodies), setup["axis"])
+    cache = win.__dict__.setdefault("_radius_cache", {})
+    if key not in cache:
+        cache.clear() if len(cache) > 32 else None
+        cache[key] = max_radius(bodies, center, cam._unit(i))
+    return cache[key]
+
+
+def draw_setup(vp, win, setup, group="cam") -> bool:
+    """Stock (translucent) + WCS triad of a setup into a viewport group. False if no body."""
+    bodies = setup_bodies(win, setup)
+    if not bodies:
+        return False
+    bbox = bodies_bbox(bodies)
+    if setup["type"] == cam.MILLING:
+        lo, hi = cam.stock_box(bbox, setup)
+        box = pv.Box(bounds=(lo[0], hi[0], lo[1], hi[1], lo[2], hi[2]))
+        vp.add_surface(group, box, theme.WARN, 0.12, lit=False)
+        xs, ys, zs = (lo[0], hi[0]), (lo[1], hi[1]), (lo[2], hi[2])
+        edges = [[(xs[0], y, z), (xs[1], y, z)] for y in ys for z in zs] + \
+                [[(x, ys[0], z), (x, ys[1], z)] for x in xs for z in zs] + \
+                [[(x, y, zs[0]), (x, y, zs[1])] for x in xs for y in ys]
+        vp.add_lines(group, edges, theme.WARN, 1.2)
+        w = cam.wcs(bbox, setup)
+    else:
+        r = turning_radius(win, setup, bodies)
+        c = cam.stock_cylinder(bbox, r, setup)
+        a = np.array(c["axis"])
+        back = np.array(c["center"])
+        mid = back + a * c["length"] / 2
+        cyl = pv.Cylinder(center=mid, direction=a, radius=c["r"], height=c["length"], resolution=64)
+        vp.add_surface(group, cyl, theme.WARN, 0.12, lit=False)
+        u = np.cross(a, [0, 0, 1] if abs(a[2]) < 0.9 else [1, 0, 0])
+        u /= np.linalg.norm(u)
+        v = np.cross(a, u)
+        ring = [(np.cos(t) * u + np.sin(t) * v) * c["r"] for t in np.linspace(0, 2 * np.pi, 65)]
+        lines = [np.array([back + q for q in ring]), np.array([back + a * c["length"] + q for q in ring])]
+        lines += [np.array([back + q, back + a * c["length"] + q]) for q in ring[::16]]
+        lines.append(np.array([back - a * 0.5, back + a * (c["length"] + 0.5)]))     # spindle centerline
+        vp.add_lines(group, lines, theme.WARN, 1.2)
+        w = cam.wcs(bbox, setup, r)
+    o, x, z = (np.array(w[k]) for k in ("origin", "x", "z"))
+    y = np.cross(z, x)
+    L = 0.6
+    for d, col in ((x, theme.BAD), (y, theme.OK), (z, "#3b8cff")):
+        vp.add_lines(group, [np.array([o, o + d * L])], col, 3.0)
+    vp.add_labels(group, [(tuple(o + z * (L + 0.12)), "WCS  " + setup.get("name", "Setup"))], theme.WARN)
+    return True
+
+
+class SetupPanel(Panel):
+    def __init__(self, session: "SetupSession"):
+        super().__init__("Setup", 250)
+        s = session
+        seg = QWidget()
+        sl = QHBoxLayout(seg)
+        sl.setContentsMargins(10, 8, 10, 6)
+        sl.setSpacing(0)
+        self.type_btn = {}
+        for i, (key, label) in enumerate(cam.TYPES.items()):
+            b = QPushButton(label.upper())
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            rad = "border-top-left-radius:11px;border-bottom-left-radius:11px;" if i == 0 else \
+                  "border-top-right-radius:11px;border-bottom-right-radius:11px;"
+            b.setStyleSheet(f"QPushButton{{border:1px solid {theme.ACCENT};{rad}padding:3px 0;font-weight:700;"
+                            f"letter-spacing:2px;color:{theme.FG2};background:{theme.BG};}}"
+                            f"QPushButton:checked{{background:{theme.ACCENT};color:#ffffff;}}")
+            b.clicked.connect(partial(s.set_type, key))
+            sl.addWidget(b)
+            self.type_btn[key] = b
+        self.v.addWidget(seg)
+        self.name = self.row("Name", self.value(""))
+        self.body = QComboBox()
+        self.body.addItem("All bodies", "all")
+        for b in s.win.model.bodies:
+            self.body.addItem(b.name, b.id)
+        self.row("Part", self.body)
+
+        def box(v):
+            nb = NumBox(v)
+            nb.setRange(0, 1000)
+            nb.valueChanged.connect(s.preview)
+            return nb
+
+        def rows(widget, items):
+            lay = QVBoxLayout(widget)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(0)
+            for label, w in items:
+                r = QWidget()
+                r.setObjectName("panelRow")
+                hl = QHBoxLayout(r)
+                hl.setContentsMargins(10, 4, 10, 4)
+                hl.addWidget(QLabel(label))
+                hl.addStretch()
+                hl.addWidget(w)
+                lay.addWidget(r)
+
+        # milling fields
+        self.mill = QWidget()
+        self.side, self.top, self.bottom = box(0.1), box(0.05), box(0.0)
+        self.mwcs = QComboBox()
+        for k, label in cam.MILL_WCS.items():
+            self.mwcs.addItem(label, k)
+        rows(self.mill, [("Stock: sides", self.side), ("Stock: top", self.top), ("Stock: bottom", self.bottom),
+                         ("WCS origin", self.mwcs)])
+        self.v.addWidget(self.mill)
+        # turning fields
+        self.turn = QWidget()
+        self.axis = QComboBox()
+        for k in cam.AXES:
+            self.axis.addItem(f"Model {k.upper()}", k)
+        self.front = QComboBox()
+        self.od, self.face, self.back = box(0.05), box(0.05), box(0.5)
+        self.twcs = QComboBox()
+        for k, label in cam.TURN_WCS.items():
+            self.twcs.addItem(label, k)
+        rows(self.turn, [("Spindle axis", self.axis), ("Front (tool) end", self.front), ("Stock: OD (radial)", self.od),
+                         ("Stock: front face", self.face), ("Stock: chuck side", self.back), ("Z0 at", self.twcs)])
+        self.v.addWidget(self.turn)
+        _dlg_footer(self, s)
+        for w in (self.body, self.mwcs, self.front, self.twcs):
+            w.currentIndexChanged.connect(s.preview)
+        self.axis.currentIndexChanged.connect(s.axis_changed)
+
+    def fit(self):
+        self.layout().activate()
+        self.resize(self.width(), self.sizeHint().height())
+
+
+class SetupSession:
+    """CAM → Setup: pick Milling or Turning, the part, stock and work zero. Also edits a setup."""
+    captures_left = False
+
+    def __init__(self, win, kind: str = cam.MILLING, edit: dict | None = None):
+        self.win, self.vp = win, win.viewport
+        self.edit_id = edit["id"] if edit else None
+        self.panel = SetupPanel(self)
+        p = self.panel
+        self._loading = True
+        n = len(win.doc.setups) + 1
+        p.name.setText(edit["name"] if edit else f"Setup{n}")
+        start = edit or cam.new_setup(kind)
+        self._fill(start)
+        self._loading = False
+        self.set_type(start["type"], keep=bool(edit))
+
+    def _fill(self, st):
+        p = self.panel
+        p.body.setCurrentIndex(max(0, p.body.findData(st.get("body", "all"))))
+        if st["type"] == cam.MILLING:
+            for w, k in ((p.side, "side"), (p.top, "top"), (p.bottom, "bottom")):
+                w.setValue(st["stock"][k])
+            p.mwcs.setCurrentIndex(p.mwcs.findData(st["wcs"]))
+        else:
+            p.axis.setCurrentIndex(p.axis.findData(st["axis"]))
+            self.axis_changed()
+            p.front.setCurrentIndex(0 if st["front"] == "+" else 1)
+            for w, k in ((p.od, "od"), (p.face, "face"), (p.back, "back")):
+                w.setValue(st["stock"][k])
+            p.twcs.setCurrentIndex(p.twcs.findData(st["wcs"]))
+
+    def set_type(self, kind: str, keep=False):
+        p = self.panel
+        self.kind = kind
+        for k, b in p.type_btn.items():
+            b.setChecked(k == kind)
+        if kind == cam.TURNING and not keep:          # start on the axis the part is round about
+            bodies = setup_bodies(self.win, {"body": p.body.currentData()})
+            if bodies:
+                self._loading = True
+                p.axis.setCurrentIndex(p.axis.findData(cam.guess_axis(bodies_bbox(bodies))))
+                self.axis_changed()
+                self._loading = False
+        p.mill.setVisible(kind == cam.MILLING)
+        p.turn.setVisible(kind == cam.TURNING)
+        p.fit()
+        self.vp.set_side(p)
+        self.preview()
+
+    def axis_changed(self, *_):
+        p = self.panel
+        ax = (p.axis.currentData() or "z").upper()
+        i = p.front.currentIndex()
+        p.front.blockSignals(True)
+        p.front.clear()
+        p.front.addItem(f"+{ax} end", "+")
+        p.front.addItem(f"−{ax} end", "-")
+        p.front.setCurrentIndex(max(0, i))
+        p.front.blockSignals(False)
+        self.preview()
+
+    def setup(self) -> dict:
+        p = self.panel
+        s = {"type": self.kind, "body": p.body.currentData(), "name": p.name.text()}
+        if self.kind == cam.MILLING:
+            s.update(stock={"side": p.side.value(), "top": p.top.value(), "bottom": p.bottom.value()},
+                     wcs=p.mwcs.currentData())
+        else:
+            s.update(axis=p.axis.currentData(), front=p.front.currentData() or "+", wcs=p.twcs.currentData(),
+                     stock={"od": p.od.value(), "face": p.face.value(), "back": p.back.value()})
+        return s
+
+    def preview(self, *_):
+        if self._loading:
+            return
+        self.vp.clear("cam", render=False)
+        self.vp.clear("setup", render=False)
+        ok = draw_setup(self.vp, self.win, self.setup(), "setup")
+        word = "MILLING" if self.kind == cam.MILLING else "TURNING"
+        self.win.message(f"SETUP · {word}: yellow = stock, arrows = WCS (red X, green Y, blue Z) · "
+                         "Enter / OK saves · Esc cancels" if ok else "SETUP: there is no solid to machine yet")
+        self.vp.render()
+
+    def commit(self):
+        if not setup_bodies(self.win, self.setup()):
+            self.vp.show_toast("No solid to machine · make a part in CAD first", bad=True)
+            return
+        self.win.commit_setup(self.setup(), self.edit_id)
+
+    def on_move(self, w, ev):
+        pass
+
+    def on_click(self, w, ev):
+        pass
+
+    def on_key(self, ev) -> bool:
+        if ev.key() in (Qt.Key_Return, Qt.Key_Enter):
+            self.commit()
+            return True
+        if ev.key() == Qt.Key_Escape:
+            self.win.cancel_command()
+            return True
+        return False
+
+    def ribbon_tool(self, label):
+        if label == "Setup":
+            return
+        self.win.cancel_command()
+        self.win.run_tool(label)
+
+    def close(self):
+        self.vp.clear("setup", render=False)
 
 
 def regions_for(doc):

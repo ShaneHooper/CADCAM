@@ -199,3 +199,12 @@ def test_solid_fillet_too_big_is_an_error():
     edges = edge_list(Kernel().build(d).bodies)
     d.add_fillet([edges[0]["mid"]], 5.0)
     assert Kernel().build(d).errors
+
+
+def test_max_radius_of_turned_part():
+    from gsend_cad.kernel import max_radius
+    d = Document()
+    s = d.add_sketch([sk.rect((0, 0), (2, 0.75))])
+    d.add_revolve([sketch_regions(s["id"], s["ents"])[0].to_data()], {"sketch": s["id"], "kind": "x"})
+    r = max_radius(Kernel().build(d).bodies, (0, 0, 0), (1, 0, 0))
+    assert abs(r - 0.75) < 1e-3
