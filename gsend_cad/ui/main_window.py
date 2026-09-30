@@ -162,6 +162,17 @@ class MainWindow(QMainWindow):
         self.viewport.handler = self.session
         self.ribbon.set_active("Face")
 
+    def post_process(self):
+        from .commands import PostDialog
+        if not any(x.get("ops") for x in self.doc.setups):
+            self.viewport.show_toast("Nothing to post · add a Face operation to a setup first", bad=True)
+            return
+        sid = getattr(self, "cam_setup", None)
+        if not (self.doc.setup(sid) or {}).get("ops"):
+            sid = next(x["id"] for x in self.doc.setups if x.get("ops"))
+        self.post_dialog = PostDialog(self, sid)
+        self.post_dialog.show()
+
     def commit_op(self, sid: str, op: dict, edit_id: str | None):
         self.cancel_command()
         self._snapshot()
@@ -451,6 +462,8 @@ class MainWindow(QMainWindow):
             self.start_setup("turning" if self.ribbon.current == "turning" else "milling")
         elif label == "Face" and self.ribbon.switch.mode == "cam":
             self.start_op("face")
+        elif label == "Post Process" and self.ribbon.switch.mode == "cam":
+            self.post_process()
         elif label == "Export":
             self.export("step")
         elif label == "3D Print":

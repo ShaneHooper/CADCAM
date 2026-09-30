@@ -209,9 +209,9 @@ def describe(s: dict) -> str:
 # WCS: ("rapid" | "feed", (x, y, z)). Milling: WCS axes are the model's (Z up). Turning:
 # (X = radius, 0, Z along the spindle), like lathe G-code but X as radius, not diameter.
 
-FACE_MILL = {"type": "face", "tool_dia": 2.0, "stepover": 70.0, "stepdown": 0.05, "leave": 0.0,
+FACE_MILL = {"type": "face", "tool": 1, "tool_dia": 2.0, "stepover": 70.0, "stepdown": 0.05, "leave": 0.0,
              "direction": "x", "rpm": 3000.0, "feed": 60.0, "clearance": 0.5}
-FACE_TURN = {"type": "face", "stepdown": 0.02, "leave": 0.0, "past_center": 0.02, "sfm": 600.0,
+FACE_TURN = {"type": "face", "tool": 1, "stepdown": 0.02, "leave": 0.0, "past_center": 0.02, "sfm": 600.0,
              "ipr": 0.008, "max_rpm": 3000.0, "clearance": 0.1}
 OP_TYPES = {"face": "Face"}
 
@@ -230,6 +230,9 @@ def validate_op(setup: dict, op: dict) -> dict:
     for k in ("tool_dia", "stepdown", "rpm", "feed", "sfm", "ipr", "max_rpm"):
         if k in op and op[k] <= 0:
             raise ValueError(f"{k.replace('_', ' ')} must be greater than 0")
+    op["tool"] = int(round(op["tool"]))
+    if not 1 <= op["tool"] <= 99:
+        raise ValueError("tool number must be 1 to 99")
     if setup["type"] == MILLING:
         if not 1 <= op["stepover"] <= 100:
             raise ValueError("stepover must be 1 to 100 % of the tool")

@@ -10,10 +10,11 @@ import pyvista as pv
 from PySide6.QtCore import QEvent, QPoint, Qt, QTimer
 from functools import partial
 
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QPushButton,
-                               QScrollArea, QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFrame, QHBoxLayout,
+                               QLabel, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QToolButton, QVBoxLayout,
+                               QWidget)
 
-from ..core import cam
+from ..core import cam, post
 from ..core import plane as pl
 from ..core import sketch as sk
 from ..core.profiles import region_at, sketch_regions
@@ -1522,10 +1523,10 @@ def draw_toolpath(vp, world, group="cam", dim=False):
 
 
 class OpPanel(Panel):
-    FIELDS = {cam.MILLING: [("tool_dia", "Tool diameter", 4), ("stepover", "Stepover %", 1),
+    FIELDS = {cam.MILLING: [("tool", "Tool number", 0), ("tool_dia", "Tool diameter", 4), ("stepover", "Stepover %", 1),
                             ("stepdown", "Max stepdown", 4), ("leave", "Stock to leave", 4),
                             ("rpm", "Spindle RPM", 0), ("feed", "Feed (in/min)", 2)],
-              cam.TURNING: [("stepdown", "Max stepdown", 4), ("leave", "Stock to leave", 4),
+              cam.TURNING: [("tool", "Tool number", 0), ("stepdown", "Max stepdown", 4), ("leave", "Stock to leave", 4),
                             ("past_center", "Past center (X)", 4), ("sfm", "Surface speed SFM", 0),
                             ("ipr", "Feed (in/rev)", 4), ("max_rpm", "Max RPM", 0)]}
 
@@ -1556,7 +1557,7 @@ class OpPanel(Panel):
                 self.direction.addItem("Along X", "x")
                 self.direction.addItem("Along Y", "y")
                 self.direction.currentIndexChanged.connect(s.preview)
-                items.insert(4, ("Cut direction", self.direction))
+                items.insert(5, ("Cut direction", self.direction))
             for label, w in items:
                 r = QWidget()
                 r.setObjectName("panelRow")
@@ -1685,6 +1686,129 @@ class OpSession:
 
     def close(self):
         self.vp.clear("op", render=False)
+
+
+# ------------------------------------------------------------------ post process (G-code)
+class PostDialog(QDialog):
+    """CAM → Post Process: a setup's operations as G-code. Preview, then Save .nc."""
+
+    def __init__(self, win, setup_id: str | None = None):
+        super().__init__(win)
+        self.win = win
+        self.setWindowTitle("Post Process · G-code")
+        self.resize(720, 640)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(12, 12, 12, 12)
+        v.setSpacing(8)
+        top = QHBoxLayout()
+        self.setup = QComboBox()
+        for st in win.doc.setups:
+            n = len(st.get("ops", []))
+            self.setup.addItem(f"{st['name']} · {cam.TYPES[st['type']]} · {n} op{'s' if n != 1 else ''}", st["id"])
+        self.setup.setCurrentIndex(max(0, self.setup.findData(setup_id)))
+        self.control = QComboBox()
+        for k, label in post.CONTROLLERS.items():
+            self.control.addItem(label, k)
+        self.program = QSpinBox()
+        self.program.setRange(1, 9999)
+        self.program.setPrefix("O")
+        self.program.setButtonSymbols(QSpinBox.NoButtons)
+        self.offset = QComboBox()
+        self.offset.addItems(post.OFFSETS)
+        self.coolant = QCheckBox("Coolant (M08)")
+        for label, w in (("Setup", self.setup), ("Control", self.control), ("Program", self.program),
+                         ("Work offset", self.offset)):
+            top.addWidget(QLabel(label))
+            top.addWidget(w)
+        top.addWidget(self.coolant)
+        top.addStretch()
+        v.addLayout(top)
+        self.text = QPlainTextEdit()
+        self.text.setReadOnly(True)
+        self.text.setStyleSheet(f"font-family:'{theme.MONO[0]}','Consolas',monospace;font-size:12px;"
+                                f"background:{theme.BG};color:{theme.FG};")
+        v.addWidget(self.text, 1)
+        self.status = QLabel("")
+        self.status.setStyleSheet(f"color:{theme.FG2};")
+        foot = QHBoxLayout()
+        foot.addWidget(self.status, 1)
+        close, save = QPushButton("CLOSE"), QPushButton("SAVE .NC…")
+        for b in (close, save):
+            b.setObjectName("dlgBtn")
+            foot.addWidget(b)
+        save.setProperty("ok", True)
+        close.clicked.connect(self.reject)
+        save.clicked.connect(self.save)
+        v.addLayout(foot)
+        self.setup.currentIndexChanged.connect(self.load_settings)
+        for w in (self.control, self.offset):
+            w.currentIndexChanged.connect(self.refresh)
+        self.program.valueChanged.connect(self.refresh)
+        self.coolant.toggled.connect(self.refresh)
+        self.load_settings()
+
+    def current(self):
+        return self.win.doc.setup(self.setup.currentData())
+
+    def load_settings(self, *_):
+        """Each setup remembers its post settings (saved in the .gcad file)."""
+        st = self.current()
+        i = self.win.doc.setups.index(st)
+        ps = st.get("post", {"controller": "haas", "program": 1000 + i, "offset": "G54", "coolant": True})
+        for w in (self.control, self.offset, self.program, self.coolant):
+            w.blockSignals(True)
+        self.control.setCurrentIndex(max(0, self.control.findData(ps["controller"])))
+        self.offset.setCurrentText(ps["offset"])
+        self.program.setValue(int(ps["program"]))
+        self.coolant.setChecked(bool(ps["coolant"]))
+        for w in (self.control, self.offset, self.program, self.coolant):
+            w.blockSignals(False)
+        self.refresh()
+
+    def settings(self) -> dict:
+        return {"controller": self.control.currentData(), "program": self.program.value(),
+                "offset": self.offset.currentText(), "coolant": self.coolant.isChecked()}
+
+    def gcode(self) -> str:
+        st = self.current()
+        ops = [(o, op_moves(self.win, st, o)[0]) for o in st.get("ops", [])]
+        ps = self.settings()
+        return post.post_setup(st, ops, ps["controller"], ps["program"], ps["offset"], ps["coolant"],
+                               self.win.doc.name)
+
+    def refresh(self, *_):
+        try:
+            g = self.gcode()
+        except ValueError as exc:
+            self.text.setPlainText("")
+            self.status.setText(str(exc))
+            return
+        self.text.setPlainText(g)
+        n = len(g.splitlines())
+        st = self.current()
+        t = sum(cam.cycle_time(op_moves(self.win, st, o)[0], st, o) for o in st.get("ops", []))
+        self.status.setText(f"{n} lines · about {t:.1f} min cutting")
+
+    def save(self):
+        try:
+            g = self.gcode()
+        except ValueError as exc:
+            self.win.viewport.show_toast(str(exc), bad=True)
+            return
+        st = self.current()
+        name = f"O{self.program.value():04d} {self.win.doc.name} {st['name']}.nc"
+        base = str(self.win.path.parent / name) if getattr(self.win, "path", None) else name
+        path, _ = QFileDialog.getSaveFileName(self, "Save G-code", base, "G-code (*.nc *.tap *.txt);;All files (*)")
+        if not path:
+            return
+        with open(path, "w", newline="\r\n") as fh:      # CRLF: what Windows DNC / USB loaders expect
+            fh.write(g)
+        if st.get("post") != self.settings():
+            st["post"] = self.settings()
+            self.win.dirty = True
+            self.win.topbar.set_doc(self.win.doc.name, True)
+        self.win.viewport.show_toast(f"G-code saved · {path.replace(chr(92), '/').split('/')[-1]}")
+        self.status.setText(f"Saved {path}")
 
 
 def regions_for(doc):

@@ -172,5 +172,23 @@ win.delete_node(oid)
 check("Delete removes the op", not win.doc.setup(ms["id"]).get("ops"))
 win.undo()
 check("Ctrl+Z restores it", len(win.doc.setup(ms["id"])["ops"]) == 1)
+
+# ---- Post Process: G-code for the milling setup, saved to a file
+win.cam_setup = ms["id"]
+win.run_tool("Post Process")
+pump()
+dlg = win.post_dialog
+g = dlg.text.toPlainText()
+check("Post dialog shows G-code for the milling setup", g.startswith("%\nO") and "T1 M06" in g and "M30" in g)
+dlg.control.setCurrentIndex(dlg.control.findData("fanuc"))
+check("switching to Fanuc updates the code", "G28 G91 X0. Y0." in dlg.text.toPlainText())
+from PySide6.QtWidgets import QFileDialog
+out = os.path.join(OUT, "post_test.nc")
+QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (out, ""))
+dlg.save()
+check(".nc file written with CRLF line ends", open(out, "rb").read().count(b"\r\n") == len(g.splitlines()))
+check("post settings remembered on the setup", win.doc.setup(ms["id"])["post"]["controller"] == "fanuc")
+shot("cam_06_post")
+dlg.close()
 print("FAILURES:", failures or "none")
 sys.exit(1 if failures else 0)

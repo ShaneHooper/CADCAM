@@ -349,3 +349,27 @@ def test_ops_in_document():
         d.update_op("op1", {**o, "tool_dia": 0})
     d.remove_op("op1")
     assert d.op("op1") == (None, None)
+
+
+def test_post_mill_and_lathe():
+    from gsend_cad.core import cam, post
+    assert (post.num(1.25), post.num(0.0), post.num(-0.00001), post.num(-0.02)) == ("1.25", "0.", "0.", "-0.02")
+    box = ((0, 0, 0), (4, 3, 0.5))
+    s = {**cam.new_setup("milling"), "name": "Setup1"}
+    op = cam.validate_op(s, {**cam.new_op(s), "name": "Face1", "tool": 3})
+    g = post.post_setup(s, [(op, cam.face_toolpath(box, s, op))], "haas", 1000)
+    lines = g.splitlines()
+    assert lines[0] == "%" and lines[1] == "O1000 (SETUP1)" and lines[-1] == "%"
+    assert "T3 M06" in lines and "G43 Z0.5 H03 M08" in lines and "G01 Z-0.05 F60." in lines
+    assert "G28 G91 Y0." in lines and "M30" in lines
+    assert all(ord(c) < 128 for c in g)                          # plain ASCII for the control
+    assert "G28 G91 X0. Y0." in post.post_setup(s, [(op, cam.face_toolpath(box, s, op))], "fanuc", 1000)
+    t = {**cam.new_setup("turning"), "name": "Setup2"}
+    o2 = cam.validate_op(t, {**cam.new_op(t), "name": "Face1"})
+    g = post.post_setup(t, [(o2, cam.face_toolpath(((-1, -1, 0), (1, 1, 3)), t, o2, 1.0))], "haas", 1001)
+    lines = g.splitlines()
+    assert "T0101" in lines and "G50 S3000" in lines and "G96 S600 M03 M08" in lines
+    assert "G00 X2.3 Z0.1" in lines                             # radius 1.05 + 0.1 clearance, as diameter
+    assert "G01 X-0.04 F0.008" in lines                         # 0.02 past center, as diameter
+    with pytest.raises(ValueError):
+        post.post_setup(t, [], "haas", 1001)

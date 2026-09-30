@@ -279,7 +279,25 @@ cutting time. <b>OK</b> or Enter.</li>
 <ul>
 <li>The operation is listed under its setup in the Browser. Double-click to change it, Delete to remove,
 F2 to rename. Clicking an operation shows its path bright; the setup's other paths are dim.</li>
-<li>Post processing (G-code out) comes next.</li>
+<li>Each operation has a <b>Tool number</b> (T1, T0101 on a lathe) used by the post.</li>
+</ul>
+"""),
+    ("post", "CAM: Post Process (G-code)", """
+<h1>Post Process: G-code out</h1>
+<ol>
+<li>CAM → <b>Post Process</b>. Pick the <b>Setup</b> (all its operations are posted, in order).</li>
+<li><b>Control</b>: Haas or Fanuc (generic). <b>Program</b> number (O1000 …), <b>Work offset</b> (G54-G59),
+<b>Coolant</b> M08 on/off. The code updates as you change them.</li>
+<li><b>SAVE .NC…</b> writes the file (Windows line ends, ready for USB / DNC). The settings are remembered
+with the setup and saved in the .gcad file.</li>
+</ol>
+<ul>
+<li><b>Mill</b>: G20 G17 G40 G49 G80 G90 · T M06 · offset · S M03 · G43 H tool length · M08 · the cut ·
+M09 M05 · G28 G91 Z0. then Y0. (Haas) or X0. Y0. (Fanuc) · M30.</li>
+<li><b>Lathe</b>: G20 G18 G40 G80 G99 · G28 U0. W0. · T0101 · offset · G50 max RPM · G96 SFM M03 · X is
+<b>diameter</b> · M09 M05 · G28 U0. W0. · M30.</li>
+<li>Inch, absolute, only changed words written (modal). Always prove out a new program: single block,
+rapid override down, and check it in G-SEND.IO's simulator first.</li>
 </ul>
 """),
     ("timeline", "Timeline, Undo, Files", """

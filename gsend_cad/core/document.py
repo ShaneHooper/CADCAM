@@ -263,7 +263,8 @@ class Document:
     def update_setup(self, sid: str, setup: dict) -> dict:
         i = next(i for i, x in enumerate(self.setups) if x["id"] == sid)
         s = cam.validate({**setup, "id": sid, "name": setup.get("name", self.setups[i]["name"]),
-                          "ops": setup.get("ops", self.setups[i].get("ops", []))})
+                          "ops": setup.get("ops", self.setups[i].get("ops", [])),
+                          **({"post": self.setups[i]["post"]} if "post" in self.setups[i] else {})})
         self.setups[i] = s
         self._changed("setups")
         return s
