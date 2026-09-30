@@ -32,7 +32,7 @@ HINTS = {"line": "Click start, click end. Keep clicking to chain. Esc ends the c
          "circle": "Click center, then a point on the circle.", "polygon": "Click center, then a vertex.",
          "point": "Click to place a point.",
          "fillet": "Click a sharp corner to round it (radius: Corner size in the palette).",
-         "chamfer": "Click a sharp corner to bevel it (distance: Corner size in the palette)."}
+         "chamfer": "Click a sharp corner to bevel it (Chamfer H × V in the palette)."}
 SNAP_PX = 8         # how close (screen px) the cursor must come to an end / mid / center to snap
 SELECT_HINT = ("Click a line or shape (or its row in the palette) to type exact values; right-click a "
                "dimension to change it. Delete removes it. L line · R rectangle · C circle · P polygon · "
@@ -199,8 +199,16 @@ class SketchPalette(Panel):
         self.row("Polygon sides", self.sides)
         self.corner = NumBox(0.125)
         self.corner.setRange(0.0001, 1000)
-        self.corner.setToolTip("Radius for Fillet, distance along each side for Chamfer")
-        self.row("Corner size", self.corner)
+        self.corner.setToolTip("Radius for Fillet")
+        self.row("Fillet R", self.corner)
+        self.cham_h = NumBox(0.125)
+        self.cham_h.setRange(0.0001, 1000)
+        self.cham_h.setToolTip("Chamfer width along X (horizontal)")
+        self.row("Chamfer H", self.cham_h)
+        self.cham_v = NumBox(0.125)
+        self.cham_v.setRange(0.0001, 1000)
+        self.cham_v.setToolTip("Chamfer height along Y (vertical)")
+        self.row("Chamfer V", self.cham_v)
         self.all_dims = QCheckBox("All")
         self.all_dims.toggled.connect(lambda _on: session.draw_dims())
         self.row("Dimensions", self.all_dims)
@@ -282,7 +290,7 @@ class SketchPalette(Panel):
         self.edit.setVisible(ent is not None)
         if ent is not None:
             kind, _ = sk.entity_label(ent)
-            head = QLabel(f"{kind.upper()} · FROM ORIGIN")
+            head = QLabel(f"{kind.upper()} · " + ("LEGS" if ent.get("corner") else "FROM ORIGIN"))
             head.setStyleSheet(f"color:{theme.ACCENT};font-weight:700;padding:6px 10px 2px 10px;")
             head.setFixedHeight(head.sizeHint().height())
             self.ev.addWidget(head)
@@ -449,7 +457,7 @@ class SketchSession:
         if abs(sk.params(e)[key] - box.value()) < 1e-10:
             return
         try:
-            new = sk.set_param(e, key, box.value())
+            ents, origin, j = sk.edit(self.ents, self.origin, self.sel, key, box.value())
         except ValueError as exc:
             self.vp.show_toast(str(exc), bad=True)
             self.palette.refresh_values(e)
@@ -458,8 +466,11 @@ class SketchSession:
             box.blockSignals(False)
             return
         self._push()
-        self.ents[self.sel] = new
-        self.palette.refresh_values(new)
+        self.ents, self.origin = ents, origin
+        if j != self.sel:                    # a chamfer re-cut: it is now the last entity
+            self.select(j)
+            return
+        self.palette.refresh_values(ents[j])
         self.redraw()
 
     def delete_ent(self, i: int):
@@ -567,14 +578,16 @@ class SketchSession:
         """Fillet / Chamfer tool: ring the corner that a click would change."""
         self.vp.clear("preview", render=False)
         hit = sk.nearest_corner(self.ents, w, 12 * self.vp.pixel_size(pos))
-        size = self.palette.corner.value()
+        pal = self.palette
+        size = sk.fmt(pal.corner.value()) if self.tool == "fillet" else \
+            f"{sk.fmt(pal.cham_h.value())} H × {sk.fmt(pal.cham_v.value())} V"
         word = "R" if self.tool == "fillet" else "Chamfer"
         if hit:
             r = 6 * self.vp.pixel_size(pos)
             self.vp.add_lines("preview", self._lines([sk.circle(hit[0], r)]), color=theme.FG, width=2.0)
-            self.vp.show_dim(f"{word} {sk.fmt(size)} · click to apply", pos)
+            self.vp.show_dim(f"{word} {size} · click to apply", pos)
         else:
-            self.vp.show_dim(f"{word} {sk.fmt(size)} · move onto a sharp corner", pos)
+            self.vp.show_dim(f"{word} {size} · move onto a sharp corner", pos)
         self.vp.render()
 
     def on_move(self, w, ev):
@@ -634,13 +647,13 @@ class SketchSession:
         if abs(sk.params(e)[key] - value) < 1e-10:
             return
         try:
-            new = sk.set_param(e, key, value)
+            ents, origin, j = sk.edit(self.ents, self.origin, i, key, value)
         except ValueError as exc:
             self.vp.show_toast(str(exc), bad=True)
             return
         self._push()
-        self.ents[i] = new
-        self.select(i)                       # palette fields follow, view redraws
+        self.ents, self.origin = ents, origin
+        self.select(j)                       # palette fields follow, view redraws
         self.vp.plotter.setFocus()
 
     def on_click(self, w, ev):
@@ -652,7 +665,9 @@ class SketchSession:
         if self.tool in CORNER_TOOLS:
             pos = ev.position().toPoint()
             try:
-                ents, origin = sk.corner_op(self.ents, self.origin, w, self.palette.corner.value(), self.tool,
+                pal = self.palette
+                size = pal.corner.value() if self.tool == "fillet" else (pal.cham_h.value(), pal.cham_v.value())
+                ents, origin = sk.corner_op(self.ents, self.origin, w, size, self.tool,
                                             12 * self.vp.pixel_size(pos))
             except ValueError as exc:
                 self.vp.show_toast(str(exc), bad=True)

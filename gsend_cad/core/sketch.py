@@ -151,6 +151,8 @@ def entity_label(e):
         return "Point", f"{fmt(e['p'][0])}, {fmt(e['p'][1])}"
     if t == "line":
         (x0, y0), (x1, y1) = e["pts"]
+        if e.get("corner"):
+            return "Chamfer", f"{fmt(abs(x1 - x0))} × {fmt(abs(y1 - y0))}"
         return "Line", "L " + fmt(math.hypot(x1 - x0, y1 - y0))
     if t == "circle":
         return "Circle", "Ø " + fmt(e["r"] * 2)
@@ -187,7 +189,8 @@ def snap(v: float, step: float) -> float:
 # Every entity is described by a few numbers measured from the sketch origin (0, 0).
 # params() reads them, set_param() rebuilds the entity with one of them changed.
 LABELS = {"x": "X", "y": "Y", "x2": "End X", "y2": "End Y", "len": "Length", "ang": "Angle °",
-          "dia": "Diameter", "w": "Width", "h": "Height", "cr": "Corner R", "r": "Radius", "sides": "Sides"}
+          "dia": "Diameter", "w": "Width", "h": "Height", "cr": "Corner R", "r": "Radius", "sides": "Sides",
+          "ch": "Horizontal", "cv": "Vertical"}
 
 
 def _center(pts):
@@ -199,6 +202,9 @@ def params(e) -> dict:
     t = e["type"]
     if t == "point":
         return {"x": e["p"][0], "y": e["p"][1]}
+    if t == "line" and e.get("corner"):             # chamfer: its horizontal / vertical legs
+        (x0, y0), (x1, y1) = e["pts"]
+        return {"ch": abs(x1 - x0), "cv": abs(y1 - y0)}
     if t == "line":
         (x0, y0), (x1, y1) = e["pts"]
         return {"x": x0, "y": y0, "x2": x1, "y2": y1, "len": math.hypot(x1 - x0, y1 - y0),
@@ -235,6 +241,8 @@ def _clean(v):
 
 
 def _set_param(e, key, value):
+    if e.get("corner"):
+        raise ValueError("A chamfer is changed with edit() (its sides move too)")
     v = params(e)
     v[key] = float(value)
     for k in ("len", "dia", "w", "h", "r"):
@@ -301,9 +309,11 @@ def dimensions(e) -> list[dict]:
     geometry, so the UI only has to draw it. `key` is the params() entry the dimension shows
     (its value is params(e)[key]); set_param(e, key, new) is how a right-click edits it."""
     v = params(e)
+    g = DIM_GAP
+    if e.get("corner"):
+        return _chamfer_dims(e, g)
     ax, ay = v["x"], v["y"]
     x0, y0, x1, y1 = _bbox(e)
-    g = DIM_GAP
     out = []
     # position from the origin: X measured below everything, Y to the left of everything
     if abs(ax) > 1e-9:
@@ -331,6 +341,34 @@ def dimensions(e) -> list[dict]:
     elif t == "arc":
         out.append(_dim([ax, ay], arc_mid(e), 0, "R " + fmt(v["r"]), key="r"))
     return out
+
+
+def _chamfer_dims(e, g):
+    """A chamfer: horizontal leg dimensioned past the corner in Y, vertical leg past it in X."""
+    (ax, ay), (bx, by) = e["pts"]
+    px, py = e["corner"]
+    sy = 1 if py >= (ay + by) / 2 else -1
+    sx = 1 if px >= (ax + bx) / 2 else -1
+    yb, xb = py + sy * g, px + sx * g
+    h = _dim([min(ax, bx), yb], [max(ax, bx), yb], 0, fmt(abs(bx - ax)), key="ch")
+    h["lines"] += [[[ax, ay], [ax, yb + sy * DIM_TICK]], [[bx, by], [bx, yb + sy * DIM_TICK]]]
+    v = _dim([xb, min(ay, by)], [xb, max(ay, by)], 0, fmt(abs(by - ay)), key="cv")
+    v["lines"] += [[[ax, ay], [xb + sx * DIM_TICK, ay]], [[bx, by], [xb + sx * DIM_TICK, by]]]
+    return [d for d, n in ((h, abs(bx - ax)), (v, abs(by - ay))) if n > 1e-9]
+
+
+def edit(ents, origin, i: int, key: str, value: float):
+    """Change one value of entity i: new (ents, origin, index of the changed entity).
+    A chamfer's legs move the two sides it cuts, so this works on the whole sketch."""
+    e = ents[i]
+    if not e.get("corner"):
+        ents = list(ents)
+        ents[i] = set_param(e, key, value)
+        return ents, list(origin), i
+    v = params(e)
+    v[key] = float(value)
+    ents, origin = rechamfer(ents, origin, i, v["ch"], v["cv"])
+    return ents, origin, len(ents) - 1
 
 
 def dimension_at(e, p, tol: float):
@@ -501,11 +539,13 @@ def nearest_corner(ents, p, tol: float):
     return hit
 
 
-def corner_op(ents, origin, p, size: float, kind: str, tol: float):
+def corner_op(ents, origin, p, size, kind: str, tol: float):
     """Fillet (kind 'fillet', size = radius) or chamfer ('chamfer', size = distance along each
-    side) the corner nearest p. Returns new (ents, origin); raises ValueError with a message
-    for the user when there is no corner there or the size does not fit."""
-    if size <= 1e-9:
+    side, or (horizontal, vertical) legs) the corner nearest p. Returns new (ents, origin);
+    raises ValueError with a message for the user when there is no corner there or the size
+    does not fit."""
+    hv = size if isinstance(size, (tuple, list)) else None
+    if min(hv or [size]) <= 1e-9:
         raise ValueError(f"{kind.capitalize()} size must be greater than 0")
     hit = nearest_corner(ents, p, tol)
     if hit is None:
@@ -532,12 +572,18 @@ def corner_op(ents, origin, p, size: float, kind: str, tol: float):
     theta = math.acos(cos_t)
     if theta < 1e-6 or abs(math.pi - theta) < 1e-6:
         raise ValueError("Those lines are in line with each other: no corner to round")
-    t = size / math.tan(theta / 2) if kind == "fillet" else size
-    if t > min(L1, L2) + 1e-9:
-        biggest = min(L1, L2) * (math.tan(theta / 2) if kind == "fillet" else 1)
-        raise ValueError(f"{kind.capitalize()} {fmt(size)} is too big here (max {fmt(biggest)})")
+    if hv:
+        ts = _legs(u1, u2, hv)
+        if ts[0] > L1 + 1e-9 or ts[1] > L2 + 1e-9:
+            raise ValueError(f"Chamfer {fmt(hv[0])} × {fmt(hv[1])} is too big here")
+    else:
+        t = size / math.tan(theta / 2) if kind == "fillet" else size
+        if t > min(L1, L2) + 1e-9:
+            biggest = min(L1, L2) * (math.tan(theta / 2) if kind == "fillet" else 1)
+            raise ValueError(f"{kind.capitalize()} {fmt(size)} is too big here (max {fmt(biggest)})")
+        ts = (t, t)
     T = []
-    for k, at_start, other, u, L in ends:
+    for (k, at_start, other, u, L), t in zip(ends, ts):
         tp = [P[0] + u[0] * t, P[1] + u[1] * t]
         T.append(tp)
         if abs(L - t) < 1e-9:                     # the side is used up entirely
@@ -555,7 +601,47 @@ def corner_op(ents, origin, p, size: float, kind: str, tol: float):
         new = arc(c, size, a0, a1, T) if span <= 180 else arc(c, size, a1, a0, [T[1], T[0]])
     else:
         new = line(T[0], T[1])
+        new["corner"] = list(P)               # remembered, so the legs can be changed later
     ents.append(_clean(new))
     origin.append(origin[i])
     keep = [k for k, e in enumerate(ents) if e is not None]
     return [ents[k] for k in keep], [origin[k] for k in keep]
+
+
+def _legs(u1, u2, hv):
+    """Distances along the two sides (unit directions u1, u2 from the corner) that give a bevel
+    `hv[0]` wide in X and `hv[1]` tall in Y. On a square corner that is simply h and v."""
+    h, v = hv
+    det = -u1[0] * u2[1] + u2[0] * u1[1]
+    best = None
+    for sx in (1, -1):
+        for sy in (1, -1):
+            dx, dy = sx * h, sy * v                  # u1 t1 - u2 t2 = (dx, dy)
+            t1 = (-dx * u2[1] + u2[0] * dy) / det
+            t2 = (u1[0] * dy - u1[1] * dx) / det
+            if t1 > 1e-9 and t2 > 1e-9 and (best is None or t1 + t2 < sum(best)):
+                best = (t1, t2)
+    if best is None:
+        raise ValueError("That chamfer can't be made on this corner")
+    return best
+
+
+def rechamfer(ents, origin, i: int, h: float, v: float):
+    """Chamfer i with new legs: its two sides go back to the sharp corner, then it is cut again."""
+    c = ents[i]
+    P = c["corner"]
+    ents, origin = [dict(e) for e in ents], list(origin)
+    for X in c["pts"]:
+        k = next((k for k, e in enumerate(ents) if k != i and e["type"] == "line"
+                  and _key(X) in (_key(e["pts"][0]), _key(e["pts"][1]))), None)
+        if k is not None:
+            a, b = ents[k]["pts"]
+            o = b if _key(a) == _key(X) else a      # the side's far end: must be in line with P
+            if abs((X[0] - o[0]) * (P[1] - o[1]) - (X[1] - o[1]) * (P[0] - o[0])) < 1e-7:
+                ents[k] = line(P, o) if _key(a) == _key(X) else line(o, P)
+                continue
+        ents.append(line(X, P))                     # that side had been used up: bring it back
+        origin.append(origin[i])
+    del ents[i]
+    del origin[i]
+    return corner_op(ents, origin, P, (h, v), "chamfer", 1e-6)

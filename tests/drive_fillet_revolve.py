@@ -11,6 +11,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 import gsend_cad
+from gsend_cad.core import sketch as sk
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "."
 app = QApplication(sys.argv[:1])
@@ -79,10 +80,16 @@ s.palette.corner.setValue(0.25)
 win.run_tool("Fillet")
 click(2, 1)
 check("sketch fillet makes an arc", any(e["type"] == "arc" and abs(e["r"] - 0.25) < 1e-9 for e in s.ents))
-s.palette.corner.setValue(0.2)
+s.palette.cham_h.setValue(0.4)
+s.palette.cham_v.setValue(0.1)
 win.run_tool("Chamfer")
 click(0, 0)
 check("sketch chamfer adds a bevel line", len(s.ents) == 6)
+check("chamfer is dimensioned H and V", sorted(d["key"] for d in sk.dimensions(s.ents[-1])) == ["ch", "cv"])
+s.apply_dim(len(s.ents) - 1, "ch", 0.2)
+s.apply_dim(len(s.ents) - 1, "cv", 0.2)
+check("right-click edit of the legs re-cuts the chamfer", sk.params(s.ents[-1]) == {"ch": 0.2, "cv": 0.2}
+      and len(s.ents) == 6)
 win.run_tool("Chamfer")
 click(1, 0.5)
 check("click away from a corner changes nothing", len(s.ents) == 6)

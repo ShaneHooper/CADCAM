@@ -111,12 +111,15 @@ and its size. Tick <b>Dimensions: All</b> to see every shape's dimensions at onc
 </ul>
 <h3>Round or bevel a corner (Fillet / Chamfer in the sketch)</h3>
 <ul>
-<li>Set <b>Corner size</b> in the palette: the radius for Fillet, the distance along each side for Chamfer.</li>
+<li>Set the size in the palette: <b>Fillet R</b> for Fillet, <b>Chamfer H</b> (along X) and
+<b>Chamfer V</b> (along Y) for Chamfer.</li>
 <li>Click <b>Fillet</b> or <b>Chamfer</b> (Sketch tab, Modify), then click a sharp corner. A white ring
 shows which corner a click will change. Keep clicking corners; each one is its own Ctrl+Z.</li>
 <li>A rectangle or polygon is split into lines when you round one of its corners (like Fusion).
 Extrudes already made from it keep working.</li>
-<li>The new arc or bevel line is selected, so its values (arc radius, line length) can be typed.</li>
+<li>The new arc or bevel line is selected, so its values can be typed: arc radius, or the chamfer's
+<b>Horizontal</b> and <b>Vertical</b> legs (its dimensions show them too; right-click one to change it,
+and the two sides follow).</li>
 </ul>
 <h3>Closed shapes (what can be extruded)</h3>
 <p>Only closed shapes can become solid: a rectangle, circle, polygon, or lines that join

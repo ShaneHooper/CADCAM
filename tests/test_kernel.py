@@ -153,6 +153,17 @@ def test_sketch_chamfer_and_edit_keeps_extrude():
     assert not m.errors and abs(m.bodies[0].volume - (2 - 0.02) * 0.5) < 1e-6
 
 
+def test_sketch_chamfer_horizontal_vertical_legs():
+    d, s = _plate([sk.rect((0, 0), (2, 1))])
+    ents, origin = sk.corner_op(s["ents"], [0], (2, 1), (0.5, 0.25), "chamfer", 0.05)
+    assert sk.params(ents[-1]) == {"ch": 0.5, "cv": 0.25}
+    ents, origin, i = sk.edit(ents, origin, len(ents) - 1, "cv", 1.0)   # uses up the right side
+    ents, origin, i = sk.edit(ents, origin, i, "cv", 0.5)               # ... and brings it back
+    d.update_sketch(s["id"], ents, 0.0, origin)
+    m = Kernel().build(d)
+    assert not m.errors and abs(m.bodies[0].volume - (2 - 0.125) * 0.5) < 1e-6
+
+
 def test_revolve_about_sketch_y_axis():
     d = Document()
     s = d.add_sketch([sk.rect((1, 0), (2, 1))])
