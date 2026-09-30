@@ -410,6 +410,60 @@ def turn_profile(bodies, point, direction) -> list[tuple]:
     return clean
 
 
+def _np(v):
+    return np.array([v.X, v.Y, v.Z], float)
+
+
+def find_holes(bodies, tol: float = 1e-5) -> list[dict]:
+    """Round holes in the parts: [{"p": point on the axis at the open end, "axis": unit vector
+    pointing OUT of the hole, "dia", "depth" (full-diameter depth), "through": bool}].
+    A hole is an inward-facing cylinder with at least one open end; coaxial pieces of the same
+    size (a cylinder split at its seam) count as one hole. Holes open at both ends are listed
+    once per open end, so a caller can take the end it can reach."""
+    groups = []
+    for b in bodies:
+        for f in b.shape.faces():
+            if f.geom_type != GeomType.CYLINDER:
+                continue
+            ax = f.axis_of_rotation
+            o, d = _np(ax.position), _np(ax.direction)
+            d = d / np.linalg.norm(d)
+            q = _np(f.position_at(0.5, 0.5))
+            n = _np(f.normal_at(f.position_at(0.5, 0.5)))
+            w = q - o
+            radial = w - (w @ d) * d
+            if n @ radial >= 0:                          # normal points away from the axis: a boss
+                continue
+            ts = [(_np(v) - o) @ d for v in f.vertices()] or [0.0]
+            for e in f.edges():
+                ts += [(_np(e.position_at(k / 4)) - o) @ d for k in range(5)]
+            r = float(f.radius)
+            for g in groups:
+                gd, go = g["d"], g["o"]
+                off = o - go
+                if abs(abs(gd @ d) - 1) < 1e-9 and np.linalg.norm(off - (off @ gd) * gd) < tol and \
+                        abs(g["r"] - r) < tol and g["body"] is b:
+                    ts = [((o + t * d) - go) @ gd for t in ts]
+                    g["t0"], g["t1"] = min(g["t0"], min(ts)), max(g["t1"], max(ts))
+                    break
+            else:
+                groups.append({"o": o, "d": d, "r": r, "t0": min(ts), "t1": max(ts), "body": b})
+    out = []
+    for g in groups:
+        o, d, s = g["o"], g["d"], g["body"].shape
+        ends = []
+        for t, sgn in ((g["t1"], 1.0), (g["t0"], -1.0)):
+            probe = o + (t + sgn * 0.001) * d
+            ends.append((t, sgn, not s.is_inside(Vector(*probe))))
+        open_ends = [e for e in ends if e[2]]
+        for t, sgn, _ in open_ends:
+            p = o + t * d
+            out.append({"p": tuple(float(v) for v in p), "axis": tuple(float(v) for v in sgn * d),
+                        "dia": round(2 * g["r"], 6), "depth": float(g["t1"] - g["t0"]),
+                        "through": len(open_ends) == 2})
+    return out
+
+
 def _tangent_chain(shape, edges, tol=1e-6, cos_tol=0.9999):
     """The picked edges plus every edge running on smoothly from them (like Fusion's default
     "tangent chain"): a straight edge that flows into a rounded corner takes the corner too."""

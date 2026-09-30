@@ -331,6 +331,23 @@ rough, Post Process says so.</li>
 <li>Unticked: every move is written line by line (G01).</li>
 </ol>
 """),
+    ("drill", "CAM: Drill (mill and lathe)", """
+<h1>Drill</h1>
+<p>Drills the round holes in your model. Model the hole in CAD (a circle cut through or partway),
+then CAM → <b>Drill</b> (Milling tab: Drilling; Turning tab: Turning).</p>
+<ol>
+<li><b>Milling</b>: <b>Holes</b> lists every hole size found opening up (+Z); pick one (Drill diameter
+follows) or All holes. Holes are drilled nearest first, returning to the clearance height between
+holes (G98).</li>
+<li><b>Turning</b>: drills the hole on the spindle axis that opens at the front face, at a fixed RPM (G97)
+and feed in/rev.</li>
+<li><b>Cycle</b>: Drill (G81), Peck (G83, full retract each peck Q) or, on a mill, Chip break (G73).</li>
+<li>Blind holes are drilled to the hole's bottom. Through holes go the <b>Breakthrough</b> plus the
+drill's 118° point further. <b>R plane</b> is how far above the hole (or off the face) the feed starts.</li>
+<li>Post: mill G81 / G83 / G73 then G80. Haas lathe: G81 / G83 on center. Fanuc lathe: the pecks are
+written out as G01 / G00 (lathe drilling cycles differ between Fanuc controls).</li>
+</ol>
+"""),
     ("contour", "CAM: 2D Contour and Simulate", """
 <h1>2D Contour (milling)</h1>
 <ol>

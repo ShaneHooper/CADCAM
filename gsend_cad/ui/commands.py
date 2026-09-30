@@ -20,7 +20,7 @@ from ..core import cam, post
 from ..core import plane as pl
 from ..core import sketch as sk
 from ..core.profiles import region_at, sketch_regions
-from ..kernel import (bodies_bbox, edge_list, max_radius, model_snap_points, outline_loops, turn_profile, extrude_tool, face_outline, planar_face_at, plane_edges, region_face, revolve_axis,
+from ..kernel import (bodies_bbox, edge_list, max_radius, model_snap_points, outline_loops, turn_profile, find_holes, extrude_tool, face_outline, planar_face_at, plane_edges, region_face, revolve_axis,
                       revolve_tool, triangles)
 from . import theme
 
@@ -1628,6 +1628,16 @@ class SetupSession:
 
 
 # ------------------------------------------------------------------ CAM operations (Face)
+def setup_holes(win, setup):
+    """Round holes in the setup's bodies (kernel.find_holes), cached per model."""
+    bodies = setup_bodies(win, setup)
+    key = ("holes", id(win.model), tuple(b.id for b in bodies))
+    cache = win.__dict__.setdefault("_radius_cache", {})
+    if key not in cache:
+        cache[key] = find_holes(bodies) if bodies else []
+    return cache[key]
+
+
 def op_moves(win, setup, op):
     """(WCS moves, world moves) for an operation; ([], []) when there's no part."""
     bodies = setup_bodies(win, setup)
@@ -1651,7 +1661,8 @@ def op_moves(win, setup, op):
         if key not in cache:
             cache[key] = turn_profile(bodies, center, cam._unit(i))
         profile = cache[key]
-    moves = cam.toolpath(bbox, setup, op, r, loops, profile)
+    holes = setup_holes(win, setup) if op.get("type") == "drill" else None
+    moves = cam.toolpath(bbox, setup, op, r, loops, profile, holes)
     return moves, cam.toolpath_world(bbox, setup, moves, r)
 
 
@@ -1687,12 +1698,21 @@ class OpPanel(Panel):
               "finish": {cam.TURNING: [("tool", "Tool number", 0), ("leave_x", "Stock to leave X", 4),
                                        ("leave_z", "Stock to leave Z", 4), ("past_back", "Past part back (Z)", 4),
                                        ("retract", "Pull-off", 4), ("sfm", "Surface speed SFM", 0),
-                                       ("ipr", "Feed (in/rev)", 4), ("max_rpm", "Max RPM", 0)]}}
+                                       ("ipr", "Feed (in/rev)", 4), ("max_rpm", "Max RPM", 0)]},
+              "drill": {cam.MILLING: [("tool", "Tool number", 0), ("tool_dia", "Drill diameter", 4),
+                                      ("peck", "Peck (Q)", 4), ("breakthrough", "Breakthrough", 4),
+                                      ("retract", "R plane above hole", 4), ("rpm", "Spindle RPM", 0),
+                                      ("feed", "Feed (in/min)", 2)],
+                        cam.TURNING: [("tool", "Tool number", 0), ("tool_dia", "Drill diameter", 4),
+                                      ("peck", "Peck (Q)", 4), ("breakthrough", "Breakthrough", 4),
+                                      ("retract", "R plane off face", 4), ("rpm", "Spindle RPM", 0),
+                                      ("ipr", "Feed (in/rev)", 4)]}}
     DIRECTIONS = {"face": [("Along X", "x"), ("Along Y", "y")],
                   "contour": [("Climb", "climb"), ("Conventional", "conventional")]}
 
     def __init__(self, session: "OpSession", kind: str):
-        super().__init__({"face": "Face", "contour": "2D Contour", "rough": "OD Rough", "finish": "Contour"}[kind], 260)
+        super().__init__({"face": "Face", "contour": "2D Contour", "rough": "OD Rough", "finish": "Contour",
+                          "drill": "Drill"}[kind], 260)
         s = session
         self.setup = QComboBox()
         for st in s.win.doc.setups:
@@ -1714,6 +1734,15 @@ class OpPanel(Panel):
         self.g70.setToolTip("On: G70 P Q over the contour of an OD Rough (G71) earlier in this setup.\n"
                             "Off: every move line by line (G01).")
         self.g70.toggled.connect(s.preview)
+        self.cycles = {}                         # Drill: G81 / G83 (/ G73 on a mill), one box per setup type
+        for stype, keys in ((cam.MILLING, list(cam.DRILL_CYCLES)), (cam.TURNING, list(cam.TURN_DRILL_CYCLES))):
+            cb = QComboBox()
+            for k in keys:
+                cb.addItem(cam.DRILL_CYCLES[k], k)
+            cb.currentIndexChanged.connect(s.preview)
+            self.cycles[stype] = cb
+        self.holes = QComboBox()                 # Drill (mill): which hole size, found in the model
+        self.holes.currentIndexChanged.connect(s.holes_changed)
         for stype, fields in self.FIELDS[kind].items():
             g = QWidget()
             lay = QVBoxLayout(g)
@@ -1726,7 +1755,11 @@ class OpPanel(Panel):
                 nb.valueChanged.connect(s.preview)
                 self.boxes[(stype, key)] = nb
                 items.append((label, nb))
-            if stype == cam.MILLING:
+            if kind == "drill":
+                items.insert(1, ("Cycle", self.cycles[stype]))
+                if stype == cam.MILLING:
+                    items.insert(0, ("Holes", self.holes))
+            elif stype == cam.MILLING:
                 items.insert(5, ("Cut direction", self.direction))
             elif kind in ("face", "rough"):
                 items.append(("Output", self.output))
@@ -1787,6 +1820,18 @@ class OpSession:
                 box.setValue(op[key])
         if "direction" in op:
             p.direction.setCurrentIndex(max(0, p.direction.findData(op["direction"])))
+        if self.kind == "drill":
+            cb = p.cycles[st["type"]]
+            cb.setCurrentIndex(max(0, cb.findData(op["cycle"])))
+            p.holes.clear()
+            sizes = sorted({h["dia"] for h in setup_holes(self.win, st) if h["axis"][2] > 1 - 1e-6})
+            p.holes.addItem("All holes", 0.0)
+            for d in sizes:
+                p.holes.addItem(f"Ø{d:.4f}", d)
+            want = op.get("hole_dia", 0.0) if op.get("id") else (sizes[0] if sizes else 0.0)
+            p.holes.setCurrentIndex(max(0, p.holes.findData(want)))
+            if not op.get("id") and want:
+                p.boxes[(cam.MILLING, "tool_dia")].setValue(want)
         if "output" in op:
             p.output.setCurrentIndex(max(0, p.output.findData(op["output"])))
             p.g70.setChecked(op["output"] == "cycle")
@@ -1816,7 +1861,17 @@ class OpSession:
             o["output"] = p.output.currentData()
         elif self.kind == "finish":
             o["output"] = "cycle" if p.g70.isChecked() else "lines"
+        if self.kind == "drill":
+            o["cycle"] = p.cycles[st["type"]].currentData()
+            o["hole_dia"] = (p.holes.currentData() or 0.0) if st["type"] == cam.MILLING else 0.0
         return o
+
+    def holes_changed(self, *_):
+        """Picking a hole size puts that size in Drill diameter."""
+        d = self.panel.holes.currentData()
+        if not self._loading and d:
+            self.panel.boxes[(cam.MILLING, "tool_dia")].setValue(d)
+        self.preview()
 
     def preview(self, *_):
         if self._loading:
@@ -1836,7 +1891,10 @@ class OpSession:
             {i for i, (k, _p) in enumerate(moves) if k == "feed" and moves[i - 1][0] == "rapid"}   # facing cuts
         t = cam.cycle_time(moves, st, self.op())
         n = len(zs)
-        if self.kind == "finish":
+        if self.kind == "drill":
+            n = len({p[:2] for k, p in moves if k == "feed"}) if st["type"] == cam.MILLING else 1
+            self.panel.info.setText(f"{n} hole{'s' if n != 1 else ''} · about {t:.1f} min cutting")
+        elif self.kind == "finish":
             self.panel.info.setText(f"1 finish pass along the profile · about {t:.1f} min cutting")
         elif self.kind == "rough":
             self.panel.info.setText(f"{n - 1} roughing pass{'es' if n != 2 else ''} + profile pass · about {t:.1f} min "

@@ -240,3 +240,46 @@ def test_model_snap_points():
     assert any(k == "center" and p[:2] == pytest.approx((0, 0)) for p, k in pts)   # the boss / bore center
     assert any(k == "end" and p == pytest.approx((-2, -1.25, 0.5)) for p, k in pts)     # side edge meets corner R
     assert any(k == "mid" and p == pytest.approx((-2, 0, 0.5)) for p, k in pts)          # middle of that side
+
+
+def test_drill_mill_and_lathe_from_model_holes():
+    from gsend_cad.core import cam, post
+    from gsend_cad.kernel import bodies_bbox, find_holes, max_radius
+    d = Document()                                     # 2 x 2 x 0.5 plate: two Ø0.25 through, one Ø0.5 blind
+    s = d.add_sketch([sk.rect((0, 0), (2, 2))])
+    d.add_extrude([sketch_regions(s["id"], s["ents"])[0].to_data()], 0.5)
+    h = d.add_sketch([sk.circle((0.5, 0.5), 0.125), sk.circle((1.5, 0.5), 0.125)])
+    d.add_extrude([r.to_data() for r in sketch_regions(h["id"], h["ents"])], 0.5, op="cut")
+    b = d.add_sketch([sk.circle((1, 1.5), 0.25)], plane_z=0.5)
+    d.add_extrude([sketch_regions(b["id"], b["ents"])[0].to_data()], -0.3, op="cut")
+    m = Kernel().build(d)
+    assert not m.errors
+    holes = find_holes(m.bodies)
+    up = [x for x in holes if x["axis"][2] > 0.99]
+    assert sorted(x["dia"] for x in up) == [0.25, 0.25, 0.5]
+    bb = bodies_bbox(m.bodies)
+    st = {**cam.new_setup("milling"), "name": "S"}
+    op = {**cam.new_op(st, "drill"), "name": "Drill1", "hole_dia": 0.25}
+    t = cam.drill_targets(bb, st, cam.validate_op(st, op), holes)
+    assert len(t) == 2 and all(z1 == pytest.approx(-0.05 - 0.5 - 0.05 - 0.25 * cam.DRILL_TIP) for *_x, z1 in t)
+    op5 = {**op, "hole_dia": 0.5, "tool_dia": 0.5, "cycle": "chip"}
+    t5 = cam.drill_targets(bb, st, cam.validate_op(st, op5), holes)
+    assert len(t5) == 1 and t5[0][3] == pytest.approx(-0.05 - 0.3)                  # blind: to its bottom
+    g = post.post_setup(st, [(cam.validate_op(st, op), cam.toolpath(bb, st, op, holes=holes))], "haas", 1)
+    assert "G98 G83 X-0.5 Y-0.5 Z-0.6751 R0.05 Q0.1 F10." in g and "\nX0.5\n" in g and "G80" in g
+    # lathe: Ø1 x 2 bar along X with a Ø0.25 x 0.75 hole on center at the front (+X)
+    d2 = Document()
+    s2 = d2.add_sketch([sk.rect((0, 0.125), (2, 0.5)), sk.rect((0, 0), (1.25, 0.125))])   # half section
+    d2.add_revolve([r.to_data() for r in sketch_regions(s2["id"], s2["ents"])], {"sketch": s2["id"], "kind": "x"})
+    m2 = Kernel().build(d2)
+    assert not m2.errors
+    bb2 = bodies_bbox(m2.bodies)
+    ts = {**cam.validate({**cam.new_setup("turning"), "axis": "x"}), "name": "T"}
+    r = max_radius(m2.bodies, (1, 0, 0), (1, 0, 0))
+    lop = {**cam.new_op(ts, "drill"), "name": "Drill2"}
+    mv = cam.toolpath(bb2, ts, lop, r, holes=find_holes(m2.bodies))
+    assert min(p[2] for _k, p in mv) == pytest.approx(-0.05 - 0.75) and all(p[0] == 0 for k, p in mv if k == "feed")
+    g2 = post.post_setup(ts, [(cam.validate_op(ts, lop), mv)], "haas", 2)
+    assert "G97 S1200 M03" in g2 and "G83 Z-0.8 R0.05 Q0.1 F0.004" in g2 and "G96" not in g2
+    g3 = post.post_setup(ts, [(cam.validate_op(ts, lop), mv)], "fanuc", 2)
+    assert "G83" not in g3 and "G01 Z-0.05 F0.004\nG00 Z0.05\nZ-0.03\nG01 Z-0.15\n" in g3   # pecks written out

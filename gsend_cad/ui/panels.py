@@ -45,7 +45,7 @@ RIBBON.update({
                 ("Drilling", [("drill", "Drill")]),
                 ("Actions", [("sim", "Simulate"), ("post", "Post Process")])],
     "turning": [("Setup", [("setup", "Setup")]),
-                ("Turning", [("face", "Face"), ("rough", "OD Rough"), ("finish", "Contour"),
+                ("Turning", [("face", "Face"), ("rough", "OD Rough"), ("finish", "Contour"), ("drill", "Drill"),
                              ("groove", "Groove"), ("thread", "Thread"), ("partoff", "Part Off")]),
                 ("Actions", [("sim", "Simulate"), ("post", "Post Process")])],
 })

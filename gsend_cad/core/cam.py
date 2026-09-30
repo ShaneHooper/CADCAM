@@ -241,7 +241,15 @@ ROUGH_TURN = {"type": "rough", "tool": 2, "stepdown": 0.05, "leave_x": 0.01, "le
 ROUGH_OUTPUT = {"lines": "Single lines (G01)", "cycle": "Canned cycle (G71)"}
 FINISH_TURN = {"type": "finish", "tool": 3, "leave_x": 0.0, "leave_z": 0.0, "retract": 0.02, "past_back": 0.0,
                "sfm": 800.0, "ipr": 0.005, "max_rpm": 3000.0, "clearance": 0.1, "output": "lines"}
-OP_TYPES = {"face": "Face", "contour": "Contour", "rough": "OD Rough", "finish": "Contour"}
+DRILL_MILL = {"type": "drill", "tool": 4, "tool_dia": 0.25, "cycle": "peck", "peck": 0.1, "breakthrough": 0.05,
+              "retract": 0.1, "clearance": 0.5, "rpm": 2500.0, "feed": 10.0, "hole_dia": 0.0}
+DRILL_TURN = {"type": "drill", "tool": 5, "tool_dia": 0.25, "cycle": "peck", "peck": 0.1, "breakthrough": 0.05,
+              "retract": 0.1, "clearance": 0.1, "rpm": 1200.0, "ipr": 0.004, "hole_dia": 0.0}
+DRILL_CYCLES = {"drill": "Drill (G81)", "peck": "Peck (G83)", "chip": "Chip break (G73)"}
+TURN_DRILL_CYCLES = ("drill", "peck")          # G73 is a pattern cycle on a lathe, not chip breaking
+DRILL_TIP = 0.5 / math.tan(math.radians(59))   # 118° point: tip length = 0.3004 x drill Ø
+PECK_GAP = 0.02                                # rapid back down to this far above the last peck
+OP_TYPES = {"face": "Face", "contour": "Contour", "rough": "OD Rough", "finish": "Contour", "drill": "Drill"}
 
 
 def new_op(setup: dict, kind: str = "face") -> dict:
@@ -255,6 +263,8 @@ def new_op(setup: dict, kind: str = "face") -> dict:
         if setup["type"] != TURNING:
             raise ValueError("OD Rough needs a Turning setup")
         return copy.deepcopy(ROUGH_TURN)
+    if kind == "drill":
+        return copy.deepcopy(DRILL_MILL if setup["type"] == MILLING else DRILL_TURN)
     if kind == "finish":
         if setup["type"] != TURNING:
             raise ValueError("turning Contour needs a Turning setup")
@@ -282,7 +292,14 @@ def validate_op(setup: dict, op: dict) -> dict:
         raise ValueError("output must be lines or cycle")
     if op["type"] == "contour" and op["direction"] not in ("climb", "conventional"):
         raise ValueError("direction must be climb or conventional")
-    for k in ("leave", "past_center", "clearance", "lead", "leave_x", "leave_z", "past_back"):
+    if op["type"] == "drill":
+        if op["cycle"] not in (DRILL_CYCLES if setup["type"] == MILLING else TURN_DRILL_CYCLES):
+            raise ValueError("drill cycle must be " + " / ".join(DRILL_CYCLES if setup["type"] == MILLING
+                                                                  else TURN_DRILL_CYCLES))
+        if op["cycle"] != "drill" and op["peck"] <= 0:
+            raise ValueError("peck must be greater than 0")
+    for k in ("leave", "past_center", "clearance", "lead", "leave_x", "leave_z", "past_back", "breakthrough",
+              "hole_dia"):
         if k in op and op[k] < 0:
             raise ValueError(f"{k.replace('_', ' ')} can't be negative")
     return op
@@ -523,9 +540,102 @@ def finish_toolpath(bbox, setup: dict, op: dict, profile, radius: float = 0.0) -
     return [("rapid", (x_out, 0.0, z_start))] + _profile_pass(prof, op["retract"], x_out, z_start)
 
 
-def toolpath(bbox, setup: dict, op: dict, radius: float = 0.0, loops=None, profile=None) -> list[tuple]:
+def drill_targets(bbox, setup: dict, op: dict, holes, radius: float = 0.0) -> list[tuple]:
+    """(x, y, top, bottom) in WCS for each hole the Drill op will make (kernel.find_holes gives
+    `holes`). Milling: holes opening upward (+Z), Ø = op hole_dia (0 = every size), nearest first.
+    Turning: the hole on the spindle axis opening at the front (x = y = 0). Bottom = full-Ø
+    depth; through holes go the breakthrough plus the drill's point further."""
+    w = wcs(bbox, setup, radius)
+    o = w["origin"]
+    want = op.get("hole_dia", 0.0)
+    out = []
+    for h in holes:
+        if want and abs(h["dia"] - want) > 1e-4:
+            continue
+        extra = op["breakthrough"] + op["tool_dia"] * DRILL_TIP if h["through"] else 0.0
+        if setup["type"] == MILLING:
+            if h["axis"][2] < 1 - 1e-6:
+                continue
+            x, y, top = (h["p"][k] - o[k] for k in range(3))
+            out.append((x, y, top, top - h["depth"] - extra))
+        else:
+            i, center, _ = turning_frame(bbox, setup)
+            sign = 1.0 if setup["front"] == "+" else -1.0
+            off = [h["p"][k] - center[k] for k in range(3) if k != i]
+            if h["axis"][i] * sign < 1 - 1e-6 or math.hypot(*off) > 1e-4:
+                continue
+            top = (h["p"][i] - o[i]) * sign
+            out.append((0.0, 0.0, top, top - h["depth"] - extra))
+    if setup["type"] == TURNING:
+        return sorted(out, key=lambda t: -t[2])[:1]              # the one that opens at the front
+    order, at = [], (0.0, 0.0)
+    while out:                                                   # nearest hole next
+        k = min(range(len(out)), key=lambda j: math.dist(at, out[j][:2]))
+        order.append(out.pop(k))
+        at = order[-1][:2]
+    return order
+
+
+def _pecks(pt, R, bottom, op):
+    """Moves from the R plane to the bottom and back to R, as the control runs the cycle."""
+    moves, cur = [], R
+    q = op["peck"] if op["cycle"] != "drill" else R - bottom
+    while cur > bottom + 1e-9:
+        nxt = max(cur - q, bottom)
+        moves.append(("feed", pt(nxt)))
+        if nxt > bottom + 1e-9:
+            if op["cycle"] == "peck":                           # G83: all the way out, back down
+                moves += [("rapid", pt(R)), ("rapid", pt(nxt + PECK_GAP))]
+            else:                                               # G73: a short pull to break the chip
+                moves.append(("rapid", pt(nxt + PECK_GAP)))
+        cur = nxt
+    return moves + [("rapid", pt(R))]
+
+
+def drill_toolpath(bbox, setup: dict, op: dict, holes, radius: float = 0.0) -> list[tuple]:
+    """Drill: every target hole from `op["retract"]` above its top down to its bottom (G81 / G83 /
+    G73 moves spelled out for the preview and Simulate). Milling returns to the clearance height
+    between holes (G98). Turning: on center from the face, X = 0."""
+    op = validate_op(setup, op)
+    targets = drill_targets(bbox, setup, op, holes, radius)
+    if not targets:
+        raise ValueError("no hole to drill" + (" of that size" if op.get("hole_dia") else "") +
+                         (" · model the hole in CAD (a round hole opening up +Z)" if setup["type"] == MILLING else
+                          " · model a hole down the spindle axis, open at the front"))
+    if setup["type"] == MILLING:
+        lo, hi = stock_box(bbox, setup)
+        safe = hi[2] - wcs(bbox, setup)["origin"][2] + op["clearance"]
+        moves = []
+        for x, y, top, bottom in targets:
+            def pt(z, x=x, y=y):
+                return (x, y, z)
+            R = top + op["retract"]
+            moves += [("rapid", pt(safe)), ("rapid", pt(R))] + _pecks(pt, R, bottom, op) + [("rapid", pt(safe))]
+        return moves
+    c = stock_cylinder(bbox, radius, setup)
+    w = wcs(bbox, setup, radius)
+    i = AXES[setup["axis"]]
+    sign = 1.0 if setup["front"] == "+" else -1.0
+    z_start = (c["front"][i] - w["origin"][i]) * sign + op["clearance"]
+    x_out = c["r"] + op["clearance"]
+    _x, _y, top, bottom = targets[0]
+    R = top + op["retract"]
+
+    def pt(z):
+        return (0.0, 0.0, z)
+    return ([("rapid", (x_out, 0.0, z_start)), ("rapid", pt(z_start)), ("rapid", pt(R))] + _pecks(pt, R, bottom, op)
+            + [("rapid", pt(z_start)), ("rapid", (x_out, 0.0, z_start))])
+
+
+def toolpath(bbox, setup: dict, op: dict, radius: float = 0.0, loops=None, profile=None, holes=None) -> list[tuple]:
     """Moves for any operation (face, contour, OD rough), in the setup's WCS - turned about Z when
     the setup's X points another way (the path generators work in model-aligned axes)."""
+    if op.get("type") == "drill":
+        moves = drill_toolpath(bbox, setup, op, holes or [], radius)
+        if setup["type"] == MILLING and setup.get("x_dir", "+x") != "+x":
+            cx, cy = X_DIRS[setup["x_dir"]][1]
+            moves = [(k, (x * cx + y * cy, -x * cy + y * cx, z)) for k, (x, y, z) in moves]
+        return moves
     if op.get("type") == "rough":
         return rough_toolpath(bbox, setup, op, profile or [], radius)
     if op.get("type") == "finish":
@@ -575,6 +685,8 @@ def cycle_time(moves, setup: dict, op: dict) -> float:
             if setup["type"] == MILLING:
                 z_only = abs(prev[0] - p[0]) < 1e-9 and abs(prev[1] - p[1]) < 1e-9
                 t += d / (op.get("plunge", op["feed"]) if z_only else op["feed"])
+            elif op.get("type") == "drill":           # lathe drill: fixed RPM (G97), in/rev
+                t += d / (op["ipr"] * op["rpm"])
             else:                                   # constant surface speed, capped RPM
                 r_mid = max((abs(prev[0]) + abs(p[0])) / 2, 1e-3)
                 rpm = min(op["sfm"] * 12 / (2 * math.pi * r_mid), op["max_rpm"])
@@ -584,6 +696,9 @@ def cycle_time(moves, setup: dict, op: dict) -> float:
 
 
 def describe_op(setup: dict, op: dict) -> str:
+    if op.get("type") == "drill":
+        size = f"Ø{op['hole_dia']:.4f} holes" if op.get("hole_dia") else "all holes"
+        return f"Drill · Ø{op['tool_dia']:.4f} · {DRILL_CYCLES[op['cycle']]} · {size}"
     if op.get("type") == "finish":
         return (f"Contour · leave X {op['leave_x']:.3f} Z {op['leave_z']:.3f} · {op['sfm']:.0f} SFM · "
                 f"{op['ipr']:.4f} IPR" + (" · G70 cycle" if op.get("output") == "cycle" else ""))

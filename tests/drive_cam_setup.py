@@ -300,5 +300,34 @@ g = win.post_dialog.text.toPlainText()
 check("right-click Post Process posts that op's setup (face + contour)", "FACE MILL" in g and "2D CONTOUR" in g
       and "T2 M06" in g)
 win.post_dialog.close()
+
+# ---- Drill on a milling setup: plate with 2 x Ø0.25 through and 1 x Ø0.5 holes
+win.dirty = False
+win.new_doc()
+doc = win.doc
+p_ = doc.add_sketch([sk.rect((0, 0), (2, 2))])
+doc.add_extrude([sketch_regions(p_["id"], p_["ents"])[0].to_data()], 0.5)
+h_ = doc.add_sketch([sk.circle((0.5, 0.5), 0.125), sk.circle((1.5, 0.5), 0.125), sk.circle((1, 1.4), 0.25)])
+doc.add_extrude([r.to_data() for r in sketch_regions(h_["id"], h_["ents"])], 0.5, op="cut")
+win.rebuild(fit=True)
+win.ribbon.show_mode("cam")
+win.select_tab("milling")
+win.run_tool("Setup")
+key(Qt.Key_Return)
+win.run_tool("Drill")
+o = win.session
+check("Drill opens with the hole sizes found in the model",
+      o.kind == "drill" and [o.panel.holes.itemText(i) for i in range(o.panel.holes.count())]
+      == ["All holes", "Ø0.2500", "Ø0.5000"] and o.panel.holes.currentData() == 0.25
+      and o.panel.boxes[("milling", "tool_dia")].value() == 0.25)
+check("Drill preview: 2 holes", o.panel.info.text().startswith("2 holes"))
+o.panel.holes.setCurrentIndex(0)
+check("All holes: 3", o.panel.info.text().startswith("3 holes"))
+o.panel.holes.setCurrentIndex(1)
+shot("cam_09_drill")
+key(Qt.Key_Return)
+dst = win.doc.setups[-1]
+g = post.post_setup(dst, [(cam.validate_op(dst, x), op_moves(win, dst, x)[0]) for x in dst["ops"]], "haas", 1)
+check("Drill posts a G83 peck cycle over both holes", "G98 G83 X" in g and "Q0.1" in g and "G80" in g)
 print("FAILURES:", failures or "none")
 sys.exit(1 if failures else 0)

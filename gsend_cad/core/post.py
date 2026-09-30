@@ -71,7 +71,7 @@ def post_setup(setup: dict, ops: list[tuple[dict, list]], controller: str = "haa
     g71 = []                                          # (contour, P, Q) of each G71 rough so far
     for k, (op, moves) in enumerate(ops):
         L += (_lathe_op(setup, op, moves, offset, coolant, controller, 100 * (k + 1), g71) if turning
-              else _mill_op(setup, op, moves, offset, coolant))
+              else (_mill_drill if op.get("type") == "drill" else _mill_op)(setup, op, moves, offset, coolant))
     if turning:
         L += ["G28 U0. W0.", "M30", "%"]
     else:
@@ -112,6 +112,8 @@ def _lathe_op(setup, op, moves, offset, coolant, controller="haas", n=100, g71=N
     cycle = op.get("output") == "cycle"
     rough = op.get("type") == "rough"
     kind = op.get("type", "face")
+    if kind == "drill":
+        return _lathe_drill(op, moves, offset, coolant, controller)
     what = {"rough": "OD ROUGH", "finish": "CONTOUR", "face": "FACE"}[kind] + \
         ({"rough": " G71 CYCLE", "finish": " G70 CYCLE", "face": " G94 CYCLE"}[kind] if cycle else "")
     if kind == "finish" and cycle:
@@ -190,3 +192,71 @@ def _contour(moves, op):
         a -= 1
     lx, lz = op["leave_x"], op["leave_z"]
     return [(x - lx, z - lz) for _k, (x, _y, z) in moves[a:end]]
+
+
+DRILL_CODES = {"drill": "G81", "peck": "G83", "chip": "G73"}
+
+
+def _holes(moves):
+    """[(x, y, R, bottom)] from a drill path: each hole starts with a rapid to its XY at the
+    safe height, then a rapid down to R; the deepest feed is its bottom."""
+    out, i = [], 0
+    while i < len(moves) - 1:
+        (_k, (x, y, _z)), (_k2, (_x2, _y2, R)) = moves[i], moves[i + 1]
+        j = i + 2
+        bottom = R
+        while j < len(moves) and moves[j][1][:2] == (x, y) and not (moves[j][0] == "rapid" and moves[j][1][2] > R + 1e-9):
+            bottom = min(bottom, moves[j][1][2])
+            j += 1
+        out.append((x, y, R, bottom))
+        i = j + 1                                    # skip the rapid back up to the safe height
+    return out
+
+
+def _mill_drill(setup, op, moves, offset, coolant):
+    t = int(op.get("tool", 1))
+    code = DRILL_CODES[op["cycle"]]
+    L = ["", _comment(f"{op['name']} T{t} D{num(op['tool_dia'])} DRILL {code}"),
+         f"T{t} M06", f"{offset} G90", f"S{int(round(op['rpm']))} M03"]
+    holes = _holes(moves)
+    x, y, _R, _b = holes[0]
+    safe = moves[0][1][2]
+    L += [f"G00 X{num(x)} Y{num(y)}", f"G43 Z{num(safe)} H{t:02d}" + (" M08" if coolant else "")]
+    last = {}
+    for k, (x, y, R, bottom) in enumerate(holes):
+        words = {"X": num(x), "Y": num(y), "Z": num(bottom), "R": num(R)}
+        if k == 0:
+            q = f" Q{num(op['peck'])}" if op["cycle"] != "drill" else ""
+            L.append(f"G98 {code} X{words['X']} Y{words['Y']} Z{words['Z']} R{words['R']}{q} F{num(op['feed'])}")
+        else:                                        # modal: only what changed
+            L.append(" ".join(k2 + v for k2, v in words.items() if last.get(k2) != v) or f"X{words['X']}")
+        last = words
+    L += ["G80", "M09" if coolant else None, "M05"]
+    return [x for x in L if x is not None]
+
+
+def _lathe_drill(op, moves, offset, coolant, controller):
+    """On-center drilling at a fixed RPM (G97). Haas: G81 / G83 cycle. Fanuc (generic): the lathe
+    drilling cycles differ between controls, so the pecks are written out as G01 / G00."""
+    t = int(op.get("tool", 1))
+    haas = controller == "haas"
+    code = DRILL_CODES[op["cycle"]]
+    L = ["", _comment(f"{op['name']} T{t:02d} D{num(op['tool_dia'])} DRILL" + (f" {code}" if haas else "")),
+         "G28 U0. W0.", f"T{t:02d}{t:02d}", offset, f"G97 S{int(round(op['rpm']))} M03" + (" M08" if coolant else "")]
+    m = _Modal()
+    if haas:
+        (_k, (xo, _y, zs)), (_k2, (_x, _y2, R)) = moves[0], moves[2]
+        bottom = min(p[2] for _k, p in moves)
+        q = f" Q{num(op['peck'])}" if op["cycle"] != "drill" else ""
+        L += [f"G00 X{num(xo * 2)} Z{num(zs)}", "X0.", f"{code} Z{num(bottom)} R{num(R)}{q} F{num(op['ipr'])}",
+              "G80", f"G00 Z{num(zs)}", f"X{num(xo * 2)}"]
+    else:
+        for kind, (x, _y, z) in moves:
+            words = [("G", "G00" if kind == "rapid" else "G01"), ("X", num(x * 2)), ("Z", num(z))]
+            if kind == "feed":
+                words.append(("F", num(op["ipr"])))
+            line = m.block(words)
+            if line and line not in ("G00", "G01"):
+                L.append(line)
+    L += ["M09" if coolant else None, "M05"]
+    return [x for x in L if x is not None]
