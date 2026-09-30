@@ -90,7 +90,13 @@ win.docs.close()
 
 # ---- the docs' pocket example: sketch on the plate top, cut down 0.25
 base = vol()
-key(Qt.Key_L)
+def start_xy_sketch():
+    """L. With a body on screen it asks for a face first (PlanePickSession); Enter = the XY plane."""
+    key(Qt.Key_L)
+    if type(win.session).__name__ == "PlanePickSession":
+        key(Qt.Key_Return)
+
+start_xy_sketch()
 win.session.palette.plane.setValue(0.5)
 win.run_tool("Rectangle")
 click(0.75, -0.75, 0.5)
@@ -170,7 +176,7 @@ key(Qt.Key_Z, Qt.ControlModifier)
 check("Ctrl+Z restores the sketch", not win.model.errors and len(win.doc.feature(sk_id)["ents"]) == 3)
 
 # ---- Hide / Show: a construction sketch on the plate top
-key(Qt.Key_L)
+start_xy_sketch()
 win.session.palette.plane.setValue(0.5)
 win.run_tool("Circle")
 click(-1.0, 0.6, 0.5)
@@ -257,6 +263,8 @@ key(Qt.Key_Z, Qt.ControlModifier)
 
 # Delete a body: selected in the Browser, Del pressed in the 3D view
 win.run_tool("Sketch")
+if type(win.session).__name__ == "PlanePickSession":
+    key(Qt.Key_Return)
 win.run_tool("Circle")
 click(0, -2.5)
 click(0.4, -2.5)
@@ -287,7 +295,7 @@ pump()
 check("File → New asks about unsaved work", bool(asked))
 check("new part is empty", win.doc.features == [] and win.model.bodies == [] and win.doc.name == "Untitled")
 shot("16_new_part")
-key(Qt.Key_L)
+start_xy_sketch()
 win.run_tool("Rectangle")
 click(-1, -0.5)
 click(1, 0.5)

@@ -9,9 +9,10 @@ from PySide6.QtWidgets import QFileDialog, QGridLayout, QMainWindow, QMessageBox
 
 from .. import APP_NAME
 from ..core import Document, bracket_plate
+from ..core import plane as pl
 from ..kernel import Kernel
 from . import theme
-from .commands import ExtrudeSession, SketchSession, regions_for
+from .commands import ExtrudeSession, PlanePickSession, SketchSession, regions_for
 from .panels import Browser, Ribbon, StatusBar, Timeline, TopBar
 
 FILE_FILTER = f"{APP_NAME} (*.gcad);;All files (*)"
@@ -125,8 +126,8 @@ class MainWindow(QMainWindow):
         for f in self.doc.applied():
             if f["kind"] == "sketch" and f["id"] != editing and f.get("show") is not False \
                     and (show_all or self.doc.sketch_shown(f, consumed)):
-                z = f["plane_z"] + 0.004
-                vp.add_lines("sketches", [[(x, y, z) for x, y in sk.entity_points(e)] for e in f["ents"]])
+                fr = self.doc.sketch_plane(f)
+                vp.add_lines("sketches", [[pl.to_world(fr, q, 0.004) for q in sk.entity_points(e)] for e in f["ents"]])
         vp.render()
 
     def refresh_tree(self):
@@ -342,18 +343,28 @@ class MainWindow(QMainWindow):
         self.rebuild()
 
     # sketch
-    def start_sketch(self, edit_id: str | None = None):
+    def start_sketch(self, edit_id: str | None = None, plane: dict | None = None):
+        """New sketch: with a part on screen, first pick the face to sketch on (PlanePickSession
+        calls back with `plane`); with nothing built yet, straight onto the XY plane."""
         if edit_id:
             f = self.doc.feature(edit_id)
-            self.session = SketchSession(self, f["name"], f["plane_z"], f["ents"], edit_id)
+            session = SketchSession(self, f["name"], f["plane_z"], f["ents"], edit_id,
+                                    plane=self.doc.sketch_plane(f))
+        elif plane is None and self.model.bodies:
+            self.session = PlanePickSession(self)
+            self.viewport.handler = self.session
+            return
         else:
             n = sum(1 for f in self.doc.features if f["kind"] == "sketch") + 1
-            self.session = SketchSession(self, f"Sketch{n}")
+            session = SketchSession(self, f"Sketch{n}", plane=plane)
+        if isinstance(self.session, PlanePickSession):     # the pick that chose this plane
+            self.session.close()
+        self.session = session
         vp = self.viewport
         vp.handler = self.session
-        vp.set_view("top")
+        vp.look_at(self.session.frame)
         vp.set_parallel(True)
-        vp.hud_view.setText("TOP · SKETCH")
+        vp.hud_view.setText("TOP · SKETCH" if pl.is_xy(self.session.frame) else "FACE · SKETCH")
         self.ribbon.show_sketch_tab(True)
         vp.set_side(self.session.palette)
         self.session.set_tool("Line")
@@ -403,7 +414,7 @@ class MainWindow(QMainWindow):
             self.cancel_command()
             if s.changed():
                 self._snapshot()
-                self.doc.update_sketch(s.edit_id, ents, z, s.origin)
+                self.doc.update_sketch(s.edit_id, ents, z, s.origin, plane=s.frame)
                 self.rebuild()
                 self.document_changed.emit()
                 self._report_edit(s.edit_id)
@@ -415,7 +426,7 @@ class MainWindow(QMainWindow):
             self.viewport.show_toast("Empty sketch discarded")
             return
         self._snapshot()
-        f = self.doc.add_sketch(ents, plane_z=z)
+        f = self.doc.add_sketch(ents, plane_z=z, plane=s.frame)
         self.rebuild()
         self.document_changed.emit()
         self.viewport.show_toast(f"{f['name']} added · {len(ents)} entities")

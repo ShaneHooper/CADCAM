@@ -73,7 +73,13 @@ base = vol()
 check("demo part builds with one body", len(win.model.bodies) == 1 and not win.model.errors)
 
 # Sketch: rect with a circle inside
-key(Qt.Key_L)
+def start_xy_sketch():
+    """L. With a body on screen it asks for a face first (PlanePickSession); Enter = the XY plane."""
+    key(Qt.Key_L)
+    if type(win.session).__name__ == "PlanePickSession":
+        key(Qt.Key_Return)
+
+start_xy_sketch()
 win.run_tool("Rectangle")
 click(0.75, -0.75)
 click(1.75, 0.75)
@@ -103,7 +109,7 @@ removed = (1.5 - math.pi * 0.0625) * 0.5
 check(f"cut removed {removed:.4f} in³", abs((base - vol()) - removed) < 1e-3)
 
 # Sketch on the plate top, join a boss
-key(Qt.Key_L)
+start_xy_sketch()
 win.session.palette.plane.setValue(0.5)
 win.run_tool("Circle")
 click(-1.25, 0, 0.5)
@@ -115,7 +121,7 @@ key(Qt.Key_Return)
 check("join boss added", abs(vol() - (base - removed + math.pi * 0.0625 * 0.75)) < 1e-3)
 
 # New body: hex off the plate, symmetric
-key(Qt.Key_L)
+start_xy_sketch()
 win.run_tool("Polygon")
 click(0, -2.5)
 click(0.5, -2.5)

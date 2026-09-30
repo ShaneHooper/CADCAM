@@ -174,3 +174,65 @@ def test_points_are_not_profiles_and_pick():
     assert sk.nearest(ents, (2.02, 1), 0.05) == 0
     assert sk.nearest(ents, (1.01, 1), 0.05) == 1
     assert sk.nearest(ents, (1.5, 1.5), 0.05) is None
+
+
+# ---- sketch planes (core/plane.py) and snap points
+from gsend_cad.core import plane as pl  # noqa: E402
+
+
+def test_xy_plane_is_the_old_plane_z():
+    fr = pl.xy(0.5)
+    assert pl.is_xy(fr) and pl.height(fr) == 0.5 and pl.label(fr) == "XY plane Z 0.500"
+    assert pl.to_world(fr, (1, 2)) == [1, 2, 0.5] and pl.to_local(fr, (1, 2, 0.5)) == (1, 2)
+    assert pl.of_feature({"plane_z": 0.25}) == pl.xy(0.25)              # a file from before planes
+
+
+def test_face_planes_read_left_to_right_and_up():
+    """y is world Z (up) on any side face; x follows so x × y = n; the origin is the world
+    origin projected onto the plane, so 'from origin' means the same thing on every face."""
+    right = pl.from_normal((4, 1.5, 0.2), (1, 0, 0))
+    assert right["origin"] == [4, 0, 0] and right["y"] == [0, 0, 1] and right["x"] == [0, 1, 0]
+    left = pl.from_normal((0, 0, 0), (-1, 0, 0))
+    assert left["y"] == [0, 0, 1] and left["x"] == [0, -1, 0]           # mirrored, seen from the left
+    front = pl.from_normal((1, -1.5, 0), (0, -1, 0))
+    assert front["x"] == [1, 0, 0] and front["y"] == [0, 0, 1] and front["origin"] == [0, -1.5, 0]
+    top = pl.from_normal((3, 3, 1.25), (0, 0, 1))
+    assert top == pl.xy(1.25) and pl.is_xy(top)
+    bottom = pl.from_normal((0, 0, 0), (0, 0, -1))
+    assert bottom["y"] == [0, 1, 0] and bottom["x"] == [-1, 0, 0]
+    for fr in (right, left, front, bottom):
+        x, y, n = fr["x"], fr["y"], fr["n"]
+        assert [round(v, 9) for v in pl._cross(x, y)] == n
+        assert pl.to_local(fr, pl.to_world(fr, (0.7, -0.3))) == pytest.approx((0.7, -0.3))
+    assert pl.label(right) == "face plane · +X 4.000 in"
+    assert pl.height(pl.offset(right, 0.5)) == 4.5
+
+
+def test_snap_points_ends_mids_centers():
+    pts = sk.snap_points([sk.line((0, 0), (2, 0)), sk.circle((1, 1), 0.5), sk.rect((3, 3), (5, 4))])
+    kinds: dict = {}
+    for u, v, k in pts:
+        kinds.setdefault((u, v), set()).add(k)
+    assert kinds[(0, 0)] == {"origin", "end"} and kinds[(2, 0)] == {"end"} and kinds[(1, 0)] == {"mid"}
+    assert kinds[(1, 1)] == {"center"} and kinds[(1.5, 1)] == {"quad"}
+    assert kinds[(3, 3)] == {"end"} and kinds[(4, 3)] == {"mid"} and kinds[(4, 3.5)] == {"center"}
+    assert sk.nearest_snap(pts, (1.98, 0.03), 0.05) == (2, 0, "end")
+    assert sk.nearest_snap(pts, (1.5, 0.5), 0.05) is None
+    # the origin and a line end at the same spot: the end wins (a real vertex to build on)
+    assert sk.nearest_snap(pts, (0.01, 0.0), 0.05)[2] == "end"
+    edges = [{"pts": [[0, 0], [0, 2]], "kind": "LINE", "center": None},
+             {"pts": [[1, 0], [1.5, 0.5], [1, 1]], "kind": "CIRCLE", "center": [1, 0.5]}]
+    ek = {(u, v): k for u, v, k in sk.edge_snap_points(edges)}
+    assert ek[(0, 2)] == "end" and ek[(0.0, 1.0)] == "mid" and ek[(1, 0.5)] == "center" and ek[(1.5, 0.5)] == "mid"
+
+
+def test_document_keeps_a_face_plane_and_describes_it():
+    doc = Document("t")
+    fr = pl.from_normal((2, 0, 0), (1, 0, 0))
+    s = doc.add_sketch([sk.circle((0, 0.25), 0.2)], plane_z=0.0, plane=fr)
+    assert s["plane"] == fr and Document.sketch_plane(s) == fr
+    assert doc.describe(s) == "1 entities · face plane · +X 2.000 in"
+    xy = doc.add_sketch([sk.circle((0, 0), 1)], plane_z=0.5, plane=pl.xy(0.5))
+    assert "plane" not in xy and doc.describe(xy) == "1 entities · XY plane Z 0.500"   # old shape kept
+    doc.update_sketch(s["id"], s["ents"], 0.0, plane=pl.xy(0.0))
+    assert "plane" not in doc.feature(s["id"])

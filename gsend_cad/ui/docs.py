@@ -43,6 +43,14 @@ something to look at. FILE → New replaces it with an empty part.</p>
 <ol>
 <li>Press <b>L</b> (or <b>Solid → Sketch</b>). The view turns to look straight down on the XY
 plane, the <b>SKETCH</b> tab opens, and the <b>Sketch Palette</b> appears on the right.</li>
+<li><b>Sketch on the part.</b> With a body on screen, Sketch (or <b>L</b>) first asks for a face:
+move over any flat face of the part and it is outlined, click it and the sketch opens on that face,
+looking square on. Click empty space or press <b>Enter</b> to sketch on the XY plane instead;
+<b>Esc</b> cancels. The palette's <b>Plane</b> field then slides the sketch off that face.</li>
+<li><b>Snap points.</b> While drawing, the cursor jumps to the ends, midpoints and centers of what
+is already in the sketch, to the origin, and to the part's edges that lie on the sketch plane
+(drawn dimmed). A small diamond marks the point and the tag says END, MID or CENTER. Away from
+one, the grid snap applies as usual.</li>
 <li><b>Set the height first</b> if the sketch belongs on top of something: in the palette,
 set <b>Plane</b> to the Z height. Example: the demo plate is 0.5 thick, so <b>Plane 0.5</b>
 draws on its top face. Leave it at 0 to draw on the bottom (XY) plane.</li>

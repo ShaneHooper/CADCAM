@@ -77,7 +77,13 @@ def close(a, b):
     return all(abs(p - q) < 1e-9 for p, q in zip(a, b))
 
 
-key(Qt.Key_L)
+def start_xy_sketch():
+    """L. With a body on screen it asks for a face first (PlanePickSession); Enter = the XY plane."""
+    key(Qt.Key_L)
+    if type(win.session).__name__ == "PlanePickSession":
+        key(Qt.Key_Return)
+
+start_xy_sketch()
 s = win.session
 win.run_tool("Rectangle")
 click(1, 1)
@@ -174,7 +180,7 @@ check("finished sketch keeps 4 entities incl. the point",
 shot("dims_03_done")
 
 # ---- fast clicks must draw, never leave the view stuck orbiting; Undo button with Line armed
-key(Qt.Key_L)
+start_xy_sketch()
 s = win.session
 win.run_tool("Line")
 a, b = screen(0, 0), screen(1, 0)

@@ -3,7 +3,10 @@
 Features are plain dicts so a document saves as JSON and can be read by the CAM side
 of G-SEND.IO without importing Qt or the geometry kernel:
 
-    sketch:  {"id", "kind": "sketch",  "name", "plane_z", "ents": [...]}
+    sketch:  {"id", "kind": "sketch",  "name", "plane_z", "ents": [...], "plane": frame}
+             plane (see core/plane.py) is where the 2D entities sit: absent = the XY plane at
+             plane_z, as every file before planes could be picked; on a picked face plane_z is
+             the offset along the face normal from the frame's base.
     extrude: {"id", "kind": "extrude", "name", "op": "join"|"cut"|"new", "distance",
               "direction": "one"|"sym", "profiles": [{"sketch", "outer", "holes"}]}
     hole:    {"id", "kind": "hole",    "name", "points": [[x, y]], "diameter",
@@ -22,6 +25,7 @@ import copy
 import json
 from typing import Callable
 
+from . import plane as pl
 from . import sketch as sk
 
 FORMAT = "gsend-cad/1"
@@ -74,8 +78,16 @@ class Document:
         self._changed("features")
         return f
 
-    def add_sketch(self, ents, plane_z=0.0, **kw):
-        return self.add({"kind": "sketch", "plane_z": float(plane_z), "ents": copy.deepcopy(list(ents)), **kw})
+    def add_sketch(self, ents, plane_z=0.0, plane=None, **kw):
+        f = {"kind": "sketch", "plane_z": float(plane_z), "ents": copy.deepcopy(list(ents)), **kw}
+        if plane is not None and not pl.is_xy(plane):
+            f["plane"] = copy.deepcopy(plane)
+        return self.add(f)
+
+    @staticmethod
+    def sketch_plane(f: dict) -> dict:
+        """Where a sketch's entities sit (core.plane frame)."""
+        return pl.of_feature(f)
 
     def add_extrude(self, profiles, distance, op="join", direction="one", **kw):
         if op not in ("join", "cut", "new"):
@@ -114,7 +126,7 @@ class Document:
         return self.add({"kind": "hole", "points": [list(p) for p in points], "diameter": float(diameter),
                          "depth": depth, "top_z": float(top_z), **kw})
 
-    def update_sketch(self, fid: str, ents, plane_z: float, origin=None):
+    def update_sketch(self, fid: str, ents, plane_z: float, origin=None, plane=None):
         """Replace a sketch's entities in place (Edit Sketch) and keep later extrudes pointing
         at the same shapes. `origin[i]` is the old index of new entity i, or None if it is new.
         A profile that used a deleted entity is left unresolvable, so its extrude shows red."""
@@ -124,6 +136,10 @@ class Document:
         remap = {old: new for new, old in enumerate(origin) if old is not None}
         f["ents"] = copy.deepcopy(list(ents))
         f["plane_z"] = float(plane_z)
+        if plane is not None and not pl.is_xy(plane):
+            f["plane"] = copy.deepcopy(plane)
+        elif plane is not None:
+            f.pop("plane", None)
         for g in self.features:
             if g["kind"] != "extrude":
                 continue
@@ -167,7 +183,7 @@ class Document:
     def describe(self, f: dict) -> str:
         k = f["kind"]
         if k == "sketch":
-            return f"{len(f['ents'])} entities · XY plane Z {f['plane_z']:.3f}"
+            return f"{len(f['ents'])} entities · {pl.label(pl.of_feature(f))}"
         if k == "extrude":
             op = {"join": "Join", "cut": "Cut", "new": "New Body"}[f["op"]]
             sym = " symmetric" if f["direction"] == "sym" else ""

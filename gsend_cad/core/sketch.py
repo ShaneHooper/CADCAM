@@ -324,6 +324,71 @@ def _ticks(a, b):
             [[b[0] - ux + px, b[1] - uy + py], b, [b[0] - ux - px, b[1] - uy - py]]]
 
 
+# ---------------------------------------------------------------- snap points
+# What the cursor jumps to while drawing: ends, midpoints and centers of what is already
+# there. Model edges lying on the sketch plane are added by the UI (kernel.plane_edges).
+
+def snap_points(ents) -> list[tuple]:
+    """(u, v, kind) for every snap point of the sketch: 'end', 'mid', 'center', 'quad'
+    (a circle's four quadrant points), 'point'. The origin is always there."""
+    out = [(0.0, 0.0, "origin")]
+    for e in ents:
+        t = e["type"]
+        if t == "point":
+            out.append((e["p"][0], e["p"][1], "point"))
+        elif t == "circle":
+            (cx, cy), r = e["c"], e["r"]
+            out.append((cx, cy, "center"))
+            out += [(cx + r, cy, "quad"), (cx - r, cy, "quad"), (cx, cy + r, "quad"), (cx, cy - r, "quad")]
+        elif t == "line":
+            (x0, y0), (x1, y1) = e["pts"]
+            out += [(x0, y0, "end"), (x1, y1, "end"), ((x0 + x1) / 2, (y0 + y1) / 2, "mid")]
+        else:                                   # rect, polygon: every corner, every side's middle, the center
+            pts = e["pts"]
+            for (x0, y0), (x1, y1) in zip(pts, pts[1:] + pts[:1]):
+                out += [(x0, y0, "end"), ((x0 + x1) / 2, (y0 + y1) / 2, "mid")]
+            c = _center(pts)
+            out.append((c[0], c[1], "center"))
+    return out
+
+
+def edge_snap_points(edges) -> list[tuple]:
+    """Snap points of model edges on the plane, as kernel.plane_edges gives them:
+    [{"pts": [[u, v], ...], "kind": "LINE" | "CIRCLE" | ..., "center": [u, v] | None}]."""
+    out = []
+    for ed in edges:
+        pts = ed["pts"]
+        if len(pts) < 2:
+            continue
+        a, b = pts[0], pts[-1]
+        if ed["kind"] == "LINE":
+            out += [(a[0], a[1], "end"), (b[0], b[1], "end"), ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, "mid")]
+        else:
+            closed = math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-9
+            if not closed:
+                out += [(a[0], a[1], "end"), (b[0], b[1], "end")]
+                m = pts[len(pts) // 2]
+                out.append((m[0], m[1], "mid"))
+            if ed.get("center") is not None:
+                out.append((ed["center"][0], ed["center"][1], "center"))
+    return out
+
+
+SNAP_RANK = {"end": 0, "point": 0, "center": 1, "origin": 1, "mid": 2, "quad": 3}
+
+
+def nearest_snap(points, p, tol: float):
+    """The snap point within tol of p: closest wins, an end beats a midpoint at equal distance."""
+    best, hit = None, None
+    for u, v, kind in points:
+        d = math.hypot(u - p[0], v - p[1])
+        if d <= tol:
+            score = (round(d / max(tol, 1e-12), 3), SNAP_RANK.get(kind, 9))
+            if best is None or score < best:
+                best, hit = score, (u, v, kind)
+    return hit
+
+
 def distance(e, p) -> float:
     """Distance from point p to an entity's outline (what a click near it measures)."""
     if e["type"] == "point":

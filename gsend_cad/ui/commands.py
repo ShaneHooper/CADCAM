@@ -13,9 +13,10 @@ from functools import partial
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QPushButton,
                                QScrollArea, QToolButton, QVBoxLayout, QWidget)
 
+from ..core import plane as pl
 from ..core import sketch as sk
 from ..core.profiles import region_at, sketch_regions
-from ..kernel import extrude_tool, region_face, triangles
+from ..kernel import extrude_tool, face_outline, planar_face_at, plane_edges, region_face, triangles
 from . import theme
 
 TOOL_KEYS = {"Line": "line", "Rectangle": "rect", "Center Rect": "center_rect", "Circle": "circle",
@@ -24,6 +25,7 @@ HINTS = {"line": "Click start, click end. Keep clicking to chain. Esc ends the c
          "rect": "Click two opposite corners.", "center_rect": "Click center, then a corner.",
          "circle": "Click center, then a point on the circle.", "polygon": "Click center, then a vertex.",
          "point": "Click to place a point."}
+SNAP_PX = 8         # how close (screen px) the cursor must come to an end / mid / center to snap
 SELECT_HINT = ("Click a line or shape (or its row in the palette) to type exact values; right-click a "
                "dimension to change it. Delete removes it. L line · R rectangle · C circle · P polygon · "
                "Enter finishes")
@@ -170,7 +172,7 @@ class SketchPalette(Panel):
         self.plane.setRange(-100, 100)
         self.plane.setDecimals(3)
         self.plane.setSingleStep(0.25)
-        self.plane.setPrefix("XY · Z ")
+        self.plane.setPrefix("XY · Z " if pl.is_xy(session.base) else "Face · off ")
         self.plane.setButtonSymbols(QDoubleSpinBox.NoButtons)
         self.plane.setValue(session.plane_z)
         self.plane.valueChanged.connect(session.set_plane)
@@ -325,13 +327,79 @@ class SketchPalette(Panel):
                 box.blockSignals(False)
 
 
+class PlanePickSession:
+    """Sketch on the part: hover a flat face of the model and it is outlined, click it and the
+    sketch opens on that face. Click empty space or press Enter for the XY plane. Esc cancels.
+    Left drag still orbits, so a side or the bottom can be turned into view first."""
+    captures_left = False
+
+    def __init__(self, win):
+        self.win, self.vp = win, win.viewport
+        self.hover = None                    # (body, face, frame) under the cursor
+        self.vp.show_banner(f"SKETCH · <span style='color:{theme.ACCENT}'>PICK A FACE</span>")
+        win.message("Click a flat face of the part to sketch on it · click empty space or press Enter "
+                    "for the XY plane · Esc cancels")
+
+    def _face_at(self, ev):
+        p = self.vp.pick_world(ev.position().toPoint())
+        return planar_face_at(self.win.model.bodies, p) if p else None
+
+    def on_move(self, w, ev):
+        if ev.buttons():
+            return
+        hit = self._face_at(ev)
+        if (hit is None) == (self.hover is None) and (hit is None or hit[2] == self.hover[2]):
+            return
+        self.hover = hit
+        self.vp.clear("hover", render=False)
+        if hit:
+            self.vp.add_lines("hover", face_outline(hit[1]), color=theme.ACCENT, width=2.4)
+        self.vp.plotter.setCursor(Qt.PointingHandCursor if hit else Qt.ArrowCursor)
+        self.vp.render()
+
+    def on_click(self, w, ev):
+        hit = self._face_at(ev)
+        self.win.start_sketch(plane=hit[2] if hit else pl.xy(0.0))
+
+    def on_key(self, ev) -> bool:
+        if ev.key() in (Qt.Key_Return, Qt.Key_Enter):
+            self.win.start_sketch(plane=pl.xy(0.0))
+            return True
+        if ev.key() == Qt.Key_Escape:
+            self.win.cancel_command()
+            return True
+        return False
+
+    def ribbon_tool(self, label: str):
+        if label == "Cancel":
+            self.win.cancel_command()
+            return
+        self.win.start_sketch(plane=pl.xy(0.0))       # a drawing tool clicked now: XY, as before
+        if label in TOOL_KEYS and self.win.session is not None:
+            self.win.session.ribbon_tool(label)
+
+    def close(self):
+        self.vp.clear("hover", render=False)
+        self.vp.plotter.setCursor(Qt.ArrowCursor)
+        self.vp.show_banner(None)
+
+
 class SketchSession:
     captures_left = True
 
-    def __init__(self, win, name: str, plane_z: float = 0.0, ents=None, edit_id: str | None = None):
+    def __init__(self, win, name: str, plane_z: float = 0.0, ents=None, edit_id: str | None = None,
+                 plane: dict | None = None):
         self.win, self.vp = win, win.viewport
         self.name = name
-        self.plane_z = plane_z
+        self.plane_z = plane_z               # offset along the plane's normal from `base`
+        # the sketch plane (core.plane): XY, or a face of the part. `base` is the picked face
+        # itself; plane_z slides the sketch off it (the palette's Plane field), like Z on XY.
+        self.base = pl.offset(plane, -plane_z) if plane is not None else pl.xy(0.0)
+        self.frame = pl.offset(self.base, plane_z)
+        self.snap_hit = None                 # (u, v, kind) the cursor is snapped to right now
+        self.sketch_snaps: list = []         # ends / mids / centers of what is drawn
+        self.model_edges: list = []          # the part's edges lying on the plane (kernel.plane_edges)
+        self.model_snaps: list = []
         self.edit_id = edit_id               # set when editing a sketch that is already in the timeline
         self.ents: list = [dict(e) for e in ents or []]
         self.origin: list = list(range(len(self.ents)))   # old index of each entity; None = drawn now
@@ -344,9 +412,7 @@ class SketchSession:
         self.gen = 0                         # bumps when the palette's fields are rebuilt
         self.palette = SketchPalette(self)
         self.editor = DimEditor(self.vp)     # right-click a dimension: type its value in place
-        self.vp.plane_z = plane_z
-        if self.ents:
-            self.redraw()
+        self._plane_changed()
 
     def changed(self) -> bool:
         return (self.ents, self.plane_z) != self.start
@@ -396,8 +462,20 @@ class SketchSession:
             self.vp.show_toast(f"{kind} deleted")
 
     def set_plane(self, z):
-        self.plane_z = self.vp.plane_z = float(z)
+        self.plane_z = float(z)
         self.pts = []
+        self._plane_changed()
+
+    def _plane_changed(self):
+        """The plane moved: the viewport reads mouse rays on it, and the part's edges that lie on
+        it are what the cursor can snap to (and are drawn, dimmed, so they can be seen)."""
+        self.frame = pl.offset(self.base, self.plane_z)
+        self.vp.set_frame(self.frame)
+        try:
+            self.model_edges = plane_edges(self.win.model.bodies, self.frame)
+        except Exception:
+            self.model_edges = []
+        self.model_snaps = sk.edge_snap_points(self.model_edges)
         self.redraw()
 
     def set_tool(self, label: str | None):
@@ -408,22 +486,47 @@ class SketchSession:
         self.win.ribbon.set_active(label)
         name = label.upper() if label else "SELECT"
         head = f"EDIT {self.name.upper()}" if self.edit_id else "SKETCH"
-        self.vp.show_banner(f"{head} · XY PLANE · <span style='color:{theme.ACCENT}'>{name}</span>")
+        where = "XY PLANE" if pl.is_xy(self.frame) else "FACE PLANE"
+        self.vp.show_banner(f"{head} · {where} · <span style='color:{theme.ACCENT}'>{name}</span>")
         self.win.message(HINTS.get(self.tool, SELECT_HINT))
 
     def _snap(self, w, ev):
+        """Where a click lands: a snap point (end / mid / center of the sketch or of the part's
+        edges on this plane) within SNAP_PX of the cursor beats the grid."""
+        if ev is not None:
+            tol = SNAP_PX * self.vp.pixel_size(ev.position().toPoint())
+            hit = sk.nearest_snap(self.sketch_snaps + self.model_snaps, w, tol)
+            if hit is not None:
+                self.snap_hit = hit
+                return [hit[0], hit[1]]
+        self.snap_hit = None
         step = self.palette.step()
         if ev is not None and ev.modifiers() & Qt.ShiftModifier:
             step /= 4
         return [sk.snap(w[0], step), sk.snap(w[1], step)]
 
+    def _mark_snap(self, p, pos):
+        """A small diamond on the snap point the cursor is held to (none: nothing drawn)."""
+        self.vp.clear("snapmark", render=False)
+        if self.snap_hit is None:
+            return
+        m = 5 * self.vp.pixel_size(pos)
+        u, v = p
+        ring = [(u + m, v), (u, v + m), (u - m, v), (u, v - m), (u + m, v)]
+        self.vp.add_lines("snapmark", [[pl.to_world(self.frame, q, 0.008) for q in ring]],
+                          color=theme.ACCENT, width=1.6)
+
     def _lines(self, ents, dz=0.004):
-        z = self.plane_z + dz
-        return [[(x, y, z) for x, y in sk.entity_points(e)] for e in ents]
+        return [[pl.to_world(self.frame, q, dz) for q in sk.entity_points(e)] for e in ents]
 
     def redraw(self):
         self.vp.clear("sketch", render=False)
         self.vp.clear("sel", render=False)
+        self.vp.clear("plane_edges", render=False)
+        self.sketch_snaps = sk.snap_points(self.ents)
+        if self.model_edges:
+            self.vp.add_lines("plane_edges", [[pl.to_world(self.frame, q, 0.003) for q in e["pts"]]
+                                              for e in self.model_edges], color=theme.FG3, width=1.0)
         others = [e for i, e in enumerate(self.ents) if i != self.sel]
         self.vp.add_lines("sketch", self._lines(others))
         if self.sel is not None:
@@ -438,30 +541,32 @@ class SketchSession:
         self.vp.clear("dims", render=False)
         show = range(len(self.ents)) if self.palette.all_dims.isChecked() else \
             ([self.sel] if self.sel is not None else [])
-        z = self.plane_z + 0.006
         lines, labels = [], []
         for i in show:
             for d in sk.dimensions(self.ents[i]):
-                lines += [[(x, y, z) for x, y in ln] for ln in d["lines"]]
-                labels.append(((d["at"][0], d["at"][1], z), d["text"]))
+                lines += [[pl.to_world(self.frame, q, 0.006) for q in ln] for ln in d["lines"]]
+                labels.append((tuple(pl.to_world(self.frame, d["at"], 0.006)), d["text"]))
         self.vp.add_lines("dims", lines, color=theme.FG2, width=1.0)
         self.vp.add_labels("dims", labels)
         if render:
             self.vp.render()
 
     def on_move(self, w, ev):
-        p = self._snap(w, ev)
-        pos = ev.position().toPoint()
         if not self.tool:
             return
+        pos = ev.position().toPoint()
+        p = self._snap(w, ev)
+        self._mark_snap(p, pos)
+        tag = f"  · {self.snap_hit[2].upper()}" if self.snap_hit else ""
         if not self.pts or self.tool == "point":
-            self.vp.show_dim(f"X {sk.fmt(p[0])}  Y {sk.fmt(p[1])}", pos)
+            self.vp.show_dim(f"X {sk.fmt(p[0])}  Y {sk.fmt(p[1])}{tag}", pos)
+            self.vp.render()
             return
         ent = sk.build_entity(self.tool, self.pts[0], p, int(self.palette.sides.currentText()))
         self.vp.clear("preview", render=False)
         if ent:
             self.vp.add_lines("preview", self._lines([ent]), opacity=0.45)
-        self.vp.show_dim(sk.preview_label(self.tool, self.pts[0], p, int(self.palette.sides.currentText())), pos)
+        self.vp.show_dim(sk.preview_label(self.tool, self.pts[0], p, int(self.palette.sides.currentText())) + tag, pos)
         self.vp.render()
 
     def _add(self, ent):
@@ -610,7 +715,7 @@ class SketchSession:
             self.win.ribbon.set_active(None)
 
     def close(self):
-        for g in ("sketch", "sel", "dims", "preview"):
+        for g in ("sketch", "sel", "dims", "preview", "plane_edges", "snapmark"):
             self.vp.clear(g, render=False)
         self.vp.dim.hide()
         self.editor.hide()
@@ -669,13 +774,13 @@ class ExtrudeSession:
     def __init__(self, win, regions, planes):
         self.win, self.vp = win, win.viewport
         self.regions = regions          # [Region]
-        self.planes = planes            # sketch id -> plane z
+        self.planes = planes            # sketch id -> plane frame (core.plane)
         self.sel: list = []             # selected region keys, in pick order
         self.hover = None
         self.fill_actors = {}
         self.panel = ExtrudePanel(self)
         for r in regions:
-            m = mesh_of(region_face(r, self.planes[r.sketch] + 0.002))
+            m = mesh_of(region_face(r, self.planes[r.sketch], 0.002))
             if m.n_points:
                 a = self.vp.add_surface("fills", m, theme.ACCENT, 0.0, lit=False)
                 self.fill_actors[r.key] = a
@@ -688,8 +793,8 @@ class ExtrudeSession:
 
     def pick(self, ev):
         best = None
-        for sid, z in self.planes.items():
-            w = self.vp.world_at(ev.position().toPoint(), z)
+        for sid, fr in self.planes.items():
+            w = self.vp.world_at(ev.position().toPoint(), frame=fr)
             if not w:
                 continue
             r = region_at([r for r in self.regions if r.sketch == sid], w)
@@ -778,12 +883,12 @@ class ExtrudeSession:
 
 
 def regions_for(doc):
-    """Pickable regions from every applied sketch, plus each sketch's plane height."""
+    """Pickable regions from every applied sketch, plus each sketch's plane (core.plane frame)."""
     regions, planes = [], {}
     for f in doc.applied():
         if f["kind"] == "sketch" and f.get("show") is not False:     # a hidden sketch can't be picked
             rs = sketch_regions(f["id"], f["ents"])
             if rs:
                 regions += rs
-                planes[f["id"]] = f["plane_z"]
+                planes[f["id"]] = doc.sketch_plane(f)
     return regions, planes

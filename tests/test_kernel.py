@@ -98,3 +98,32 @@ def test_remove_feature_drops_a_body_and_renames_apply():
     doc.add_remove("body2")                 # already gone: that feature fails, model still builds
     m = k.build(doc)
     assert len(m.bodies) == 1 and doc.features[-1]["id"] in m.errors
+
+
+# ---- sketches on a model face (core/plane.py frames through the kernel)
+def test_extrude_from_a_side_face(kernel):
+    """A circle sketched on the plate's +X face and extruded 0.5 grows the part along +X."""
+    from gsend_cad.core import plane as pl
+    from gsend_cad.kernel import planar_face_at, plane_edges
+    doc = bracket_plate()
+    m0 = kernel.build(doc)
+    hit = planar_face_at(m0.bodies, (2.0, 0.3, 0.2))                 # a point on the +X side
+    assert hit is not None
+    body, face, fr = hit
+    assert fr == pl.from_normal((2, 0, 0), (1, 0, 0)) and fr["origin"] == [2, 0, 0]
+    assert planar_face_at(m0.bodies, (2.5, 0.3, 0.2)) is None         # off the part
+    s = doc.add_sketch([sk.circle((0, 0.25), 0.2)], plane=fr)         # local (u, v): u = world Y, v = world Z
+    doc.add_extrude(sketch_regions(s["id"], s["ents"]), 0.5, op="join")
+    m = kernel.build(doc)
+    assert not m.errors
+    assert m.bodies[0].volume == pytest.approx(m0.bodies[0].volume + math.pi * 0.2 ** 2 * 0.5, rel=1e-4)
+    (_, _, _), (x1, _, _) = m.bodies[0].bbox()
+    assert x1 == pytest.approx(2.5)
+    # the side face's in-plane edges, in sketch coordinates: the face is 0.5 tall (v) and, between
+    # the two 0.25 corner radii, 2.5 wide (u); the corner arcs curve away and are not on the plane
+    edges = plane_edges(m0.bodies, fr)
+    assert edges and all(e["kind"] == "LINE" for e in edges) and len(edges) == 4
+    us = [p[0] for e in edges for p in e["pts"]]
+    vs = [p[1] for e in edges for p in e["pts"]]
+    assert min(vs) == pytest.approx(0) and max(vs) == pytest.approx(0.5)
+    assert min(us) == pytest.approx(-1.25) and max(us) == pytest.approx(1.25)

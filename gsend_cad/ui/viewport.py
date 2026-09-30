@@ -10,8 +10,9 @@ from pyvistaqt import QtInteractor
 from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QToolButton, QVBoxLayout, QWidget
 from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
-from vtkmodules.vtkRenderingCore import vtkBillboardTextActor3D, vtkMapper, vtkRenderer
+from vtkmodules.vtkRenderingCore import vtkBillboardTextActor3D, vtkCellPicker, vtkMapper, vtkRenderer
 
+from ..core import plane as pl
 from . import icons, theme
 
 VIEWS = {"home": (6, -7, 5), "top": (0, 0, 10), "front": (0, -10, 0), "left": (-10, 0, 0), "right": (10, 0, 0),
@@ -42,7 +43,7 @@ class Viewport(QWidget):
         self.setObjectName("view")
         self.handler = None                  # sketch / extrude session receiving mouse events
         self.key_cb = None                   # the main window's key handler
-        self.plane_z = 0.0
+        self.frame = pl.xy(0.0)              # the sketch plane mouse rays are read on (core.plane)
         self.display_mode = 0
         self._groups: dict[str, list] = {}
         self._body_actors: list = []
@@ -82,6 +83,39 @@ class Viewport(QWidget):
         self.plotter.setMouseTracking(True)
         self._build_overlays()
         self.set_view("home")
+
+    # ---------- the sketch plane ----------
+    @property
+    def plane_z(self) -> float:
+        """Height of the plane along its normal; setting it selects the XY plane at that height
+        (how every caller spoke before a plane could be picked on the part)."""
+        return pl.height(self.frame)
+
+    @plane_z.setter
+    def plane_z(self, z: float):
+        self.frame = pl.xy(float(z))
+
+    def set_frame(self, frame: dict):
+        self.frame = frame
+
+    def look_at(self, frame: dict, dist: float = 10.0):
+        """Camera square on to a sketch plane: looking along -n with the plane's y up, so the
+        sketch reads left-to-right and up the way core.plane laid its axes."""
+        o, n, y = frame["origin"], frame["n"], frame["y"]
+        self.plotter.camera_position = [tuple(a + b * dist for a, b in zip(o, n)), tuple(o), tuple(y)]
+        self.plotter.camera.view_angle = 35
+        self.plotter.renderer.ResetCameraClippingRange()
+        self.plotter.render()
+
+    def pick_world(self, pos: QPoint):
+        """World point on a body under the mouse, or None (the grid is not pickable)."""
+        picker = vtkCellPicker()
+        picker.SetTolerance(0.0005)
+        r = self.plotter.devicePixelRatioF()
+        picker.Pick(pos.x() * r, (self.plotter.height() - pos.y()) * r, 0, self.plotter.renderer)
+        if picker.GetActor() is None:
+            return None
+        return tuple(float(c) for c in picker.GetPickPosition())
 
     # ---------- scene ----------
     def _build_grid(self):
@@ -195,9 +229,10 @@ class Viewport(QWidget):
         self.hud_disp.setText(DISPLAY_MODES[self.display_mode])
         return self.display_mode
 
-    def world_at(self, pos: QPoint, z: float | None = None):
-        """World (x, y) where the mouse ray meets the plane Z = z."""
-        z = self.plane_z if z is None else z
+    def world_at(self, pos: QPoint, z: float | None = None, frame: dict | None = None):
+        """Sketch (u, v) where the mouse ray meets the sketch plane: `frame`, else the XY plane
+        at `z`, else the viewport's current plane. On the XY plane (u, v) is world (x, y)."""
+        fr = pl.xy(z) if z is not None else (frame or self.frame)
         ren = self.plotter.renderer
         r = self.plotter.devicePixelRatioF()
         x, y = pos.x() * r, (self.plotter.height() - pos.y()) * r
@@ -208,14 +243,16 @@ class Viewport(QWidget):
             w = ren.GetWorldPoint()
             pts.append(np.array(w[:3]) / w[3])
         p0, p1 = pts
-        dz = p1[2] - p0[2]
-        if abs(dz) < 1e-12:
+        n, o = np.array(fr["n"], float), np.array(fr["origin"], float)
+        denom = float(np.dot(n, p1 - p0))
+        if abs(denom) < 1e-12:
             return None
-        t = (z - p0[2]) / dz
+        t = float(np.dot(n, o - p0)) / denom
         if t < 0:
             return None
         hit = p0 + t * (p1 - p0)
-        return float(hit[0]), float(hit[1])
+        u, v = pl.to_local(fr, (float(hit[0]), float(hit[1]), float(hit[2])))
+        return u, v
 
     # ---------- mouse routing ----------
     def eventFilter(self, obj, ev):
