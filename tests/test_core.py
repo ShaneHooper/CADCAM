@@ -403,3 +403,26 @@ def test_move_times_match_cycle_time():
     t = cam.move_times(mv, s, op)
     feed_t = sum(x for x, (k, _p) in zip(t, mv) if k == "feed")
     assert len(t) == len(mv) and t[0] == 0 and abs(feed_t - cam.cycle_time(mv, s, op)) < 1e-12
+
+
+def test_wcs_picked_point_and_x_direction():
+    from gsend_cad.core import cam
+    box = ((0, 0, 0), (4, 3, 0.5))
+    s = {**cam.new_setup("milling"), "wcs": "point", "wcs_point": [0, 0, 0.5], "x_dir": "-x"}
+    s = cam.validate(s)
+    w = cam.wcs(box, s)
+    assert w["origin"] == [0, 0, 0.5] and w["x"] == [-1.0, 0.0, 0.0]
+    op = cam.new_op(s)
+    aligned = cam.face_toolpath(box, {**s, "x_dir": "+x"}, op)
+    turned = cam.toolpath(box, s, op)
+    assert [(-x, -y, z) for _k, (x, y, z) in aligned] == pytest.approx([p for _k, p in turned])   # 180° about Z
+    world = cam.toolpath_world(box, s, turned)
+    assert [p for _k, p in world] == pytest.approx([p for _k, p in cam.toolpath_world(box, {**s, "x_dir": "+x"}, aligned)])
+    y = cam.validate({**s, "x_dir": "+y"})                        # X along model Y: 90° turn
+    ty = cam.toolpath(box, y, op)
+    assert [(yy, -x, z) for _k, (x, yy, z) in aligned] == pytest.approx([p for _k, p in ty])
+    with pytest.raises(ValueError):
+        cam.validate({**cam.new_setup("milling"), "wcs": "point"})   # no point picked yet
+    pts = cam.stock_snap_points(box, cam.new_setup("milling"))
+    assert sum(k == "stock corner" for _p, k in pts) == 8 and sum(k == "stock edge mid" for _p, k in pts) == 12
+    assert sum(k == "stock face center" for _p, k in pts) == 6

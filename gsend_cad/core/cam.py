@@ -26,7 +26,10 @@ import math
 MILLING, TURNING = "milling", "turning"
 TYPES = {MILLING: "Milling", TURNING: "Turning"}
 MILL_WCS = {"top-center": "Stock top, center", "top-corner": "Stock top, front-left corner",
-            "model": "Model origin"}
+            "model": "Model origin", "point": "Picked point"}
+# which model direction the WCS +X points along (a turn about Z; the WCS stays right-handed)
+X_DIRS = {"+x": ("Model +X", (1.0, 0.0)), "-x": ("Model −X", (-1.0, 0.0)),
+          "+y": ("Model +Y", (0.0, 1.0)), "-y": ("Model −Y", (0.0, -1.0))}
 TURN_WCS = {"stock-face": "Stock front face", "part-face": "Part front face"}
 AXES = {"x": 0, "y": 1, "z": 2}
 STOCK_MODES = {"offset": "Stock per side", "size": "Fixed size"}
@@ -62,6 +65,15 @@ def validate(s: dict) -> dict:
             raise ValueError("stock size must be greater than 0")
     if s["type"] == MILLING and s["wcs"] not in MILL_WCS:
         raise ValueError(f"bad milling WCS {s['wcs']!r}")
+    if s["type"] == MILLING:
+        s["x_dir"] = s.get("x_dir", "+x")
+        if s["x_dir"] not in X_DIRS:
+            raise ValueError(f"bad X direction {s['x_dir']!r}")
+        if s["wcs"] == "point":
+            pt = s.get("wcs_point")
+            if not pt or len(pt) != 3:
+                raise ValueError("pick the WCS point in the view first")
+            s["wcs_point"] = [float(v) for v in pt]
     if s["type"] == TURNING:
         if s["axis"] not in AXES or s["front"] not in "+-" or s["wcs"] not in TURN_WCS:
             raise ValueError("bad turning axis / front / WCS")
@@ -176,11 +188,14 @@ def wcs(bbox, s, radius: float = 0.0) -> dict:
         lo, hi = stock_box(bbox, s)
         if s["wcs"] == "model":
             o = [0.0, 0.0, 0.0]
+        elif s["wcs"] == "point":
+            o = list(s["wcs_point"])
         elif s["wcs"] == "top-corner":
             o = [lo[0], lo[1], hi[2]]
         else:
             o = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, hi[2]]
-        return {"origin": o, "x": [1.0, 0.0, 0.0], "z": [0.0, 0.0, 1.0]}
+        cx, cy = X_DIRS[s.get("x_dir", "+x")][1]
+        return {"origin": o, "x": [cx, cy, 0.0], "z": [0.0, 0.0, 1.0]}
     cyl = stock_cylinder(bbox, radius, s)
     i, center, (_back, front) = turning_frame(bbox, s)
     if s["wcs"] == "part-face":
@@ -198,7 +213,11 @@ def describe(s: dict) -> str:
     if s["type"] == MILLING:
         stock = (f"stock {st['x']:.3f} × {st['y']:.3f} × {st['z']:.3f}" if sized
                  else f"stock +{st['side']:.3f} sides, +{st['top']:.3f} top")
-        return f"Milling · {stock} · WCS {MILL_WCS[s['wcs']].lower()}"
+        where = MILL_WCS[s["wcs"]].lower()
+        if s["wcs"] == "point":
+            where = "at " + ", ".join(f"{v:.4f}" for v in s["wcs_point"])
+        turn = "" if s.get("x_dir", "+x") == "+x" else f" · X along {X_DIRS[s['x_dir']][0].lower()}"
+        return f"Milling · {stock} · WCS {where}{turn}"
     stock = (f"bar Ø{st['dia']:.3f} × {st['length']:.3f}" if sized
              else f"OD +{st['od']:.3f}, face +{st['face']:.3f}")
     return f"Turning · {s['axis'].upper()} axis · {stock} · Z0 {TURN_WCS[s['wcs']].lower()}"
@@ -368,10 +387,16 @@ def contour_toolpath(bbox, setup: dict, op: dict, loops) -> list[tuple]:
 
 
 def toolpath(bbox, setup: dict, op: dict, radius: float = 0.0, loops=None) -> list[tuple]:
-    """Moves for any operation (face or contour)."""
+    """Moves for any operation (face or contour), in the setup's WCS - turned about Z when the
+    setup's X points another way (the path generators work in model-aligned axes)."""
     if op.get("type", "face") == "contour":
-        return contour_toolpath(bbox, setup, op, loops)
-    return face_toolpath(bbox, setup, op, radius)
+        moves = contour_toolpath(bbox, setup, op, loops)
+    else:
+        moves = face_toolpath(bbox, setup, op, radius)
+    if setup["type"] == MILLING and setup.get("x_dir", "+x") != "+x":
+        cx, cy = X_DIRS[setup["x_dir"]][1]
+        moves = [(k, (x * cx + y * cy, -x * cy + y * cx, z)) for k, (x, y, z) in moves]
+    return moves
 
 
 def toolpath_world(bbox, setup: dict, moves, radius: float = 0.0) -> list[tuple]:
@@ -424,3 +449,19 @@ def describe_op(setup: dict, op: dict) -> str:
     if setup["type"] == MILLING:
         return f"Face · Ø{op['tool_dia']:.3f} tool · {op['stepover']:.0f}% stepover · {op['stepdown']:.3f} DOC"
     return f"Face · {op['stepdown']:.3f} per pass · {op['sfm']:.0f} SFM · {op['ipr']:.4f} IPR"
+
+
+def stock_snap_points(bbox, setup: dict) -> list[tuple]:
+    """Milling stock box snap points for picking the WCS: [((x, y, z), kind)] with kind
+    'stock corner' | 'stock edge mid' | 'stock face center'."""
+    lo, hi = stock_box(bbox, setup)
+    mid = [(a + b) / 2 for a, b in zip(lo, hi)]
+    xs, ys, zs = (lo[0], mid[0], hi[0]), (lo[1], mid[1], hi[1]), (lo[2], mid[2], hi[2])
+    out = []
+    for i, x in enumerate(xs):
+        for j, y in enumerate(ys):
+            for k, z in enumerate(zs):
+                n_mid = (i == 1) + (j == 1) + (k == 1)   # 0 corner, 1 edge middle, 2 face center, 3 inside
+                if n_mid < 3:
+                    out.append(((x, y, z), ("stock corner", "stock edge mid", "stock face center")[n_mid]))
+    return out

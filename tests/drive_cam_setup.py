@@ -79,6 +79,45 @@ check("fixed-size setup saved", len(win.doc.setups) == 2 and win.doc.setups[1]["
       {"mode": "size", "x": 4.5, "y": 3.25, "z": 1.375, "top": 0.05})
 win.delete_node("setup2")
 
+# pick the WCS origin in the view (hover lights up a point, click sets it) and turn X
+win.run_tool("Setup")
+s = win.session
+s.panel.pick.setChecked(True)
+check("PICK IN VIEW turns picking on", s.picking)
+target = (-2.0, 0.0, 0.5)                          # middle of the plate's left top edge
+from gsend_cad.core import cam as _cam
+pts = s.snaps()
+check("snap list has model ends/mids/centers and stock corners",
+      {k for _p, k in pts} >= {"end", "mid", "center", "stock corner", "stock face center"})
+q = vp.project([target])[0]
+pos = QPoint(round(q[0]), round(q[1]))
+QTest.mouseMove(vp.plotter, pos)
+pump(100)
+check("hovering lights up the midpoint", s.hover is not None and s.hover[1] == "mid"
+      and all(abs(a - b) < 1e-6 for a, b in zip(s.hover[0], target)))
+shot("cam_01c_pick")
+QTest.mouseClick(vp.plotter, Qt.LeftButton, Qt.NoModifier, pos)
+pump(100)
+check("click puts the origin there", s.wcs_point == [-2.0, 0.0, 0.5] and s.panel.mwcs.currentData() == "point"
+      and not s.picking)
+s.panel.xdir.setCurrentIndex(s.panel.xdir.findData("-y"))
+key(Qt.Key_Return)
+ps = win.doc.setups[-1]
+check("picked point + X along -Y saved", ps["wcs"] == "point" and ps["wcs_point"] == [-2.0, 0.0, 0.5]
+      and ps["x_dir"] == "-y")
+w = _cam.wcs(((-2, -1.5, 0), (2, 1.5, 1.25)), ps)
+check("WCS X axis now points along model -Y", w["x"] == [0.0, -1.0, 0.0])
+win.delete_node(ps["id"])
+
+from gsend_cad.core import sketch as _sk
+win.doc.add_sketch([_sk.point((1.25, 0.75))], plane_z=0.5)      # a point drawn in CAD, on the plate top
+win.rebuild()
+win.run_tool("Setup")
+check("a CAD sketch point is pickable", any(k == "point" and all(abs(a - b) < 1e-9 for a, b in zip(p, (1.25, 0.75, 0.5)))
+                                             for p, k in win.session.snaps()))
+key(Qt.Key_Escape)
+win.undo_stack.clear()
+
 # the Milling / Turning choice inside the panel
 win.run_tool("Setup")
 s = win.session

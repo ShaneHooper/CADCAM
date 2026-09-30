@@ -253,6 +253,12 @@ where the work zero (WCS) is. Toolpaths will belong to a setup.</p>
 <li><b>Turning</b>: the <b>spindle axis</b> (it guesses the axis the part is round about), which end is the
 <b>front</b> (toward the tool), bar stock on the <b>OD</b> (per side), <b>front face</b> and
 <b>chuck side</b>, and where <b>Z0</b> is: stock front face or part front face. Z runs along the spindle.</li>
+<li><b>Pick the origin in the view</b> (milling): click <b>PICK IN VIEW</b> (or choose WCS origin → Picked
+point). Hover the part, the stock or a point you drew in a CAD sketch: endpoints, midpoints, circle centers,
+stock corners, stock edge midpoints and stock face centers light up with their name. Click one: X0 Y0 Z0 goes
+there. Esc stops picking.</li>
+<li><b>X axis points</b>: which way the WCS +X runs (model +X, −X, +Y or −Y). The WCS turns about Z so it stays a
+real machine coordinate system: −X also flips Y (a 180° turn), ±Y turns it 90°. Toolpaths and G-code follow.</li>
 <li>The yellow outline is the stock; the arrows are the WCS (red X, green Y, blue Z). <b>OK</b> or Enter.</li>
 </ol>
 <ul>

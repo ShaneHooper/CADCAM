@@ -20,7 +20,7 @@ from ..core import cam, post
 from ..core import plane as pl
 from ..core import sketch as sk
 from ..core.profiles import region_at, sketch_regions
-from ..kernel import (bodies_bbox, edge_list, max_radius, outline_loops, extrude_tool, face_outline, planar_face_at, plane_edges, region_face, revolve_axis,
+from ..kernel import (bodies_bbox, edge_list, max_radius, model_snap_points, outline_loops, extrude_tool, face_outline, planar_face_at, plane_edges, region_face, revolve_axis,
                       revolve_tool, triangles)
 from . import theme
 
@@ -1299,9 +1299,23 @@ class SetupPanel(Panel):
         self.mwcs = QComboBox()
         for k, label in cam.MILL_WCS.items():
             self.mwcs.addItem(label, k)
+        self.pick = QPushButton("PICK IN VIEW")
+        self.pick.setMinimumWidth(130)
+        self.pick.setObjectName("dlgBtn")
+        self.pick.setCheckable(True)
+        self.pick.setToolTip("Hover the model, stock or a sketch point: ends, midpoints and centers light up. "
+                             "Click one to put X0 Y0 Z0 there.")
+        self.pick.toggled.connect(s.set_picking)
+        self.picked = QLabel("—")
+        self.picked.setStyleSheet(f"color:{theme.FG2};")
+        self.xdir = QComboBox()
+        for k, (label, _v) in cam.X_DIRS.items():
+            self.xdir.addItem(label, k)
+        self.xdir.setToolTip("Which way the WCS +X points. The WCS turns about Z: −X also flips Y, ±Y turns it 90°.")
         mr = rows(self.mill, [("Stock: sides", self.side), ("Stock width X", self.sx), ("Stock length Y", self.sy),
                               ("Stock height Z", self.sz), ("Stock: top", self.top), ("Stock: bottom", self.bottom),
-                              ("WCS origin", self.mwcs)])
+                              ("WCS origin", self.mwcs), ("Origin point", self.pick), ("Picked", self.picked),
+                              ("X axis points", self.xdir)])
         self.v.addWidget(self.mill)
         # turning fields
         self.turn = QWidget()
@@ -1323,8 +1337,9 @@ class SetupPanel(Panel):
                           tr["Bar length"]]
         self.v.addWidget(self.turn)
         _dlg_footer(self, s)
-        for w in (self.body, self.mwcs, self.front, self.twcs):
+        for w in (self.body, self.front, self.twcs, self.xdir):
             w.currentIndexChanged.connect(s.preview)
+        self.mwcs.currentIndexChanged.connect(s.wcs_changed)
         self.axis.currentIndexChanged.connect(s.axis_changed)
         self.mode.currentIndexChanged.connect(s.mode_changed)
 
@@ -1340,6 +1355,8 @@ class SetupSession:
     def __init__(self, win, kind: str = cam.MILLING, edit: dict | None = None):
         self.win, self.vp = win, win.viewport
         self.edit_id = edit["id"] if edit else None
+        self.wcs_point = list(edit["wcs_point"]) if edit and edit.get("wcs_point") else None
+        self.picking, self.hover, self._snaps = False, None, None
         self.panel = SetupPanel(self)
         p = self.panel
         self._loading = True
@@ -1361,6 +1378,8 @@ class SetupSession:
                 w.setValue(stock[k])
         if st["type"] == cam.MILLING:
             p.mwcs.setCurrentIndex(p.mwcs.findData(st["wcs"]))
+            p.xdir.setCurrentIndex(max(0, p.xdir.findData(st.get("x_dir", "+x"))))
+            self._show_picked()
         else:
             p.axis.setCurrentIndex(p.axis.findData(st["axis"]))
             self.axis_changed()
@@ -1434,7 +1453,9 @@ class SetupSession:
             stock = ({"mode": "size", "x": p.sx.value(), "y": p.sy.value(), "z": p.sz.value(), "top": p.top.value()}
                      if mode == "size" else
                      {"mode": "offset", "side": p.side.value(), "top": p.top.value(), "bottom": p.bottom.value()})
-            s.update(stock=stock, wcs=p.mwcs.currentData())
+            s.update(stock=stock, wcs=p.mwcs.currentData(), x_dir=p.xdir.currentData())
+            if self.wcs_point:
+                s["wcs_point"] = list(self.wcs_point)
         else:
             stock = ({"mode": "size", "dia": p.dia.value(), "length": p.length.value(), "face": p.face.value()}
                      if mode == "size" else
@@ -1457,7 +1478,10 @@ class SetupSession:
             return
         self.vp.clear("cam", render=False)
         self.vp.clear("setup", render=False)
-        ok = draw_setup(self.vp, self.win, self.setup(), "setup")
+        st = self.setup()
+        if st.get("wcs") == "point" and not st.get("wcs_point"):
+            st["wcs"] = "model"                    # nothing picked yet: show the stock, WCS at the model origin
+        ok = draw_setup(self.vp, self.win, st, "setup")
         word = "MILLING" if self.kind == cam.MILLING else "TURNING"
         problem = self.fit_problem() if ok else None
         if problem:
@@ -1472,24 +1496,107 @@ class SetupSession:
         if not setup_bodies(self.win, self.setup()):
             self.vp.show_toast("No solid to machine · make a part in CAD first", bad=True)
             return
+        if self.kind == cam.MILLING and self.panel.mwcs.currentData() == "point" and not self.wcs_point:
+            self.vp.show_toast("Pick the origin point in the view first (PICK IN VIEW)", bad=True)
+            return
         problem = self.fit_problem()
         if problem:
             self.vp.show_toast(problem, bad=True)
             return
         self.win.commit_setup(self.setup(), self.edit_id)
 
+    # ---- picking the WCS origin in the view
+    SNAP_NAMES = {"end": "ENDPOINT", "mid": "MIDPOINT", "center": "CENTER", "point": "SKETCH POINT",
+                  "stock corner": "STOCK CORNER", "stock edge mid": "STOCK EDGE MIDPOINT",
+                  "stock face center": "STOCK FACE CENTER"}
+
+    def _show_picked(self):
+        pt = self.wcs_point
+        self.panel.picked.setText("—" if not pt else "X{:.4f} Y{:.4f} Z{:.4f}".format(*pt))
+
+    def wcs_changed(self, *_):
+        if self.panel.mwcs.currentData() == "point" and not self.wcs_point and not self._loading:
+            self.panel.pick.setChecked(True)       # "Picked point" with nothing picked: start picking
+        self.preview()
+
+    def set_picking(self, on: bool):
+        self.picking = on
+        self._snaps = None
+        self.panel.pick.setText("PICKING…" if on else "PICK IN VIEW")
+        self.vp.clear("pick")
+        self.win.message("PICK THE ORIGIN: hover the part, stock or a sketch point · ends, midpoints and centers "
+                         "light up · click one · Esc stops picking" if on else "SETUP: Enter / OK saves · Esc cancels")
+
+    def snaps(self):
+        """Every point the origin can go on: model ends / mids / centers, the stock box, sketch points."""
+        if self._snaps is None:
+            st = self.setup()
+            bodies = setup_bodies(self.win, st)
+            pts = model_snap_points(bodies) if bodies else []
+            if bodies and self.kind == cam.MILLING:
+                pts += cam.stock_snap_points(bodies_bbox(bodies), {**st, "wcs": "top-center"})
+            for f in self.win.doc.applied():
+                if f["kind"] == "sketch":
+                    fr = self.win.doc.sketch_plane(f)
+                    pts += [(tuple(pl.to_world(fr, e["p"])), "point") for e in f["ents"] if e["type"] == "point"]
+            self._snaps = pts
+        return self._snaps
+
+    def _hit(self, ev):
+        pts = self.snaps()
+        if not pts:
+            return None
+        q = self.vp.project([p for p, _k in pts])
+        pos = ev.position()
+        d = np.hypot(q[:, 0] - pos.x(), q[:, 1] - pos.y())
+        near = np.where(d <= 12)[0]
+        if not len(near):
+            return None
+        best = min(near, key=lambda i: (round(d[i] / 4), q[i, 2]))     # nearest, then front-most
+        return pts[best]
+
     def on_move(self, w, ev):
-        pass
+        if not self.picking or ev.buttons():
+            return
+        hit = self._hit(ev)
+        if hit == self.hover:
+            return
+        self.hover = hit
+        self.vp.clear("pick", render=False)
+        if hit:
+            (x, y, z), kind = hit
+            r = 10 * self.vp.pixel_size(ev.position().toPoint())
+            ring = [(x + r * math.cos(t), y + r * math.sin(t), z) for t in np.linspace(0, 2 * math.pi, 25)]
+            self.vp.add_lines("pick", [ring, [(x - r, y, z), (x + r, y, z)], [(x, y - r, z), (x, y + r, z)]],
+                              theme.WARN, 2.4)
+            self.vp.add_labels("pick", [((x, y, z + 3 * r), self.SNAP_NAMES.get(kind, kind.upper()))], theme.WARN)
+        self.vp.plotter.setCursor(Qt.CrossCursor if hit else Qt.ArrowCursor)
+        self.vp.render()
 
     def on_click(self, w, ev):
-        pass
+        if not self.picking:
+            return
+        hit = self._hit(ev)
+        if not hit:
+            self.vp.show_toast("Click right on a lit-up point", bad=True)
+            return
+        self.wcs_point = [float(v) for v in hit[0]]
+        self.panel.mwcs.setCurrentIndex(self.panel.mwcs.findData("point"))
+        self._show_picked()
+        self.panel.pick.setChecked(False)          # stops picking
+        self.vp.plotter.setCursor(Qt.ArrowCursor)
+        self.vp.show_toast(f"Origin on the {self.SNAP_NAMES.get(hit[1], hit[1]).lower()}")
+        self.preview()
 
     def on_key(self, ev) -> bool:
         if ev.key() in (Qt.Key_Return, Qt.Key_Enter):
             self.commit()
             return True
         if ev.key() == Qt.Key_Escape:
-            self.win.cancel_command()
+            if self.picking:
+                self.panel.pick.setChecked(False)
+            else:
+                self.win.cancel_command()
             return True
         return False
 
@@ -1501,6 +1608,8 @@ class SetupSession:
 
     def close(self):
         self.vp.clear("setup", render=False)
+        self.vp.clear("pick", render=False)
+        self.vp.plotter.setCursor(Qt.ArrowCursor)
 
 
 # ------------------------------------------------------------------ CAM operations (Face)

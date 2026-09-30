@@ -311,6 +311,27 @@ def outline_loops(bodies, grow: float, tol: float = 0.0005) -> list[list[tuple]]
     return loops
 
 
+def model_snap_points(bodies) -> list[tuple]:
+    """Points a WCS can be picked on: [((x, y, z), kind)] with kind 'end' (edge ends / vertices),
+    'mid' (edge middles) and 'center' (circle and arc centers), duplicates merged."""
+    out, seen = [], set()
+
+    def add(v, kind):
+        key = (round(v.X, 6), round(v.Y, 6), round(v.Z, 6), kind)
+        if key not in seen:
+            seen.add(key)
+            out.append(((v.X, v.Y, v.Z), kind))
+
+    for b in bodies:
+        for v in b.shape.vertices():
+            add(Vector(v.X, v.Y, v.Z), "end")
+        for e in b.shape.edges():
+            add(e.position_at(0.5), "mid")
+            if e.geom_type == GeomType.CIRCLE:
+                add(e.arc_center, "center")
+    return out
+
+
 def bodies_bbox(bodies):
     """((xmin, ymin, zmin), (xmax, ymax, zmax)) around several bodies (a CAM setup's part)."""
     boxes = [b.bbox() for b in bodies]

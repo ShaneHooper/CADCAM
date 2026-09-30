@@ -219,3 +219,13 @@ def test_outline_loops_grow_by_tool_radius():
     assert (min(xs), max(xs), min(ys), max(ys)) == pytest.approx((-2.25, 2.25, -1.75, 1.75), abs=1e-6)
     area = abs(sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(pts, pts[1:] + pts[:1])) / 2)
     assert area == pytest.approx(15.5354, abs=2e-3)       # 4 x 3 rounded plate grown 0.25 all round
+
+
+def test_model_snap_points():
+    from gsend_cad.kernel import model_snap_points
+    pts = model_snap_points(Kernel().build(bracket_plate()).bodies)
+    kinds = {k for _p, k in pts}
+    assert kinds == {"end", "mid", "center"}
+    assert any(k == "center" and p[:2] == pytest.approx((0, 0)) for p, k in pts)   # the boss / bore center
+    assert any(k == "end" and p == pytest.approx((-2, -1.25, 0.5)) for p, k in pts)     # side edge meets corner R
+    assert any(k == "mid" and p == pytest.approx((-2, 0, 0.5)) for p, k in pts)          # middle of that side
