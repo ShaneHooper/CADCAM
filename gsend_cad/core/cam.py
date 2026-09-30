@@ -239,7 +239,9 @@ CONTOUR_MILL = {"type": "contour", "tool": 2, "tool_dia": 0.5, "stepdown": 0.25,
 ROUGH_TURN = {"type": "rough", "tool": 2, "stepdown": 0.05, "leave_x": 0.01, "leave_z": 0.005, "retract": 0.02,
               "past_back": 0.0, "sfm": 600.0, "ipr": 0.01, "max_rpm": 3000.0, "clearance": 0.1, "output": "lines"}
 ROUGH_OUTPUT = {"lines": "Single lines (G01)", "cycle": "Canned cycle (G71)"}
-OP_TYPES = {"face": "Face", "contour": "Contour", "rough": "OD Rough"}
+FINISH_TURN = {"type": "finish", "tool": 3, "leave_x": 0.0, "leave_z": 0.0, "retract": 0.02, "past_back": 0.0,
+               "sfm": 800.0, "ipr": 0.005, "max_rpm": 3000.0, "clearance": 0.1, "output": "lines"}
+OP_TYPES = {"face": "Face", "contour": "Contour", "rough": "OD Rough", "finish": "Contour"}
 
 
 def new_op(setup: dict, kind: str = "face") -> dict:
@@ -253,6 +255,10 @@ def new_op(setup: dict, kind: str = "face") -> dict:
         if setup["type"] != TURNING:
             raise ValueError("OD Rough needs a Turning setup")
         return copy.deepcopy(ROUGH_TURN)
+    if kind == "finish":
+        if setup["type"] != TURNING:
+            raise ValueError("turning Contour needs a Turning setup")
+        return copy.deepcopy(FINISH_TURN)
     raise ValueError(f"operation {kind!r} is not built yet")
 
 
@@ -272,7 +278,7 @@ def validate_op(setup: dict, op: dict) -> dict:
             raise ValueError("stepover must be 1 to 100 % of the tool")
         if op["direction"] not in ("x", "y"):
             raise ValueError("direction must be x or y")
-    if op.get("output", "lines") not in (ROUGH_OUTPUT if op["type"] == "rough" else TURN_OUTPUT):
+    if op.get("output", "lines") not in ("lines", "cycle"):
         raise ValueError("output must be lines or cycle")
     if op["type"] == "contour" and op["direction"] not in ("climb", "conventional"):
         raise ValueError("direction must be climb or conventional")
@@ -490,11 +496,31 @@ def rough_toolpath(bbox, setup: dict, op: dict, profile, radius: float = 0.0) ->
             continue                                         # the front diameter itself: profile pass does it
         moves += [("rapid", (r, 0.0, z_start)), ("feed", (r, 0.0, ze)),
                   ("feed", (r + rt, 0.0, ze + rt)), ("rapid", (r + rt, 0.0, z_start))]
-    moves.append(("rapid", (prof[0][1], 0.0, z_start)))      # profile pass at the stock to leave
-    moves += [("feed", (r, 0.0, z)) for z, r in prof]
+    return moves + _profile_pass(prof, rt, x_out, z_start)  # profile pass at the stock to leave
+
+
+def _profile_pass(prof, rt, x_out, z_start):
+    """Down to the profile's front in rapid (in the air ahead of the part), along it at feed,
+    45° pull-off at the back, out and home."""
     zl, rl = prof[-1]
-    moves += [("feed", (rl + rt, 0.0, zl + rt)), ("rapid", (x_out, 0.0, zl + rt)), ("rapid", (x_out, 0.0, z_start))]
-    return moves
+    return ([("rapid", (prof[0][1], 0.0, z_start))] + [("feed", (r, 0.0, z)) for z, r in prof] +
+            [("feed", (rl + rt, 0.0, zl + rt)), ("rapid", (x_out, 0.0, zl + rt)), ("rapid", (x_out, 0.0, z_start))])
+
+
+def finish_toolpath(bbox, setup: dict, op: dict, profile, radius: float = 0.0) -> list[tuple]:
+    """Turning Contour (finish): one pass along the part's OD from the front to the back limit,
+    at the stock to leave (0 = finished size). Same reach rules as OD Rough (no grooves)."""
+    op = validate_op(setup, op)
+    if setup["type"] != TURNING:
+        raise ValueError("turning Contour needs a Turning setup")
+    c = stock_cylinder(bbox, radius, setup)
+    w = wcs(bbox, setup, radius)
+    i = AXES[setup["axis"]]
+    sign = 1.0 if setup["front"] == "+" else -1.0
+    z_start = (c["front"][i] - w["origin"][i]) * sign + op["clearance"]
+    x_out = c["r"] + op["clearance"]
+    prof = [(z + op["leave_z"], r + op["leave_x"]) for z, r in rough_contour(bbox, setup, op, profile, radius)]
+    return [("rapid", (x_out, 0.0, z_start))] + _profile_pass(prof, op["retract"], x_out, z_start)
 
 
 def toolpath(bbox, setup: dict, op: dict, radius: float = 0.0, loops=None, profile=None) -> list[tuple]:
@@ -502,6 +528,8 @@ def toolpath(bbox, setup: dict, op: dict, radius: float = 0.0, loops=None, profi
     the setup's X points another way (the path generators work in model-aligned axes)."""
     if op.get("type") == "rough":
         return rough_toolpath(bbox, setup, op, profile or [], radius)
+    if op.get("type") == "finish":
+        return finish_toolpath(bbox, setup, op, profile or [], radius)
     if op.get("type", "face") == "contour":
         moves = contour_toolpath(bbox, setup, op, loops)
     else:
@@ -556,6 +584,9 @@ def cycle_time(moves, setup: dict, op: dict) -> float:
 
 
 def describe_op(setup: dict, op: dict) -> str:
+    if op.get("type") == "finish":
+        return (f"Contour · leave X {op['leave_x']:.3f} Z {op['leave_z']:.3f} · {op['sfm']:.0f} SFM · "
+                f"{op['ipr']:.4f} IPR" + (" · G70 cycle" if op.get("output") == "cycle" else ""))
     if op.get("type") == "rough":
         return (f"OD Rough · {op['stepdown']:.3f} DOC · leave X {op['leave_x']:.3f} Z {op['leave_z']:.3f} · "
                 f"{op['sfm']:.0f} SFM · {op['ipr']:.4f} IPR" + (" · G71 cycle" if op.get("output") == "cycle" else ""))

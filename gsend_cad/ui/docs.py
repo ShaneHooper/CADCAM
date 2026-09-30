@@ -317,6 +317,20 @@ undercuts are skipped: an OD tool can't reach into them.</li>
 finished contour in N-blocks (Haas: one line with D; Fanuc: two G71 lines). U / W carry the stock to leave.</li>
 </ol>
 """),
+    ("finish", "CAM: Contour (turning finish)", """
+<h1>Contour (turning)</h1>
+<p>One pass along the part's outside from the front to the back, usually the finish pass after
+OD Rough. Needs a Turning setup.</p>
+<ol>
+<li>CAM → Turning tab → <b>Contour</b>. Set the tool, <b>Stock to leave X / Z</b> (0 = finished size; set
+some to use it as a semi-finish), <b>Past part back (Z)</b>, pull-off, SFM, feed in/rev and max RPM.</li>
+<li><b>Use G70 cycle</b> ticked: the post writes <b>G70 P Q</b> over the contour blocks of an OD Rough with
+G71 output earlier in the same setup (the usual rough-then-finish program, with its own tool
+change). The rough and the Contour must cover the same profile (same Past part back). With no such
+rough, Post Process says so.</li>
+<li>Unticked: every move is written line by line (G01).</li>
+</ol>
+"""),
     ("contour", "CAM: 2D Contour and Simulate", """
 <h1>2D Contour (milling)</h1>
 <ol>

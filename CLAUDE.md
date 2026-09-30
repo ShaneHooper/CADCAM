@@ -21,8 +21,8 @@ small and cheap.** Read only the file(s) the task needs, change only what he ask
 | Startup, splash, crash logs, `--selftest` | `gsend_cad/ui/app.py` |
 | Sketch entity math, exact values (`params`/`set_param`), dimensions, picking / closed profiles | `gsend_cad/core/sketch.py`, `core/profiles.py` |
 | Features, timeline, .gcad file format | `gsend_cad/core/document.py` |
-| CAM setups (milling / turning, stock, WCS math) and operations (Face, 2D Contour, OD Rough toolpaths, cycle / move times) | `gsend_cad/core/cam.py` (data, toolpaths) · `ui/commands.py` `SetupSession` / `OpSession` / `SimSession` / `draw_setup` / `draw_toolpath` (panels, simulate, drawing); part outline for contours = `kernel.outline_loops`, turned OD silhouette for OD Rough = `kernel.turn_profile` |
-| Post processor (G-code: Haas / Fanuc, mill / lathe, G94 / G71 cycles) | `gsend_cad/core/post.py` · dialog `ui/commands.py` `PostDialog` |
+| CAM setups (milling / turning, stock, WCS math) and operations (Face, 2D Contour, OD Rough, turning Contour (op type `finish`) toolpaths, cycle / move times) | `gsend_cad/core/cam.py` (data, toolpaths) · `ui/commands.py` `SetupSession` / `OpSession` / `SimSession` / `draw_setup` / `draw_toolpath` (panels, simulate, drawing); part outline for contours = `kernel.outline_loops`, turned OD silhouette for OD Rough = `kernel.turn_profile` |
+| Post processor (G-code: Haas / Fanuc, mill / lathe, G94 / G71 / G70 cycles) | `gsend_cad/core/post.py` · dialog `ui/commands.py` `PostDialog` |
 | Solids, booleans, revolve, edge fillet/chamfer, STEP/STL | `gsend_cad/kernel/model.py` |
 | Windows build | `packaging/` (spec, entry, installer .iss, update_app.py, sign_folder.py) |
 

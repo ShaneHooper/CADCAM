@@ -1644,7 +1644,7 @@ def op_moves(win, setup, op):
             cache[key] = outline_loops(bodies, grow)
         loops = cache[key]
     profile = None
-    if op.get("type") == "rough":             # the part's OD silhouette about the spindle axis
+    if op.get("type") in ("rough", "finish"):   # the part's OD silhouette about the spindle axis
         i, center, _ = cam.turning_frame(bbox, setup)
         key = ("profile", id(win.model), tuple(b.id for b in bodies), setup["axis"])
         cache = win.__dict__.setdefault("_radius_cache", {})
@@ -1683,12 +1683,16 @@ class OpPanel(Panel):
                                       ("leave_x", "Stock to leave X", 4), ("leave_z", "Stock to leave Z", 4),
                                       ("past_back", "Past part back (Z)", 4), ("retract", "Pull-off", 4),
                                       ("sfm", "Surface speed SFM", 0), ("ipr", "Feed (in/rev)", 4),
-                                      ("max_rpm", "Max RPM", 0)]}}
+                                      ("max_rpm", "Max RPM", 0)]},
+              "finish": {cam.TURNING: [("tool", "Tool number", 0), ("leave_x", "Stock to leave X", 4),
+                                       ("leave_z", "Stock to leave Z", 4), ("past_back", "Past part back (Z)", 4),
+                                       ("retract", "Pull-off", 4), ("sfm", "Surface speed SFM", 0),
+                                       ("ipr", "Feed (in/rev)", 4), ("max_rpm", "Max RPM", 0)]}}
     DIRECTIONS = {"face": [("Along X", "x"), ("Along Y", "y")],
                   "contour": [("Climb", "climb"), ("Conventional", "conventional")]}
 
     def __init__(self, session: "OpSession", kind: str):
-        super().__init__({"face": "Face", "contour": "2D Contour", "rough": "OD Rough"}[kind], 260)
+        super().__init__({"face": "Face", "contour": "2D Contour", "rough": "OD Rough", "finish": "Contour"}[kind], 260)
         s = session
         self.setup = QComboBox()
         for st in s.win.doc.setups:
@@ -1706,6 +1710,10 @@ class OpPanel(Panel):
         for key, label in (cam.ROUGH_OUTPUT if kind == "rough" else cam.TURN_OUTPUT).items():
             self.output.addItem(label, key)
         self.output.currentIndexChanged.connect(s.preview)
+        self.g70 = QCheckBox("")                 # turning Contour: G70 (on the rough's G71 blocks) or lines
+        self.g70.setToolTip("On: G70 P Q over the contour of an OD Rough (G71) earlier in this setup.\n"
+                            "Off: every move line by line (G01).")
+        self.g70.toggled.connect(s.preview)
         for stype, fields in self.FIELDS[kind].items():
             g = QWidget()
             lay = QVBoxLayout(g)
@@ -1722,6 +1730,8 @@ class OpPanel(Panel):
                 items.insert(5, ("Cut direction", self.direction))
             elif kind in ("face", "rough"):
                 items.append(("Output", self.output))
+            elif kind == "finish":
+                items.append(("Use G70 cycle", self.g70))
             for label, w in items:
                 r = QWidget()
                 r.setObjectName("panelRow")
@@ -1779,6 +1789,7 @@ class OpSession:
             p.direction.setCurrentIndex(max(0, p.direction.findData(op["direction"])))
         if "output" in op:
             p.output.setCurrentIndex(max(0, p.output.findData(op["output"])))
+            p.g70.setChecked(op["output"] == "cycle")
         base = cam.OP_TYPES[self.kind]
         names = {o["name"] for o in st.get("ops", [])}
         k = 1
@@ -1803,6 +1814,8 @@ class OpSession:
             o["direction"] = p.direction.currentData()
         elif self.kind in ("face", "rough"):
             o["output"] = p.output.currentData()
+        elif self.kind == "finish":
+            o["output"] = "cycle" if p.g70.isChecked() else "lines"
         return o
 
     def preview(self, *_):
@@ -1823,7 +1836,9 @@ class OpSession:
             {i for i, (k, _p) in enumerate(moves) if k == "feed" and moves[i - 1][0] == "rapid"}   # facing cuts
         t = cam.cycle_time(moves, st, self.op())
         n = len(zs)
-        if self.kind == "rough":
+        if self.kind == "finish":
+            self.panel.info.setText(f"1 finish pass along the profile · about {t:.1f} min cutting")
+        elif self.kind == "rough":
             self.panel.info.setText(f"{n - 1} roughing pass{'es' if n != 2 else ''} + profile pass · about {t:.1f} min "
                                     "cutting")
         else:

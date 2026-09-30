@@ -68,8 +68,9 @@ def post_setup(setup: dict, ops: list[tuple[dict, list]], controller: str = "haa
     L.append(_comment(f"G-SEND CAD/CAM {CONTROLLERS[controller]} {'LATHE' if turning else 'MILL'}"))
     L.append(_comment(cam.describe(setup)))
     L.append("G20 G18 G40 G80 G99" if turning else "G20 G17 G40 G49 G80 G90")
+    g71 = []                                          # (contour, P, Q) of each G71 rough so far
     for k, (op, moves) in enumerate(ops):
-        L += (_lathe_op(setup, op, moves, offset, coolant, controller, 100 * (k + 1)) if turning
+        L += (_lathe_op(setup, op, moves, offset, coolant, controller, 100 * (k + 1), g71) if turning
               else _mill_op(setup, op, moves, offset, coolant))
     if turning:
         L += ["G28 U0. W0.", "M30", "%"]
@@ -106,15 +107,31 @@ def _mill_op(setup, op, moves, offset, coolant):
     return [x for x in L if x is not None]
 
 
-def _lathe_op(setup, op, moves, offset, coolant, controller="haas", n=100):
+def _lathe_op(setup, op, moves, offset, coolant, controller="haas", n=100, g71=None):
     t = int(op.get("tool", 1))
     cycle = op.get("output") == "cycle"
     rough = op.get("type") == "rough"
-    what = ("OD ROUGH" + (" G71 CYCLE" if cycle else "")) if rough else ("FACE" + (" G94 CYCLE" if cycle else ""))
+    kind = op.get("type", "face")
+    what = {"rough": "OD ROUGH", "finish": "CONTOUR", "face": "FACE"}[kind] + \
+        ({"rough": " G71 CYCLE", "finish": " G70 CYCLE", "face": " G94 CYCLE"}[kind] if cycle else "")
+    if kind == "finish" and cycle:
+        prof = _contour(moves, op)
+        ref = next(((p, q) for c, p, q in reversed(g71 or []) if len(c) == len(prof) and
+                    all(abs(a - b) < 1e-6 for u, v in zip(c, prof) for a, b in zip(u, v))), None)
+        if ref is None:
+            raise ValueError(f"{op['name']}: G70 needs an OD Rough with G71 output before it in this setup, "
+                             "over the same profile · untick G70 to post it line by line")
     L = ["", _comment(f"{op['name']} T{t:02d} {what}"), "G28 U0. W0.", f"T{t:02d}{t:02d}", offset,
          f"G50 S{int(round(op['max_rpm']))}", f"G96 S{int(round(op['sfm']))} M03" + (" M08" if coolant else "")]
     m = _Modal()
     if cycle:
+        if kind == "finish":
+            _k, (xs, _y, zs) = moves[0]
+            return L + [m.block([("G", "G00"), ("X", num(xs * 2)), ("Z", num(zs))]), f"F{num(op['ipr'])}",
+                        f"G70 P{ref[0]} Q{ref[1]}", f"G00 X{num(xs * 2)} Z{num(zs)}"] + \
+                (["M09"] if coolant else []) + ["M05"]
+        if rough and g71 is not None:
+            g71.append((_contour(moves, op), n, n + 1))
         return L + (_g71(moves, op, m, controller, n) if rough else _g94(moves, op, m)) + (["M09"] if coolant else []) + ["M05"]
     for kind, (x, _y, z) in moves:                    # X radius -> diameter
         words = [("G", "G00" if kind == "rapid" else "G01"), ("X", num(x * 2)), ("Z", num(z))]
@@ -144,14 +161,9 @@ def _g71(moves, op, m, controller, n):
     with the stock to leave taken back off (the control adds it again from U / W). Haas takes the
     depth of cut as D on one line; Fanuc wants two G71 blocks (U depth R retract, then P Q U W F)."""
     _k, (xs, _y, zs) = moves[0]
-    end = max(i for i, (k, _p) in enumerate(moves) if k == "feed")
-    a = end
-    while moves[a - 1][0] == "feed":
-        a -= 1
-    lx, lz = op["leave_x"], op["leave_z"]
-    prof = [(x - lx, z - lz) for _k, (x, _y, z) in moves[a:end]]      # the pull-off is not contour
+    prof = _contour(moves, op)
     p, q = n, n + 1
-    u, w = num(2 * lx), num(lz)
+    u, w = num(2 * op["leave_x"]), num(op["leave_z"])
     L = [m.block([("G", "G00"), ("X", num(xs * 2)), ("Z", num(zs))])]
     if controller == "haas":
         L.append(f"G71 P{p} Q{q} U{u} W{w} D{num(op['stepdown'])} F{num(op['ipr'])}")
@@ -167,3 +179,14 @@ def _g71(moves, op, m, controller, n):
     L.append(f"N{q} " + c.block([("G", "G01"), ("X", num(xs * 2))]))
     L.append(f"G00 X{num(xs * 2)} Z{num(zs)}")
     return L
+
+
+def _contour(moves, op):
+    """The finished contour [(x radius, z)] of a rough / finish path: its last pass along the
+    profile (without the pull-off), with the stock to leave taken back off."""
+    end = max(i for i, (k, _p) in enumerate(moves) if k == "feed")
+    a = end
+    while moves[a - 1][0] == "feed":
+        a -= 1
+    lx, lz = op["leave_x"], op["leave_z"]
+    return [(x - lx, z - lz) for _k, (x, _y, z) in moves[a:end]]

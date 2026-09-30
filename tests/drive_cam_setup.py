@@ -210,9 +210,18 @@ shot("cam_04b_rough")
 key(Qt.Key_Return)
 st = win.doc.setups[-1]
 check("OD Rough1 saved after Face1", [x["name"] for x in st["ops"]] == ["Face1", "OD Rough1"])
+win.run_tool("Contour")
+o = win.session
+check("turning Contour opens with the G70 box", o.kind == "finish" and o.panel.g70.isVisible()
+      and o.panel.title.text() == "CONTOUR")
+o.panel.g70.setChecked(True)
+shot("cam_04c_contour")
+key(Qt.Key_Return)
+check("Contour1 saved after the rough", [x["name"] for x in st["ops"]] == ["Face1", "OD Rough1", "Contour1"])
 from gsend_cad.core import post
 g = post.post_setup(st, [(cam.validate_op(st, x), op_moves(win, st, x)[0]) for x in st["ops"]], "haas", 1)
-check("post writes G94 face + G71 rough with its contour", "G94 " in g and "G71 P200 Q201" in g and "N200 G00 X1.\n" in g and "X1.5\n" in g)
+check("post writes G94 face + G71 rough with its contour", "G94 " in g and "G71 P200 Q201" in g and "N200 G00 X1.\n" in g and "X1.5\n" in g
+      and "G70 P200 Q201" in g)
 
 win.select_tab("milling")
 win.run_tool("Setup")

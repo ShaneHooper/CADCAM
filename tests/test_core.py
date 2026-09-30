@@ -456,3 +456,24 @@ def test_od_rough_toolpath_and_g71():
     assert "N100 G00 X1." in g and "X2. Z-1.55" in g and "N101 X2.3" in g
     with pytest.raises(ValueError):
         cam.new_op(cam.new_setup("milling"), "rough")
+
+
+def test_turning_contour_finish_and_g70():
+    from gsend_cad.core import cam, post
+    box = ((0, -1, -1), (3, 1, 1))
+    s = {**cam.validate({**cam.new_setup("turning"), "axis": "x"}), "name": "S"}
+    prof = [(-1.5, 1.0), (-0.5, 1.0), (0.5, 0.5), (1.5, 0.5)]
+    fin = cam.validate_op(s, {**cam.new_op(s, "finish"), "name": "Contour1"})
+    assert fin["name"] == "Contour1" and cam.OP_TYPES["finish"] == "Contour"
+    mv = cam.toolpath(box, s, fin, 1.0, profile=prof)
+    feeds = [p for k, p in mv if k == "feed"]
+    assert feeds[0] == (0.5, 0.0, pytest.approx(-0.05)) and feeds[-2][0] == 1.0      # on size, front to back
+    g = post.post_setup(s, [(fin, mv)], "haas", 1)
+    assert "G70 P" not in g and "X2. Z-2.05" in g                                       # line by line
+    fin_c = {**fin, "output": "cycle"}
+    with pytest.raises(ValueError):                                                     # G70 alone: no contour
+        post.post_setup(s, [(fin_c, mv)], "haas", 1)
+    rough = cam.validate_op(s, {**cam.new_op(s, "rough"), "name": "R", "output": "cycle"})
+    g = post.post_setup(s, [(rough, cam.toolpath(box, s, rough, 1.0, profile=prof)), (fin_c, mv)], "haas", 1)
+    i = g.index("G70 P100 Q101")                                                        # the rough's G71 blocks
+    assert "T0303" in g[:i] and "F0.005\nG70" in g and g.index("N100") < i
