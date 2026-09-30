@@ -291,6 +291,8 @@ the stock at both ends, from the stock top down to the part top.</li>
 <li><b>Turning setup</b>: max stepdown per pass, stock to leave, how far past center (X, radius), surface
 speed SFM, feed in/rev and max RPM. Each pass feeds from outside the bar in past center, then rapids
 back, from the bar's front face down to the part face.</li>
+<li><b>Output</b> (turning): <b>Single lines (G01)</b> writes every move, <b>Canned cycle (G94)</b> writes one
+G94 facing-cycle line and then only the next Z for each pass (the control feeds back out in Z).</li>
 <li>The toolpath shows live (blue = cutting, yellow = rapid) with the number of passes and a rough
 cutting time. <b>OK</b> or Enter.</li>
 </ol>

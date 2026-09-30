@@ -371,6 +371,12 @@ def test_post_mill_and_lathe():
     assert "T0101" in lines and "G50 S3000" in lines and "G96 S600 M03 M08" in lines
     assert "G00 X2.3 Z0.1" in lines                             # radius 1.05 + 0.1 clearance, as diameter
     assert "G01 X-0.04 F0.008" in lines                         # 0.02 past center, as diameter
+    o3 = cam.validate_op(t, {**o2, "output": "cycle"})
+    g = post.post_setup(t, [(o3, cam.face_toolpath(((-1, -1, 0), (1, 1, 3)), t, o3, 1.0))], "haas", 1001)
+    lines = g.splitlines()
+    i = lines.index("G94 X-0.04 Z-0.0167 F0.008")               # canned facing cycle, then new Z only
+    assert lines[i - 1] == "G00 X2.3 Z0.1" and lines[i + 1:i + 4] == ["Z-0.0333", "Z-0.05", "G00 X2.3 Z0.1"]
+    assert "G01" not in g
     with pytest.raises(ValueError):
         post.post_setup(t, [], "haas", 1001)
 

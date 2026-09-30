@@ -182,12 +182,15 @@ check("Face opens on the turning setup with turning fields",
       o.__class__.__name__ == "OpSession" and o.current_setup()["type"] == "turning"
       and o.panel.groups["turning"].isVisible() and not o.panel.groups["milling"].isVisible())
 o.panel.boxes[("turning", "stepdown")].setValue(0.02)
+o.panel.output.setCurrentIndex(o.panel.output.findData("cycle"))
+check("turning Face has the Output choice (G94 cycle)", o.panel.output.isVisible() and o.op()["output"] == "cycle")
 check("preview says 3 passes (0.05 face stock / 0.02)", o.panel.info.text().startswith("3 depth passes"))
 shot("cam_04_face_turning")
 key(Qt.Key_Return)
 st = win.doc.setups[-1]
 check("Face1 saved in the turning setup, listed in the Browser",
       [x["name"] for x in st.get("ops", [])] == ["Face1"] and st["ops"][0]["id"] in win.browser.setup_ids)
+check("Face1 keeps the canned cycle output", st["ops"][0]["output"] == "cycle")
 
 win.select_tab("milling")
 win.run_tool("Setup")

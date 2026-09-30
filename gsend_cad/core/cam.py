@@ -231,7 +231,8 @@ def describe(s: dict) -> str:
 FACE_MILL = {"type": "face", "tool": 1, "tool_dia": 2.0, "stepover": 70.0, "stepdown": 0.05, "leave": 0.0,
              "direction": "x", "rpm": 3000.0, "feed": 60.0, "clearance": 0.5}
 FACE_TURN = {"type": "face", "tool": 1, "stepdown": 0.02, "leave": 0.0, "past_center": 0.02, "sfm": 600.0,
-             "ipr": 0.008, "max_rpm": 3000.0, "clearance": 0.1}
+             "ipr": 0.008, "max_rpm": 3000.0, "clearance": 0.1, "output": "lines"}
+TURN_OUTPUT = {"lines": "Single lines (G01)", "cycle": "Canned cycle (G94)"}
 CONTOUR_MILL = {"type": "contour", "tool": 2, "tool_dia": 0.5, "stepdown": 0.25, "leave": 0.0,
                 "bottom_offset": 0.0, "direction": "climb", "rpm": 5000.0, "feed": 30.0, "plunge": 10.0,
                 "lead": 0.1, "clearance": 0.5}
@@ -264,6 +265,8 @@ def validate_op(setup: dict, op: dict) -> dict:
             raise ValueError("stepover must be 1 to 100 % of the tool")
         if op["direction"] not in ("x", "y"):
             raise ValueError("direction must be x or y")
+    if op.get("output", "lines") not in TURN_OUTPUT:
+        raise ValueError("output must be lines or cycle")
     if op["type"] == "contour" and op["direction"] not in ("climb", "conventional"):
         raise ValueError("direction must be climb or conventional")
     for k in ("leave", "past_center", "clearance", "lead"):
@@ -336,7 +339,13 @@ def face_toolpath(bbox, setup: dict, op: dict, radius: float = 0.0) -> list[tupl
     x_out = c["r"] + op["clearance"]
     x_end = -op["past_center"]
     levels = _levels(z_stock, z_part + op["leave"], op["stepdown"])
-    moves.append(("rapid", (x_out, 0.0, z_stock + op["clearance"])))
+    z_start = z_stock + op["clearance"]
+    moves.append(("rapid", (x_out, 0.0, z_start)))
+    if op.get("output") == "cycle":               # G94: Z in rapid, face in X, feed back out in Z
+        for z in levels:
+            moves += [("rapid", (x_out, 0.0, z)), ("feed", (x_end, 0.0, z)), ("feed", (x_end, 0.0, z_start)),
+                      ("rapid", (x_out, 0.0, z_start))]
+        return moves
     for z in levels:
         moves.append(("rapid", (x_out, 0.0, z)))
         moves.append(("feed", (x_end, 0.0, z)))
@@ -448,7 +457,8 @@ def describe_op(setup: dict, op: dict) -> str:
                 f"leave {op['leave']:.3f}")
     if setup["type"] == MILLING:
         return f"Face · Ø{op['tool_dia']:.3f} tool · {op['stepover']:.0f}% stepover · {op['stepdown']:.3f} DOC"
-    return f"Face · {op['stepdown']:.3f} per pass · {op['sfm']:.0f} SFM · {op['ipr']:.4f} IPR"
+    return (f"Face · {op['stepdown']:.3f} per pass · {op['sfm']:.0f} SFM · {op['ipr']:.4f} IPR"
+            + (" · G94 cycle" if op.get("output") == "cycle" else ""))
 
 
 def stock_snap_points(bbox, setup: dict) -> list[tuple]:

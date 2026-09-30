@@ -1689,6 +1689,10 @@ class OpPanel(Panel):
         for label, key in self.DIRECTIONS[kind]:
             self.direction.addItem(label, key)
         self.direction.currentIndexChanged.connect(s.preview)
+        self.output = QComboBox()                # turning Face: G01 lines or a G94 canned cycle
+        for key, label in cam.TURN_OUTPUT.items():
+            self.output.addItem(label, key)
+        self.output.currentIndexChanged.connect(s.preview)
         for stype, fields in self.FIELDS[kind].items():
             g = QWidget()
             lay = QVBoxLayout(g)
@@ -1703,6 +1707,8 @@ class OpPanel(Panel):
                 items.append((label, nb))
             if stype == cam.MILLING:
                 items.insert(5, ("Cut direction", self.direction))
+            elif kind == "face":
+                items.append(("Output", self.output))
             for label, w in items:
                 r = QWidget()
                 r.setObjectName("panelRow")
@@ -1758,6 +1764,8 @@ class OpSession:
                 box.setValue(op[key])
         if "direction" in op:
             p.direction.setCurrentIndex(max(0, p.direction.findData(op["direction"])))
+        if "output" in op:
+            p.output.setCurrentIndex(max(0, p.output.findData(op["output"])))
         base = cam.OP_TYPES[self.kind]
         names = {o["name"] for o in st.get("ops", [])}
         k = 1
@@ -1780,6 +1788,8 @@ class OpSession:
                 o[key] = box.value()
         if st["type"] == cam.MILLING:
             o["direction"] = p.direction.currentData()
+        elif self.kind == "face":
+            o["output"] = p.output.currentData()
         return o
 
     def preview(self, *_):
@@ -1797,7 +1807,7 @@ class OpSession:
             return
         draw_toolpath(self.vp, world, "op")
         zs = {round(p[2], 6) for k, p in moves if k == "feed"} if st["type"] == cam.MILLING else \
-            {i for i, (k, _p) in enumerate(moves) if k == "feed"}
+            {i for i, (k, _p) in enumerate(moves) if k == "feed" and moves[i - 1][0] == "rapid"}   # facing cuts
         t = cam.cycle_time(moves, st, self.op())
         n = len(zs)
         self.panel.info.setText(f"{n} depth pass{'es' if n != 1 else ''} · about {t:.1f} min cutting")

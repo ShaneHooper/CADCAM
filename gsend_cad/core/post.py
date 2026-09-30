@@ -107,9 +107,12 @@ def _mill_op(setup, op, moves, offset, coolant):
 
 def _lathe_op(setup, op, moves, offset, coolant):
     t = int(op.get("tool", 1))
-    L = ["", _comment(f"{op['name']} T{t:02d} FACE"), "G28 U0. W0.", f"T{t:02d}{t:02d}", offset,
+    cycle = op.get("output") == "cycle"
+    L = ["", _comment(f"{op['name']} T{t:02d} FACE" + (" G94 CYCLE" if cycle else "")), "G28 U0. W0.", f"T{t:02d}{t:02d}", offset,
          f"G50 S{int(round(op['max_rpm']))}", f"G96 S{int(round(op['sfm']))} M03" + (" M08" if coolant else "")]
     m = _Modal()
+    if cycle:
+        return L + _g94(moves, op, m) + (["M09"] if coolant else []) + ["M05"]
     for kind, (x, _y, z) in moves:                    # X radius -> diameter
         words = [("G", "G00" if kind == "rapid" else "G01"), ("X", num(x * 2)), ("Z", num(z))]
         if kind == "feed":
@@ -119,3 +122,15 @@ def _lathe_op(setup, op, moves, offset, coolant):
             L.append(line)
     L += ["M09" if coolant else None, "M05"]
     return [x for x in L if x is not None]
+
+
+def _g94(moves, op, m):
+    """Facing as a G94 canned cycle: one line per depth, after that only the new Z. The cycle
+    starts and ends at the start point (the first move: clear of the stock in X and Z)."""
+    _k, (xs, _y, zs) = moves[0]
+    L = [m.block([("G", "G00"), ("X", num(xs * 2)), ("Z", num(zs))])]
+    cuts = [p for k, p in moves if k == "feed" and abs(p[2] - zs) > 1e-9]
+    for i, (x, _y, z) in enumerate(cuts):
+        L.append(f"G94 X{num(x * 2)} Z{num(z)} F{num(op['ipr'])}" if i == 0 else f"Z{num(z)}")
+    L.append(f"G00 X{num(xs * 2)} Z{num(zs)}")         # G00 ends the modal cycle
+    return L
