@@ -213,13 +213,20 @@ FACE_MILL = {"type": "face", "tool": 1, "tool_dia": 2.0, "stepover": 70.0, "step
              "direction": "x", "rpm": 3000.0, "feed": 60.0, "clearance": 0.5}
 FACE_TURN = {"type": "face", "tool": 1, "stepdown": 0.02, "leave": 0.0, "past_center": 0.02, "sfm": 600.0,
              "ipr": 0.008, "max_rpm": 3000.0, "clearance": 0.1}
-OP_TYPES = {"face": "Face"}
+CONTOUR_MILL = {"type": "contour", "tool": 2, "tool_dia": 0.5, "stepdown": 0.25, "leave": 0.0,
+                "bottom_offset": 0.0, "direction": "climb", "rpm": 5000.0, "feed": 30.0, "plunge": 10.0,
+                "lead": 0.1, "clearance": 0.5}
+OP_TYPES = {"face": "Face", "contour": "Contour"}
 
 
 def new_op(setup: dict, kind: str = "face") -> dict:
-    if kind != "face":
-        raise ValueError(f"operation {kind!r} is not built yet")
-    return copy.deepcopy(FACE_MILL if setup["type"] == MILLING else FACE_TURN)
+    if kind == "face":
+        return copy.deepcopy(FACE_MILL if setup["type"] == MILLING else FACE_TURN)
+    if kind == "contour":
+        if setup["type"] != MILLING:
+            raise ValueError("2D Contour needs a Milling setup")
+        return copy.deepcopy(CONTOUR_MILL)
+    raise ValueError(f"operation {kind!r} is not built yet")
 
 
 def validate_op(setup: dict, op: dict) -> dict:
@@ -227,18 +234,20 @@ def validate_op(setup: dict, op: dict) -> dict:
     for k, v in list(op.items()):
         if isinstance(v, (int, float)) and not isinstance(v, bool):
             op[k] = float(v)
-    for k in ("tool_dia", "stepdown", "rpm", "feed", "sfm", "ipr", "max_rpm"):
+    for k in ("tool_dia", "stepdown", "rpm", "feed", "sfm", "ipr", "max_rpm", "plunge"):
         if k in op and op[k] <= 0:
             raise ValueError(f"{k.replace('_', ' ')} must be greater than 0")
     op["tool"] = int(round(op["tool"]))
     if not 1 <= op["tool"] <= 99:
         raise ValueError("tool number must be 1 to 99")
-    if setup["type"] == MILLING:
+    if op["type"] == "face" and setup["type"] == MILLING:
         if not 1 <= op["stepover"] <= 100:
             raise ValueError("stepover must be 1 to 100 % of the tool")
         if op["direction"] not in ("x", "y"):
             raise ValueError("direction must be x or y")
-    for k in ("leave", "past_center", "clearance"):
+    if op["type"] == "contour" and op["direction"] not in ("climb", "conventional"):
+        raise ValueError("direction must be climb or conventional")
+    for k in ("leave", "past_center", "clearance", "lead"):
         if k in op and op[k] < 0:
             raise ValueError(f"{k.replace('_', ' ')} can't be negative")
     return op
@@ -317,12 +326,78 @@ def face_toolpath(bbox, setup: dict, op: dict, radius: float = 0.0) -> list[tupl
     return moves
 
 
+def contour_toolpath(bbox, setup: dict, op: dict, loops) -> list[tuple]:
+    """2D Contour around the part's outside. `loops` = where the tool CENTER runs, in model XY
+    (kernel.outline_loops already grew them by tool radius + stock to leave). Climb = clockwise
+    around the outside (spindle M03). Lead in / out square off the wall at the middle of the
+    longest side; stepdowns from the stock top to the part bottom (minus bottom_offset)."""
+    op = validate_op(setup, op)
+    if setup["type"] != MILLING:
+        raise ValueError("2D Contour needs a Milling setup")
+    if not loops:
+        raise ValueError("no outline to contour")
+    w = wcs(bbox, setup)
+    o = w["origin"]
+    lo, hi = stock_box(bbox, setup)
+    top, bottom = hi[2] - o[2], bbox[0][2] - o[2] - op["bottom_offset"]
+    levels = _levels(top, bottom, op["stepdown"])
+    safe = top + op["clearance"]
+    moves = []
+    for loop in loops:
+        pts = [(x - o[0], y - o[1]) for x, y in loop]
+        area = sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(pts, pts[1:] + pts[:1])) / 2
+        if (area > 0) == (op["direction"] == "climb"):
+            pts.reverse()                       # climb: clockwise; conventional: counter-clockwise
+        cw = op["direction"] == "climb"
+        k = max(range(len(pts)), key=lambda i: math.dist(pts[i], pts[(i + 1) % len(pts)]))
+        a, b = pts[k], pts[(k + 1) % len(pts)]
+        start = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+        ring = [start] + pts[k + 1:] + pts[:k + 1] + [start]
+        d = math.dist(a, b) or 1.0
+        dx, dy = (b[0] - a[0]) / d, (b[1] - a[1]) / d
+        nx, ny = (-dy, dx) if cw else (dy, -dx)            # outward, away from the part
+        lead = (start[0] + nx * op["lead"], start[1] + ny * op["lead"])
+        moves.append(("rapid", (lead[0], lead[1], safe)))
+        moves.append(("rapid", (lead[0], lead[1], top + 0.1)))
+        for z in levels:
+            moves.append(("feed", (lead[0], lead[1], z)))    # plunge off the part
+            moves += [("feed", (x, y, z)) for x, y in ring]
+            moves.append(("feed", (lead[0], lead[1], z)))
+        moves.append(("rapid", (lead[0], lead[1], safe)))
+    return moves
+
+
+def toolpath(bbox, setup: dict, op: dict, radius: float = 0.0, loops=None) -> list[tuple]:
+    """Moves for any operation (face or contour)."""
+    if op.get("type", "face") == "contour":
+        return contour_toolpath(bbox, setup, op, loops)
+    return face_toolpath(bbox, setup, op, radius)
+
+
 def toolpath_world(bbox, setup: dict, moves, radius: float = 0.0) -> list[tuple]:
     """The same moves in model coordinates (for drawing)."""
     w = wcs(bbox, setup, radius)
     o, x, z = w["origin"], w["x"], w["z"]
     y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]]
     return [(kind, tuple(o[k] + p[0] * x[k] + p[1] * y[k] + p[2] * z[k] for k in range(3))) for kind, p in moves]
+
+
+RAPID_IPM = 400.0          # assumed rapid rate for simulation timing (machines vary: 400-1400)
+
+
+def move_times(moves, setup: dict, op: dict, rapid_ipm: float = RAPID_IPM) -> list[float]:
+    """Minutes each move takes (the first is 0): feeds at the op's feed (plunges at its plunge
+    feed; turning at constant surface speed, RPM capped), rapids at rapid_ipm. For Simulate."""
+    out, prev = [], None
+    for kind, p in moves:
+        if prev is None:
+            out.append(0.0)
+        elif kind == "rapid":
+            out.append(math.dist(prev, p) / rapid_ipm)
+        else:
+            out.append(cycle_time([("feed", prev), ("feed", p)], setup, op))
+        prev = p
+    return out
 
 
 def cycle_time(moves, setup: dict, op: dict) -> float:
@@ -332,7 +407,8 @@ def cycle_time(moves, setup: dict, op: dict) -> float:
         if prev is not None and kind == "feed":
             d = math.dist(prev, p)
             if setup["type"] == MILLING:
-                t += d / op["feed"]
+                z_only = abs(prev[0] - p[0]) < 1e-9 and abs(prev[1] - p[1]) < 1e-9
+                t += d / (op.get("plunge", op["feed"]) if z_only else op["feed"])
             else:                                   # constant surface speed, capped RPM
                 r_mid = max((abs(prev[0]) + abs(p[0])) / 2, 1e-3)
                 rpm = min(op["sfm"] * 12 / (2 * math.pi * r_mid), op["max_rpm"])
@@ -342,6 +418,9 @@ def cycle_time(moves, setup: dict, op: dict) -> float:
 
 
 def describe_op(setup: dict, op: dict) -> str:
+    if op.get("type") == "contour":
+        return (f"2D Contour · Ø{op['tool_dia']:.3f} tool · {op['direction']} · {op['stepdown']:.3f} DOC · "
+                f"leave {op['leave']:.3f}")
     if setup["type"] == MILLING:
         return f"Face · Ø{op['tool_dia']:.3f} tool · {op['stepover']:.0f}% stepover · {op['stepdown']:.3f} DOC"
     return f"Face · {op['stepdown']:.3f} per pass · {op['sfm']:.0f} SFM · {op['ipr']:.4f} IPR"

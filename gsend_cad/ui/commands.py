@@ -5,20 +5,22 @@ from the main window (`on_key`). They edit the Document only when committed.
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pyvista as pv
 from PySide6.QtCore import QEvent, QPoint, Qt, QTimer
 from functools import partial
 
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFrame, QHBoxLayout,
-                               QLabel, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QToolButton, QVBoxLayout,
-                               QWidget)
+                               QLabel, QPlainTextEdit, QPushButton, QScrollArea, QSlider, QSpinBox, QToolButton,
+                               QVBoxLayout, QWidget)
 
 from ..core import cam, post
 from ..core import plane as pl
 from ..core import sketch as sk
 from ..core.profiles import region_at, sketch_regions
-from ..kernel import (bodies_bbox, edge_list, max_radius, extrude_tool, face_outline, planar_face_at, plane_edges, region_face, revolve_axis,
+from ..kernel import (bodies_bbox, edge_list, max_radius, outline_loops, extrude_tool, face_outline, planar_face_at, plane_edges, region_face, revolve_axis,
                       revolve_tool, triangles)
 from . import theme
 
@@ -1509,7 +1511,15 @@ def op_moves(win, setup, op):
         return [], []
     bbox = bodies_bbox(bodies)
     r = turning_radius(win, setup, bodies) if setup["type"] == cam.TURNING else 0.0
-    moves = cam.face_toolpath(bbox, setup, op, r)
+    loops = None
+    if op.get("type") == "contour":           # the part outline grown by tool radius + stock to leave
+        grow = op["tool_dia"] / 2 + op.get("leave", 0.0)
+        key = ("outline", id(win.model), tuple(b.id for b in bodies), round(grow, 6))
+        cache = win.__dict__.setdefault("_radius_cache", {})
+        if key not in cache:
+            cache[key] = outline_loops(bodies, grow)
+        loops = cache[key]
+    moves = cam.toolpath(bbox, setup, op, r, loops)
     return moves, cam.toolpath_world(bbox, setup, moves, r)
 
 
@@ -1523,24 +1533,39 @@ def draw_toolpath(vp, world, group="cam", dim=False):
 
 
 class OpPanel(Panel):
-    FIELDS = {cam.MILLING: [("tool", "Tool number", 0), ("tool_dia", "Tool diameter", 4), ("stepover", "Stepover %", 1),
-                            ("stepdown", "Max stepdown", 4), ("leave", "Stock to leave", 4),
-                            ("rpm", "Spindle RPM", 0), ("feed", "Feed (in/min)", 2)],
-              cam.TURNING: [("tool", "Tool number", 0), ("stepdown", "Max stepdown", 4), ("leave", "Stock to leave", 4),
-                            ("past_center", "Past center (X)", 4), ("sfm", "Surface speed SFM", 0),
-                            ("ipr", "Feed (in/rev)", 4), ("max_rpm", "Max RPM", 0)]}
+    # op kind -> setup type -> [(key, label, decimals)]; a combo (direction) is added per kind below
+    FIELDS = {"face": {cam.MILLING: [("tool", "Tool number", 0), ("tool_dia", "Tool diameter", 4),
+                                     ("stepover", "Stepover %", 1), ("stepdown", "Max stepdown", 4),
+                                     ("leave", "Stock to leave", 4), ("rpm", "Spindle RPM", 0),
+                                     ("feed", "Feed (in/min)", 2)],
+                       cam.TURNING: [("tool", "Tool number", 0), ("stepdown", "Max stepdown", 4),
+                                     ("leave", "Stock to leave", 4), ("past_center", "Past center (X)", 4),
+                                     ("sfm", "Surface speed SFM", 0), ("ipr", "Feed (in/rev)", 4),
+                                     ("max_rpm", "Max RPM", 0)]},
+              "contour": {cam.MILLING: [("tool", "Tool number", 0), ("tool_dia", "Tool diameter", 4),
+                                        ("stepdown", "Max stepdown", 4), ("leave", "Wall stock", 4),
+                                        ("bottom_offset", "Below part bottom", 4), ("lead", "Lead in / out", 4),
+                                        ("rpm", "Spindle RPM", 0), ("feed", "Feed (in/min)", 2),
+                                        ("plunge", "Plunge (in/min)", 2)]}}
+    DIRECTIONS = {"face": [("Along X", "x"), ("Along Y", "y")],
+                  "contour": [("Climb", "climb"), ("Conventional", "conventional")]}
 
-    def __init__(self, session: "OpSession"):
-        super().__init__("Face", 250)
+    def __init__(self, session: "OpSession", kind: str):
+        super().__init__({"face": "Face", "contour": "2D Contour"}[kind], 260)
         s = session
         self.setup = QComboBox()
         for st in s.win.doc.setups:
-            self.setup.addItem(f"{st['name']} · {cam.TYPES[st['type']]}", st["id"])
+            if st["type"] in self.FIELDS[kind]:
+                self.setup.addItem(f"{st['name']} · {cam.TYPES[st['type']]}", st["id"])
         self.row("Setup", self.setup)
         self.name = self.row("Name", self.value(""))
         self.boxes = {}
         self.groups = {}
-        for kind, fields in self.FIELDS.items():
+        self.direction = QComboBox()
+        for label, key in self.DIRECTIONS[kind]:
+            self.direction.addItem(label, key)
+        self.direction.currentIndexChanged.connect(s.preview)
+        for stype, fields in self.FIELDS[kind].items():
             g = QWidget()
             lay = QVBoxLayout(g)
             lay.setContentsMargins(0, 0, 0, 0)
@@ -1550,13 +1575,9 @@ class OpPanel(Panel):
                 nb = NumBox(0, dec)
                 nb.setRange(0, 100000)
                 nb.valueChanged.connect(s.preview)
-                self.boxes[(kind, key)] = nb
+                self.boxes[(stype, key)] = nb
                 items.append((label, nb))
-            if kind == cam.MILLING:
-                self.direction = QComboBox()
-                self.direction.addItem("Along X", "x")
-                self.direction.addItem("Along Y", "y")
-                self.direction.currentIndexChanged.connect(s.preview)
+            if stype == cam.MILLING:
                 items.insert(5, ("Cut direction", self.direction))
             for label, w in items:
                 r = QWidget()
@@ -1568,7 +1589,7 @@ class OpPanel(Panel):
                 hl.addWidget(w)
                 lay.addWidget(r)
             self.v.addWidget(g)
-            self.groups[kind] = g
+            self.groups[stype] = g
         self.info = QLabel("")
         self.info.setWordWrap(True)
         self.info.setStyleSheet(f"color:{theme.FG2};padding:4px 10px;")
@@ -1580,22 +1601,25 @@ class OpPanel(Panel):
 
 
 class OpSession:
-    """CAM → Face: pick the setup, set the cut, see the toolpath. Also edits an operation."""
+    """CAM → Face / 2D Contour: pick the setup, set the cut, see the toolpath. Also edits an op."""
     captures_left = False
 
-    def __init__(self, win, setup_id: str | None, edit_id: str | None = None):
+    def __init__(self, win, setup_id: str | None, kind: str = "face", edit_id: str | None = None):
         self.win, self.vp = win, win.viewport
         self.edit_id = edit_id
-        self.panel = OpPanel(self)
+        op = None
+        if edit_id:
+            st, op = win.doc.op(edit_id)
+            setup_id, kind = st["id"], op.get("type", "face")
+        self.kind = kind
+        self.panel = OpPanel(self, kind)
         p = self.panel
         self._loading = True
         if edit_id:
-            st, op = win.doc.op(edit_id)
-            setup_id = st["id"]
             p.setup.setEnabled(False)          # an op stays in its setup
         p.setup.setCurrentIndex(max(0, p.setup.findData(setup_id)))
         self._loading = False
-        self.setup_changed(op=op if edit_id else None)
+        self.setup_changed(op=op)
 
     def current_setup(self):
         return self.win.doc.setup(self.panel.setup.currentData())
@@ -1603,21 +1627,22 @@ class OpSession:
     def setup_changed(self, *_, op=None):
         p = self.panel
         st = self.current_setup()
-        op = op or cam.new_op(st)
+        op = op or cam.new_op(st, self.kind)
         self._loading = True
-        for (kind, key), box in p.boxes.items():
-            if kind == st["type"] and key in op:
+        for (stype, key), box in p.boxes.items():
+            if stype == st["type"] and key in op:
                 box.setValue(op[key])
-        if st["type"] == cam.MILLING:
-            p.direction.setCurrentIndex(p.direction.findData(op.get("direction", "x")))
+        if "direction" in op:
+            p.direction.setCurrentIndex(max(0, p.direction.findData(op["direction"])))
+        base = cam.OP_TYPES[self.kind]
         names = {o["name"] for o in st.get("ops", [])}
         k = 1
-        while f"Face{k}" in names:
+        while f"{base}{k}" in names:
             k += 1
-        p.name.setText(op.get("name", f"Face{k}"))
+        p.name.setText(op.get("name", f"{base}{k}"))
         self._loading = False
-        for kind, g in p.groups.items():
-            g.setVisible(kind == st["type"])
+        for stype, g in p.groups.items():
+            g.setVisible(stype == st["type"])
         p.fit()
         self.vp.set_side(p)
         self.preview()
@@ -1625,9 +1650,9 @@ class OpSession:
     def op(self) -> dict:
         p = self.panel
         st = self.current_setup()
-        o = {"type": "face", "name": p.name.text()}
-        for (kind, key), box in p.boxes.items():
-            if kind == st["type"]:
+        o = {"type": self.kind, "name": p.name.text()}
+        for (stype, key), box in p.boxes.items():
+            if stype == st["type"]:
                 o[key] = box.value()
         if st["type"] == cam.MILLING:
             o["direction"] = p.direction.currentData()
@@ -1647,11 +1672,14 @@ class OpSession:
             self.vp.render()
             return
         draw_toolpath(self.vp, world, "op")
-        passes = sum(1 for (_a, p0), (k, p1) in zip(moves, moves[1:]) if k == "feed" and p0[2] != p1[2]) \
-            if st["type"] == cam.MILLING else sum(1 for k, _p in moves if k == "feed")
+        zs = {round(p[2], 6) for k, p in moves if k == "feed"} if st["type"] == cam.MILLING else \
+            {i for i, (k, _p) in enumerate(moves) if k == "feed"}
         t = cam.cycle_time(moves, st, self.op())
-        self.panel.info.setText(f"{passes} depth pass{'es' if passes != 1 else ''} · about {t:.1f} min cutting")
-        self.win.message("FACE: blue = cutting, yellow = rapid · change values to update · Enter / OK saves · Esc cancels")
+        n = len(zs)
+        self.panel.info.setText(f"{n} depth pass{'es' if n != 1 else ''} · about {t:.1f} min cutting")
+        word = self.panel.title.text()
+        self.win.message(f"{word}: blue = cutting, yellow = rapid · change values to update · Enter / OK saves · "
+                         "Esc cancels")
         self.vp.render()
 
     def commit(self):
@@ -1679,13 +1707,166 @@ class OpSession:
         return False
 
     def ribbon_tool(self, label):
-        if label == "Face":
-            return
         self.win.cancel_command()
         self.win.run_tool(label)
 
     def close(self):
         self.vp.clear("op", render=False)
+
+
+# ------------------------------------------------------------------ simulate
+class SimPanel(Panel):
+    SPEEDS = [1, 2, 5, 10, 25, 100]
+
+    def __init__(self, session: "SimSession", what: str):
+        super().__init__("Simulate", 300)
+        s = session
+        self.row("Toolpath", self.value(what))
+        bar = QWidget()
+        bl = QHBoxLayout(bar)
+        bl.setContentsMargins(10, 6, 10, 4)
+        self.play = QPushButton("▶  PLAY")
+        self.play.setObjectName("dlgBtn")
+        self.play.setProperty("ok", True)
+        self.play.clicked.connect(s.toggle)
+        restart = QPushButton("⏮")
+        restart.setObjectName("dlgBtn")
+        restart.setToolTip("Back to the start")
+        restart.clicked.connect(lambda: s.seek(0.0))
+        self.speed = QComboBox()
+        for x in self.SPEEDS:
+            self.speed.addItem(f"{x}×", x)
+        self.speed.setCurrentIndex(3)
+        bl.addWidget(restart)
+        bl.addWidget(self.play, 1)
+        bl.addWidget(self.speed)
+        self.v.addWidget(bar)
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setRange(0, 1000)
+        self.slider.sliderMoved.connect(lambda v: s.seek(v / 1000 * s.total))
+        sw = QWidget()
+        sl = QHBoxLayout(sw)
+        sl.setContentsMargins(10, 2, 10, 2)
+        sl.addWidget(self.slider)
+        self.v.addWidget(sw)
+        self.at = self.row("Tool at", self.value(""))
+        self.step = self.row("Move", self.value(""))
+        self.time = self.row("Time", self.value(""))
+        foot = QWidget()
+        fl = QHBoxLayout(foot)
+        fl.setContentsMargins(10, 6, 10, 6)
+        fl.addStretch()
+        close = QPushButton("CLOSE")
+        close.setObjectName("dlgBtn")
+        close.clicked.connect(s.win.cancel_command)
+        fl.addWidget(close)
+        self.v.addWidget(foot)
+
+
+class SimSession:
+    """Plays an operation's (or a whole setup's) toolpath: the tool rides the path at the
+    programmed feeds (rapids at cam.RAPID_IPM), sped up by the chosen factor. Blue behind the
+    tool = cut so far. Material removal is G-SEND.IO's simulator's job; this checks the motion."""
+    captures_left = False
+
+    def __init__(self, win, setup: dict, ops: list):
+        self.win, self.vp = win, win.viewport
+        self.setup = setup
+        self.world, self.times, self.op_of = [], [], []
+        for op in ops:
+            moves, world = op_moves(win, setup, op)
+            t = cam.move_times(moves, setup, op)
+            if self.world and world:                     # rapid from the last op to the next
+                t[0] = math.dist(self.world[-1][1], world[0][1]) / cam.RAPID_IPM
+            self.world += world
+            self.times += t
+            self.op_of += [op] * len(world)
+        self.cum = list(np.cumsum(self.times)) if self.times else [0.0]
+        self.total = self.cum[-1] or 1e-9
+        what = ops[0]["name"] if len(ops) == 1 else f"{setup['name']} · {len(ops)} ops"
+        self.panel = SimPanel(self, what)
+        self.t = 0.0
+        self.timer = QTimer()
+        self.timer.setInterval(33)
+        self.timer.timeout.connect(self.tick)
+        self.vp.clear("cam", render=False)
+        draw_setup(self.vp, win, setup, "sim")
+        draw_toolpath(self.vp, self.world, "sim", dim=True)
+        mill = setup["type"] == cam.MILLING
+        dia = max((o.get("tool_dia", 0.5) for o in ops), default=0.5) if mill else 0.08
+        tool = pv.Cylinder(center=(0, 0, 0.75), direction=(0, 0, 1), radius=dia / 2, height=1.5, resolution=32) \
+            if mill else pv.Sphere(radius=0.05, center=(0, 0, 0))
+        self.tool = self.vp.add_surface("simtool", tool, theme.FG, 0.85)
+        self.vp.set_side(self.panel)
+        self.seek(0.0)
+        self.win.message("SIMULATE: ▶ plays · drag the slider to scrub · Space = play / pause · Esc closes")
+
+    def toggle(self):
+        if self.timer.isActive():
+            self.timer.stop()
+        else:
+            if self.t >= self.total:
+                self.t = 0.0
+            self.timer.start()
+        self.panel.play.setText("❚❚  PAUSE" if self.timer.isActive() else "▶  PLAY")
+
+    def tick(self):
+        self.seek(self.t + 0.033 / 60 * self.panel.speed.currentData())
+        if self.t >= self.total:
+            self.timer.stop()
+            self.panel.play.setText("▶  PLAY")
+
+    def seek(self, t: float):
+        self.t = max(0.0, min(t, self.total))
+        if not self.world:
+            return
+        i = int(np.searchsorted(self.cum, self.t))
+        i = min(max(i, 0), len(self.world) - 1)
+        p1 = np.array(self.world[i][1])
+        if i > 0 and self.times[i] > 0:
+            p0 = np.array(self.world[i - 1][1])
+            f = 1 - (self.cum[i] - self.t) / self.times[i]
+            at = p0 + (p1 - p0) * min(max(f, 0.0), 1.0)
+        else:
+            at = p1
+        self.tool.SetPosition(*at)
+        self.vp.clear("simdone", render=False)
+        done = [np.array(w[1]) for w in self.world[:i]] + [at]
+        feeds = [[a, b] for (a, b), k in zip(zip(done, done[1:]), [w[0] for w in self.world[1:i + 1]]) if k == "feed"]
+        self.vp.add_lines("simdone", feeds, theme.ACCENT, 3.0)
+        p = self.panel
+        p.slider.blockSignals(True)
+        p.slider.setValue(int(self.t / self.total * 1000))
+        p.slider.blockSignals(False)
+        kind = self.world[i][0]
+        p.at.setText(f"X{at[0]:.4f} Y{at[1]:.4f} Z{at[2]:.4f}")
+        p.step.setText(f"{i + 1} / {len(self.world)} · {'FEED' if kind == 'feed' else 'RAPID'} · {self.op_of[i]['name']}")
+        p.time.setText(f"{self.t:.2f} / {self.total:.2f} min")
+        self.vp.render()
+
+    def on_move(self, w, ev):
+        pass
+
+    def on_click(self, w, ev):
+        pass
+
+    def on_key(self, ev) -> bool:
+        if ev.key() == Qt.Key_Space:
+            self.toggle()
+            return True
+        if ev.key() == Qt.Key_Escape:
+            self.win.cancel_command()
+            return True
+        return False
+
+    def ribbon_tool(self, label):
+        self.win.cancel_command()
+        self.win.run_tool(label)
+
+    def close(self):
+        self.timer.stop()
+        for g in ("sim", "simdone", "simtool"):
+            self.vp.clear(g, render=False)
 
 
 # ------------------------------------------------------------------ post process (G-code)

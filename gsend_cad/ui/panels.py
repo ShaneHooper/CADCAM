@@ -391,6 +391,8 @@ class Browser(QFrame):
     toggle = Signal(str)          # sketch id: show / hide
     delete = Signal(str)          # sketch or body id
     rename = Signal(str, str)     # sketch or body id, new name
+    simulate = Signal(str)        # CAM setup or operation id
+    post = Signal(str)            # CAM setup or operation id
 
     def __init__(self):
         super().__init__()
@@ -531,6 +533,9 @@ class Browser(QFrame):
         if nid in self.setup_ids:
             m.addAction("Edit Operation" if nid.startswith("op") else "Edit Setup", partial(self.edit.emit, nid))
             m.addSeparator()
+            m.addAction("Simulate", partial(self.simulate.emit, nid))
+            m.addAction("Post Process…", partial(self.post.emit, nid))
+            m.addSeparator()
         m.addAction("Rename\tF2", partial(self.start_rename, nid))
         d = m.addAction("Delete\tDel", partial(self.delete.emit, nid))
         if nid in self.body_ids and not self.body_ids[nid]:
@@ -548,7 +553,7 @@ class Browser(QFrame):
         self._renaming = None
         self.sketch_ids = {sk[0]: sk[4] for sk in sketches}
         self.body_ids = {bid: vis for bid, _n, vis in bodies}
-        self.setup_ids = {sid for sid, _n, _t, _ops in setups} | {oid for *_x, ops in setups for oid, _n in ops}
+        self.setup_ids = {sid for sid, _n, _t, _ops in setups} | {o[0] for *_x, ops in setups for o in ops}
 
         def node(parent, name, kind, on, nid=None, tag="", dim=False):
             it = QTreeWidgetItem(parent, [name, tag])
@@ -588,8 +593,8 @@ class Browser(QFrame):
             for sid, name, kind, ops in setups:
                 it = node(cf, name, "setup", True, sid, kind.upper())
                 it.setToolTip(0, "Double-click to edit · Delete removes it")
-                for oid, oname in ops:
-                    o = node(it, oname, "face", True, oid, "FACE")
+                for oid, oname, okind in ops:
+                    o = node(it, oname, okind, True, oid, okind.upper())
                     o.setToolTip(0, "Double-click to edit · Delete removes it")
         t.expandAll()
         for i in (1, 2):   # keep Document Settings / Named Views collapsed like the prototype

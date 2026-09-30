@@ -79,23 +79,28 @@ def post_setup(setup: dict, ops: list[tuple[dict, list]], controller: str = "haa
 
 def _mill_op(setup, op, moves, offset, coolant):
     t = int(op.get("tool", 1))
-    L = ["", _comment(f"{op['name']} T{t} D{num(op['tool_dia'])} FACE MILL"),
+    what = {"face": "FACE MILL", "contour": "END MILL 2D CONTOUR"}.get(op.get("type", "face"), "")
+    L = ["", _comment(f"{op['name']} T{t} D{num(op['tool_dia'])} {what}"),
          f"T{t} M06", f"{offset} G90", f"S{int(round(op['rpm']))} M03"]
     m = _Modal()
     first = True
+    prev = None
     for kind, (x, y, z) in moves:
         if first:                                     # XY first, then Z with length comp
             L.append(m.block([("G", "G00"), ("X", num(x)), ("Y", num(y))]))
             L.append(f"G43 Z{num(z)} H{t:02d}" + (" M08" if coolant else ""))
             m.last["Z"] = num(z)
             first = False
+            prev = (x, y, z)
             continue
         words = [("G", "G00" if kind == "rapid" else "G01"), ("X", num(x)), ("Y", num(y)), ("Z", num(z))]
-        if kind == "feed":
-            words.append(("F", num(op["feed"])))
+        if kind == "feed":                            # straight down = plunge feed, when the op has one
+            down = prev is not None and prev[:2] == (x, y) and z < prev[2]
+            words.append(("F", num(op["plunge"] if down and "plunge" in op else op["feed"])))
         line = m.block(words)
         if line and line not in ("G00", "G01"):
             L.append(line)
+        prev = (x, y, z)
     L += ["M09" if coolant else None, "M05"]
     return [x for x in L if x is not None]
 

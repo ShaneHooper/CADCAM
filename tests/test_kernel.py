@@ -208,3 +208,14 @@ def test_max_radius_of_turned_part():
     d.add_revolve([sketch_regions(s["id"], s["ents"])[0].to_data()], {"sketch": s["id"], "kind": "x"})
     r = max_radius(Kernel().build(d).bodies, (0, 0, 0), (1, 0, 0))
     assert abs(r - 0.75) < 1e-3
+
+
+def test_outline_loops_grow_by_tool_radius():
+    from gsend_cad.kernel import outline_loops
+    loops = outline_loops(Kernel().build(bracket_plate()).bodies, 0.25)
+    assert len(loops) == 1
+    pts = loops[0]
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    assert (min(xs), max(xs), min(ys), max(ys)) == pytest.approx((-2.25, 2.25, -1.75, 1.75), abs=1e-6)
+    area = abs(sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(pts, pts[1:] + pts[:1])) / 2)
+    assert area == pytest.approx(15.5354, abs=2e-3)       # 4 x 3 rounded plate grown 0.25 all round

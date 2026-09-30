@@ -373,3 +373,33 @@ def test_post_mill_and_lathe():
     assert "G01 X-0.04 F0.008" in lines                         # 0.02 past center, as diameter
     with pytest.raises(ValueError):
         post.post_setup(t, [], "haas", 1001)
+
+
+def test_contour_toolpath_and_post():
+    from gsend_cad.core import cam, post
+    box = ((0, 0, 0), (4, 3, 1.0))
+    s = {**cam.new_setup("milling"), "name": "S"}                 # WCS top center (2, 1.5, 1.05)
+    loop = [(-0.25, -0.25), (4.25, -0.25), (4.25, 3.25), (-0.25, 3.25)]   # tool center path (r .25)
+    op = {**cam.new_op(s, "contour"), "name": "Contour1"}
+    mv = cam.contour_toolpath(box, s, op, [loop])
+    zs = sorted({round(p[2], 9) for k, p in mv if k == "feed"})
+    assert zs == pytest.approx([-1.05, -0.84, -0.63, -0.42, -0.21])     # 1.05 deep in 5 x 0.21 (<= .25)
+    ring = [p for k, p in mv if k == "feed" and abs(p[2] + 0.21) < 1e-9]
+    area = sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(ring, ring[1:])) / 2
+    assert area < 0                                                    # climb = clockwise outside
+    lead = ring[0]
+    assert lead[1] == pytest.approx(-1.75 - 0.1) or lead[1] == pytest.approx(1.75 + 0.1)   # off the long side
+    g = post.post_setup(s, [(cam.validate_op(s, op), mv)], "haas", 1)
+    assert "F10." in g and "F30." in g and "2D CONTOUR" in g                  # plunge vs cutting feed
+    with pytest.raises(ValueError):
+        cam.new_op(cam.new_setup("turning"), "contour")
+
+
+def test_move_times_match_cycle_time():
+    from gsend_cad.core import cam
+    s = cam.new_setup("milling")
+    op = cam.new_op(s)
+    mv = cam.face_toolpath(((0, 0, 0), (4, 3, 0.5)), s, op)
+    t = cam.move_times(mv, s, op)
+    feed_t = sum(x for x, (k, _p) in zip(t, mv) if k == "feed")
+    assert len(t) == len(mv) and t[0] == 0 and abs(feed_t - cam.cycle_time(mv, s, op)) < 1e-12

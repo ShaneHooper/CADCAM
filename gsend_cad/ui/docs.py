@@ -282,6 +282,27 @@ F2 to rename. Clicking an operation shows its path bright; the setup's other pat
 <li>Each operation has a <b>Tool number</b> (T1, T0101 on a lathe) used by the post.</li>
 </ul>
 """),
+    ("contour", "CAM: 2D Contour and Simulate", """
+<h1>2D Contour (milling)</h1>
+<ol>
+<li>CAM → <b>2D Contour</b> (needs a Milling setup). The outline is found from the part: its outside as
+seen from above, including bosses and flanges higher up.</li>
+<li>Tool number and diameter, <b>max stepdown</b>, <b>wall stock</b> to leave, <b>below part bottom</b>
+(extra depth to clean the floor edge), <b>cut direction</b> (Climb = clockwise around the outside with
+M03, or Conventional), <b>lead in / out</b> distance, spindle RPM, feed and <b>plunge</b> feed.</li>
+<li>Passes step down from the stock top to the part bottom. Each pass plunges beside the part
+(on the lead), goes around, and leaves the same way. The start is the middle of the longest side.</li>
+</ol>
+<p class="tip">Arcs are written as short G01 lines for now (within 0.0005"). G02 / G03 arcs are coming.</p>
+<h1>Simulate</h1>
+<ul>
+<li>Right-click an operation (or a whole setup) in the Browser → <b>Simulate</b>, or CAM → <b>Simulate</b>.</li>
+<li>▶ plays at the programmed feeds (rapids assumed 400 in/min), times 1 to 100 speed. Drag the slider to
+scrub. Space = play / pause, Esc closes. The readout shows where the tool is, which move, and the time.</li>
+<li>This checks the motion. For material removal, load the posted program into G-SEND.IO's simulator.</li>
+</ul>
+<p>Right-click an operation or setup → <b>Post Process…</b> opens the G-code window on that setup.</p>
+"""),
     ("post", "CAM: Post Process (G-code)", """
 <h1>Post Process: G-code out</h1>
 <ol>

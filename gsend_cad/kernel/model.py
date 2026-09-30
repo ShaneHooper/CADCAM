@@ -5,8 +5,8 @@ import math
 from dataclasses import dataclass, field
 
 import numpy as np
-from build123d import (Axis, Circle, Cylinder, Edge, Face, GeomType, Part, Plane, Pos, Rectangle, RectangleRounded,
-                       Vector, Wire, export_step, extrude, revolve)
+from build123d import (Axis, Circle, Cylinder, Edge, Face, GeomType, Kind, Part, Plane, Pos, Rectangle,
+                       RectangleRounded, Vector, Wire, export_step, extrude, offset, revolve)
 
 from ..core import DENSITY, resolve
 from ..core import plane as pl
@@ -269,6 +269,46 @@ def _find_edges(shape, mids, tol=1e-4):
         elif best not in edges:
             edges.append(best)
     return edges, missing
+
+
+def outline_loops(bodies, grow: float, tol: float = 0.0005) -> list[list[tuple]]:
+    """The parts' outside outline seen from above (Z), grown by `grow` (tool radius + stock to
+    leave), as closed XY point loops - where a 2D Contour tool center runs. The outline is the
+    union of sections through every Z slab of the part (between its flat horizontal faces), so a
+    boss or flange anywhere up the part counts. Arcs are split to within `tol`."""
+    zs = set()
+    for b in bodies:
+        lo, hi = b.bbox()
+        zs |= {lo[2], hi[2]}
+        for f in b.shape.faces():
+            if f.geom_type == GeomType.PLANE and abs(abs(f.normal_at(f.center()).Z) - 1) < 1e-9:
+                zs.add(f.center().Z)
+    zs = sorted(zs)
+    region = None
+    for b in bodies:
+        for z0, z1 in zip(zs, zs[1:]):
+            if z1 - z0 < 1e-6:
+                continue
+            z = (z0 + z1) / 2
+            for f in b.shape.intersect(Plane.XY.offset(z)).faces():
+                f = Pos(0, 0, -z) * f
+                region = f if region is None else region + f
+    if region is None:
+        return []
+    loops = []
+    for f in region.faces():
+        face = f if grow <= 0 else offset(f, grow, kind=Kind.ARC).faces()[0]
+        pts = []
+        for e in face.outer_wire().order_edges() if hasattr(face.outer_wire(), "order_edges") else face.outer_wire().edges():
+            n = 1 if e.geom_type == GeomType.LINE else max(4, int(math.ceil(e.length / max(math.sqrt(8 * tol * e.radius), 1e-3))))
+            seg = [(p.X, p.Y) for p in e.positions([i / n for i in range(n + 1)])]
+            if pts and math.dist(pts[-1], seg[0]) > math.dist(pts[-1], seg[-1]):
+                seg.reverse()
+            pts.extend(seg[1:] if pts else seg)
+        if len(pts) > 2 and math.dist(pts[0], pts[-1]) < 1e-6:
+            pts.pop()
+        loops.append(pts)
+    return loops
 
 
 def bodies_bbox(bodies):

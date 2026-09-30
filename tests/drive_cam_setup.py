@@ -190,5 +190,42 @@ check(".nc file written with CRLF line ends", open(out, "rb").read().count(b"\r\
 check("post settings remembered on the setup", win.doc.setup(ms["id"])["post"]["controller"] == "fanuc")
 shot("cam_06_post")
 dlg.close()
+
+# ---- 2D Contour on the milling setup, then Simulate / Post Process from the right-click menu
+win.cam_setup = ms["id"]
+win.run_tool("2D Contour")
+o = win.session
+check("2D Contour opens on the milling setup", o.__class__.__name__ == "OpSession" and o.kind == "contour"
+      and o.current_setup()["id"] == ms["id"])
+check("contour preview has passes", "depth pass" in o.panel.info.text())
+shot("cam_07_contour")
+key(Qt.Key_Return)
+cop = win.doc.setup(ms["id"])["ops"][-1]
+check("Contour1 saved", cop["type"] == "contour" and cop["name"] == "Contour1")
+win.browser.simulate.emit(cop["id"])
+pump()
+sim = win.session
+check("right-click Simulate opens the simulator on that op", sim.__class__.__name__ == "SimSession"
+      and len(sim.world) > 10 and sim.panel.step.text().endswith("Contour1"))
+sim.seek(sim.total / 2)
+mid = tuple(sim.tool.GetPosition())
+check("scrubbing moves the tool along the path", mid != (0.0, 0.0, 0.0) and "/" in sim.panel.time.text())
+sim.panel.speed.setCurrentIndex(sim.panel.speed.count() - 1)
+sim.toggle()
+pump(600)
+check("Play advances the tool", sim.t > sim.total / 2)
+shot("cam_08_simulate")
+key(Qt.Key_Escape)
+check("Esc closes the simulator", win.session is None)
+win.browser.simulate.emit(ms["id"])
+pump()
+check("Simulate on a setup plays all its ops", len({id(x) for x in win.session.op_of}) == 2)
+key(Qt.Key_Escape)
+win.browser.post.emit(cop["id"])
+pump()
+g = win.post_dialog.text.toPlainText()
+check("right-click Post Process posts that op's setup (face + contour)", "FACE MILL" in g and "2D CONTOUR" in g
+      and "T2 M06" in g)
+win.post_dialog.close()
 print("FAILURES:", failures or "none")
 sys.exit(1 if failures else 0)

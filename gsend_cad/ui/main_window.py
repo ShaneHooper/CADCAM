@@ -13,7 +13,7 @@ from ..core import plane as pl
 from ..kernel import Kernel
 from . import theme
 from .commands import (EdgeSession, ExtrudeSession, OpSession, PlanePickSession, RevolveSession, SetupSession,
-                       SketchSession, draw_setup, draw_toolpath, op_moves, regions_for)
+                       SimSession, SketchSession, draw_setup, draw_toolpath, op_moves, regions_for)
 from .panels import Browser, Ribbon, StatusBar, Timeline, TopBar
 
 FILE_FILTER = f"{APP_NAME} (*.gcad);;All files (*)"
@@ -76,6 +76,8 @@ class MainWindow(QMainWindow):
         self.browser.toggle.connect(self.toggle_sketch)
         self.browser.delete.connect(self.delete_node)
         self.browser.rename.connect(self.rename_node)
+        self.browser.simulate.connect(self.simulate)
+        self.browser.post.connect(self.post_process)
         self.topbar.docs.connect(self.show_docs)
         self.topbar.about.connect(self.show_about)
         docs = QAction("Documentation", self, shortcut=QKeySequence(Qt.Key_F1),
@@ -154,20 +156,47 @@ class MainWindow(QMainWindow):
             return
         self.cancel_command()
         sid = getattr(self, "cam_setup", None)
-        if not self.doc.setup(sid):
-            want = self.ribbon.current                   # a setup of the tab's type, else the newest
-            sid = next((x["id"] for x in reversed(self.doc.setups) if x["type"] == want), self.doc.setups[-1]["id"])
+        want = "milling" if kind == "contour" else self.ribbon.current
+        if not self.doc.setup(sid) or (kind == "contour" and self.doc.setup(sid)["type"] != "milling"):
+            sid = next((x["id"] for x in reversed(self.doc.setups) if x["type"] == want), None)
+            if sid is None and kind == "contour" and not edit_id:
+                self.viewport.show_toast("2D Contour needs a Milling setup · CAM → Setup → MILLING", bad=True)
+                return
+            sid = sid or self.doc.setups[-1]["id"]
         self.viewport.clear("cam")
-        self.session = OpSession(self, sid, edit_id)
+        self.session = OpSession(self, sid, kind, edit_id)
         self.viewport.handler = self.session
-        self.ribbon.set_active("Face")
+        self.ribbon.set_active({"face": "Face", "contour": "2D Contour"}.get(self.session.kind))
 
-    def post_process(self):
+    def simulate(self, nid: str | None = None):
+        """Right-click → Simulate on a setup (all its ops) or one op; ribbon Simulate = the picked one."""
+        nid = nid or getattr(self, "cam_op", None) or getattr(self, "cam_setup", None)
+        st, op = self.doc.op(nid) if nid else (None, None)
+        if op is None:
+            st = self.doc.setup(nid) if nid else None
+            st = st if st and st.get("ops") else next((x for x in self.doc.setups if x.get("ops")), None)
+        if st is None:
+            self.viewport.show_toast("Nothing to simulate · add an operation to a setup first", bad=True)
+            return
+        if self.ribbon.switch.mode != "cam":
+            self.set_mode("cam")
+        self.cancel_command()
+        try:
+            self.session = SimSession(self, st, [op] if op else st["ops"])
+        except ValueError as exc:
+            self.session = None
+            self.viewport.show_toast(str(exc), bad=True)
+            return
+        self.viewport.handler = self.session
+        self.ribbon.set_active("Simulate")
+
+    def post_process(self, nid: str | None = None):
         from .commands import PostDialog
         if not any(x.get("ops") for x in self.doc.setups):
-            self.viewport.show_toast("Nothing to post · add a Face operation to a setup first", bad=True)
+            self.viewport.show_toast("Nothing to post · add an operation to a setup first", bad=True)
             return
-        sid = getattr(self, "cam_setup", None)
+        st, _op = self.doc.op(nid) if nid else (None, None)
+        sid = st["id"] if st else (nid if nid and self.doc.setup(nid) else getattr(self, "cam_setup", None))
         if not (self.doc.setup(sid) or {}).get("ops"):
             sid = next(x["id"] for x in self.doc.setups if x.get("ops"))
         self.post_dialog = PostDialog(self, sid)
@@ -235,7 +264,7 @@ class MainWindow(QMainWindow):
         editing = None
         if isinstance(self.session, SketchSession):
             editing = (self.session.name, len(self.session.ents), self.session.edit_id)
-        setups = [(x["id"], x["name"], x["type"], [(o["id"], o["name"]) for o in x.get("ops", [])])
+        setups = [(x["id"], x["name"], x["type"], [(o["id"], o["name"], o.get("type", "face")) for o in x.get("ops", [])])
                   for x in self.doc.setups]
         self.browser.set_rows(self.doc.name, bodies, sketches, self.selected, editing, setups)
 
@@ -464,6 +493,10 @@ class MainWindow(QMainWindow):
             self.start_op("face")
         elif label == "Post Process" and self.ribbon.switch.mode == "cam":
             self.post_process()
+        elif label == "2D Contour" and self.ribbon.switch.mode == "cam":
+            self.start_op("contour")
+        elif label == "Simulate" and self.ribbon.switch.mode == "cam":
+            self.simulate()
         elif label == "Export":
             self.export("step")
         elif label == "3D Print":
