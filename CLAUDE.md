@@ -15,13 +15,13 @@ small and cheap.** Read only the file(s) the task needs, change only what he ask
 | CAD/CAM switch, CAM tabs (`CAM_TABS`), G-SEND wordmark (`Wordmark`, text/colour in `theme.BRAND_TEXT` / `BRAND_INK`) | `gsend_cad/ui/panels.py` |
 | Toolbar/tree icons | `gsend_cad/ui/icons.py` → `PATHS` |
 | Help → Documentation text | `gsend_cad/ui/docs.py` |
-| Sketch tools, palette value fields, Extrude dialog | `gsend_cad/ui/commands.py` |
+| Sketch tools (incl. corner Fillet/Chamfer), palette value fields, Extrude / Revolve / edge Fillet dialogs | `gsend_cad/ui/commands.py` |
 | 3D view, camera, grid, HUD, view cube | `gsend_cad/ui/viewport.py` |
 | Menus, shortcuts, wiring, save/open | `gsend_cad/ui/main_window.py` |
 | Startup, splash, crash logs, `--selftest` | `gsend_cad/ui/app.py` |
 | Sketch entity math, exact values (`params`/`set_param`), dimensions, picking / closed profiles | `gsend_cad/core/sketch.py`, `core/profiles.py` |
 | Features, timeline, .gcad file format | `gsend_cad/core/document.py` |
-| Solids, booleans, STEP/STL | `gsend_cad/kernel/model.py` |
+| Solids, booleans, revolve, edge fillet/chamfer, STEP/STL | `gsend_cad/kernel/model.py` |
 | Windows build | `packaging/` (spec, entry, installer .iss, update_app.py, sign_folder.py) |
 
 Layers: `core` (stdlib only) ← `kernel` (build123d/OCC) ← `ui` (PySide6/pyvista). Never import
@@ -34,7 +34,7 @@ Layers: `core` (stdlib only) ← `kernel` (build123d/OCC) ← `ui` (PySide6/pyvi
 ## Test only what you touched
 - `core` or `kernel` change: `python -m pytest -q tests/test_core.py tests/test_kernel.py` (seconds)
 - UI change: `python -m gsend_cad` and look; the full UI drives (`tests/drive_ui.py`,
-  `tests/drive_edit.py`, `tests/drive_sketch_dims.py`) only for bigger UI work.
+  `tests/drive_edit.py`, `tests/drive_sketch_dims.py`, `tests/drive_fillet_revolve.py`) only for bigger UI work.
 - Theme/font/logo/text-only change: no tests needed beyond opening the app once.
 
 ## The Windows build has two layers: DON'T rebuild the exe for normal changes

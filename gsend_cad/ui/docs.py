@@ -100,6 +100,15 @@ and its size. Tick <b>Dimensions: All</b> to see every shape's dimensions at onc
 <li><b>Clear</b> removes everything; <b>Cancel</b> leaves without keeping the sketch.</li>
 <li><b>Esc</b> drops a half-drawn shape; press it again to put the tool down.</li>
 </ul>
+<h3>Round or bevel a corner (Fillet / Chamfer in the sketch)</h3>
+<ul>
+<li>Set <b>Corner size</b> in the palette: the radius for Fillet, the distance along each side for Chamfer.</li>
+<li>Click <b>Fillet</b> or <b>Chamfer</b> (Sketch tab, Modify), then click a sharp corner. A white ring
+shows which corner a click will change. Keep clicking corners; each one is its own Ctrl+Z.</li>
+<li>A rectangle or polygon is split into lines when you round one of its corners (like Fusion).
+Extrudes already made from it keep working.</li>
+<li>The new arc or bevel line is selected, so its values (arc radius, line length) can be typed.</li>
+</ul>
 <h3>Closed shapes (what can be extruded)</h3>
 <p>Only closed shapes can become solid: a rectangle, circle, polygon, or lines that join
 end to end back to the start. A shape drawn <b>inside</b> another becomes a hole in it, so a
@@ -200,6 +209,36 @@ The preview updates as you type: blue for Join / New Body, red for Cut.</li>
 <p class="tip">For a Cut from the top face, use a negative distance so it goes down into
 the part, or use <b>Symmetric</b>.</p>
 """),
+    ("revolve", "Revolve (turned parts)", """
+<h1>Revolve: spin a cross-section into a round part</h1>
+<ol>
+<li>Sketch <b>half</b> the part's cross-section on one side of the axis it turns about. For a lathe
+part, draw above the sketch's X axis: X along the part, Y = radius. A bore is just a profile that
+starts above the axis (Y = bore radius) instead of on it.</li>
+<li>Finish the sketch, then <b>Solid → Revolve</b>. Click the profile(s) to spin.</li>
+<li>Pick the <b>Axis</b>: <b>Sketch X axis</b>, <b>Sketch Y axis</b>, or any line you drew in that sketch
+(it shows as a yellow line). It starts on X when the profile sits above X.</li>
+<li><b>Angle</b> 360° for a full part (less for a partial one). <b>Operation</b>: Join, Cut (e.g. a
+groove), or New Body. <b>OK</b> or Enter.</li>
+</ol>
+<p class="tip">The profile must not cross the axis; it may touch it.</p>
+"""),
+    ("fillet", "Fillet / Chamfer Solid Edges", """
+<h1>Round or bevel edges of the solid</h1>
+<ol>
+<li><b>Solid → Fillet</b> (or press <b>F</b>) to round, <b>Solid → Chamfer</b> to bevel. You can switch
+between them in the panel's <b>Type</b>.</li>
+<li>Click the edges (they light up white under the cursor, blue when picked). Click again to un-pick.
+Left drag still orbits.</li>
+<li>Set the <b>Radius</b> (Fillet) or <b>Distance</b> (Chamfer), then <b>OK</b> or Enter.</li>
+</ol>
+<ul>
+<li>An edge that runs smoothly into a rounded one takes the whole smooth run with it (Fusion's
+"tangent chain"), so the edge treatment wraps around corners.</li>
+<li>If the size is too big for the faces next to the edge, the feature shows red in the timeline with the
+reason; Ctrl+Z, or edit the size smaller.</li>
+</ul>
+"""),
     ("timeline", "Timeline, Undo, Files", """
 <h1>Timeline, Undo and Files</h1>
 <h3>Timeline</h3>
@@ -232,6 +271,7 @@ earlier.</li>
 <tr><td class="k">Enter</td><td>Finish sketch / OK in Extrude</td></tr>
 <tr><td class="k">Esc</td><td>Drop the current shape / end a line chain / cancel Extrude</td></tr>
 <tr><td class="k">E</td><td>Extrude</td></tr>
+<tr><td class="k">F</td><td>Fillet solid edges</td></tr>
 <tr><td class="k">Ctrl+Z / Ctrl+Y</td><td>Undo / redo</td></tr>
 <tr><td class="k">Ctrl+N</td><td>New part</td></tr>
 <tr><td class="k">Ctrl+S / Ctrl+O</td><td>Save / open (Ctrl+Shift+S = Save As)</td></tr>
@@ -240,8 +280,7 @@ earlier.</li>
 <tr><td class="k">F2</td><td>Rename the sketch or body picked in the Browser</td></tr>
 <tr><td class="k">F1</td><td>This documentation</td></tr>
 </table>
-<p class="tip">Hole, Fillet, Chamfer and some other ribbon tools are not in this build yet;
-clicking them says so.</p>
+<p class="tip">Hole and some other ribbon tools are not in this build yet; clicking them says so.</p>
 """),
 ]
 

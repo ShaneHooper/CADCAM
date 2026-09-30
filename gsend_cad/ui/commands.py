@@ -16,15 +16,19 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QHB
 from ..core import plane as pl
 from ..core import sketch as sk
 from ..core.profiles import region_at, sketch_regions
-from ..kernel import extrude_tool, face_outline, planar_face_at, plane_edges, region_face, triangles
+from ..kernel import (edge_list, extrude_tool, face_outline, planar_face_at, plane_edges, region_face, revolve_axis,
+                      revolve_tool, triangles)
 from . import theme
 
 TOOL_KEYS = {"Line": "line", "Rectangle": "rect", "Center Rect": "center_rect", "Circle": "circle",
-             "Polygon": "polygon", "Point": "point"}
+             "Polygon": "polygon", "Point": "point", "Fillet": "fillet", "Chamfer": "chamfer"}
+CORNER_TOOLS = ("fillet", "chamfer")
 HINTS = {"line": "Click start, click end. Keep clicking to chain. Esc ends the chain.",
          "rect": "Click two opposite corners.", "center_rect": "Click center, then a corner.",
          "circle": "Click center, then a point on the circle.", "polygon": "Click center, then a vertex.",
-         "point": "Click to place a point."}
+         "point": "Click to place a point.",
+         "fillet": "Click a sharp corner to round it (radius: Corner size in the palette).",
+         "chamfer": "Click a sharp corner to bevel it (distance: Corner size in the palette)."}
 SNAP_PX = 8         # how close (screen px) the cursor must come to an end / mid / center to snap
 SELECT_HINT = ("Click a line or shape (or its row in the palette) to type exact values; right-click a "
                "dimension to change it. Delete removes it. L line · R rectangle · C circle · P polygon · "
@@ -189,6 +193,10 @@ class SketchPalette(Panel):
         self.sides.setCurrentText("6")
         self.sides.setStyleSheet("min-width: 36px;")
         self.row("Polygon sides", self.sides)
+        self.corner = NumBox(0.125)
+        self.corner.setRange(0.0001, 1000)
+        self.corner.setToolTip("Radius for Fillet, distance along each side for Chamfer")
+        self.row("Corner size", self.corner)
         self.all_dims = QCheckBox("All")
         self.all_dims.toggled.connect(lambda _on: session.draw_dims())
         self.row("Dimensions", self.all_dims)
@@ -551,10 +559,27 @@ class SketchSession:
         if render:
             self.vp.render()
 
+    def _corner_hover(self, w, pos):
+        """Fillet / Chamfer tool: ring the corner that a click would change."""
+        self.vp.clear("preview", render=False)
+        hit = sk.nearest_corner(self.ents, w, 12 * self.vp.pixel_size(pos))
+        size = self.palette.corner.value()
+        word = "R" if self.tool == "fillet" else "Chamfer"
+        if hit:
+            r = 6 * self.vp.pixel_size(pos)
+            self.vp.add_lines("preview", self._lines([sk.circle(hit[0], r)]), color=theme.FG, width=2.0)
+            self.vp.show_dim(f"{word} {sk.fmt(size)} · click to apply", pos)
+        else:
+            self.vp.show_dim(f"{word} {sk.fmt(size)} · move onto a sharp corner", pos)
+        self.vp.render()
+
     def on_move(self, w, ev):
         if not self.tool:
             return
         pos = ev.position().toPoint()
+        if self.tool in CORNER_TOOLS:
+            self._corner_hover(w, pos)
+            return
         p = self._snap(w, ev)
         self._mark_snap(p, pos)
         tag = f"  · {self.snap_hit[2].upper()}" if self.snap_hit else ""
@@ -619,6 +644,19 @@ class SketchSession:
         if not self.tool:                    # select mode: pick what's under the cursor
             pos = ev.position().toPoint()
             self.select(sk.nearest(self.ents, w, 8 * self.vp.pixel_size(pos)))
+            return
+        if self.tool in CORNER_TOOLS:
+            pos = ev.position().toPoint()
+            try:
+                ents, origin = sk.corner_op(self.ents, self.origin, w, self.palette.corner.value(), self.tool,
+                                            12 * self.vp.pixel_size(pos))
+            except ValueError as exc:
+                self.vp.show_toast(str(exc), bad=True)
+                return
+            self._push()
+            self.ents, self.origin = ents, origin
+            self.select(len(self.ents) - 1)  # the new arc / bevel line: its values show
+            self._corner_hover(w, pos)
             return
         p = self._snap(w, ev)
         if self.tool == "point":
@@ -770,6 +808,7 @@ class ExtrudePanel(Panel):
 
 class ExtrudeSession:
     captures_left = False       # left drag still orbits; a click picks
+    PANEL = ExtrudePanel
 
     def __init__(self, win, regions, planes):
         self.win, self.vp = win, win.viewport
@@ -778,7 +817,7 @@ class ExtrudeSession:
         self.sel: list = []             # selected region keys, in pick order
         self.hover = None
         self.fill_actors = {}
-        self.panel = ExtrudePanel(self)
+        self.panel = self.PANEL(self)
         for r in regions:
             m = mesh_of(region_face(r, self.planes[r.sketch], 0.002))
             if m.n_points:
@@ -879,6 +918,257 @@ class ExtrudeSession:
     def close(self):
         self.vp.clear("fills", render=False)
         self.vp.clear("preview", render=False)
+        self.vp.plotter.setCursor(Qt.ArrowCursor)
+
+
+# ------------------------------------------------------------------ revolve
+def _dlg_footer(panel, session):
+    foot = QWidget()
+    fl = QHBoxLayout(foot)
+    fl.setContentsMargins(10, 6, 10, 6)
+    fl.addStretch()
+    cancel, ok = QPushButton("CANCEL"), QPushButton("OK")
+    for b in (cancel, ok):
+        b.setObjectName("dlgBtn")
+        fl.addWidget(b)
+    ok.setProperty("ok", True)
+    cancel.clicked.connect(session.win.cancel_command)
+    ok.clicked.connect(session.commit)
+    panel.v.addWidget(foot)
+
+
+class RevolvePanel(Panel):
+    def __init__(self, session: "RevolveSession"):
+        super().__init__("Revolve")
+        s = session
+        self.prof = self.row("Profile", self.value("Select"))
+        self.axis = QComboBox()
+        self.axis.setMinimumWidth(110)
+        self.row("Axis", self.axis)
+        self.angle = QDoubleSpinBox()
+        self.angle.setRange(-360, 360)
+        self.angle.setDecimals(2)
+        self.angle.setSuffix(" °")
+        self.angle.setButtonSymbols(QDoubleSpinBox.NoButtons)
+        self.angle.setValue(360)
+        self.row("Angle", self.angle)
+        self.op = QComboBox()
+        for label, key in (("Join", "join"), ("Cut", "cut"), ("New Body", "new")):
+            self.op.addItem(label, key)
+        self.row("Operation", self.op)
+        _dlg_footer(self, s)
+        for w in (self.axis, self.op):
+            w.currentIndexChanged.connect(s.update_preview)
+        self.angle.valueChanged.connect(s.update_preview)
+
+    set_count = ExtrudePanel.set_count
+
+
+class RevolveSession(ExtrudeSession):
+    """Pick closed profiles (like Extrude), pick the axis, spin them into a round body."""
+    PANEL = RevolvePanel
+
+    def __init__(self, win, regions, planes):
+        self._axis_sketch = None
+        super().__init__(win, regions, planes)
+
+    def _sketch_id(self):
+        if self.sel:
+            return next(r for r in self.regions if r.key == self.sel[0]).sketch
+        return self.regions[-1].sketch
+
+    def _fill_axes(self):
+        """Axis choices for the profiles' sketch: its X / Y axis, then its lines."""
+        sid = self._sketch_id()
+        if sid == self._axis_sketch:
+            return
+        self._axis_sketch = sid
+        ents = self.win.doc.feature(sid)["ents"]
+        box = self.panel.axis
+        box.blockSignals(True)
+        box.clear()
+        box.addItem("Sketch X axis", ("x", None))
+        box.addItem("Sketch Y axis", ("y", None))
+        for i, e in enumerate(ents):
+            if e["type"] == "line":
+                box.addItem(f"Line {i + 1} · {sk.entity_label(e)[1]}", ("line", i))
+        # a profile drawn above the X axis spins about X; one right of the Y axis about Y
+        pts = [p for r in self.regions if r.key in self.sel for p in r.outer.pts] or [(0, 1)]
+        box.setCurrentIndex(0 if min(p[1] for p in pts) >= -1e-9 else 1)
+        box.blockSignals(False)
+
+    def paint(self):
+        if hasattr(self.panel, "axis"):
+            self._fill_axes()
+        super().paint()
+
+    def feature(self) -> dict:
+        regs = [next(r for r in self.regions if r.key == k) for k in self.sel]
+        kind, ent = self.panel.axis.currentData() or ("x", None)
+        axis = {"sketch": self._sketch_id(), "kind": kind}
+        if kind == "line":
+            axis["ent"] = ent
+        return {"kind": "revolve", "name": "preview", "op": self.panel.op.currentData(),
+                "angle": self.panel.angle.value(), "axis": axis,
+                "profiles": [r.to_data() for r in regs if r.sketch == axis["sketch"]]}
+
+    def update_preview(self, *_):
+        if not hasattr(self.panel, "axis"):
+            return
+        self.vp.clear("preview", render=False)
+        f = self.feature()
+        try:                                  # the axis: a long line through it
+            ax = revolve_axis(f, self.win.doc.applied())
+            o, d = ax.position, ax.direction
+            self.vp.add_lines("preview", [[tuple(o - d * 20), tuple(o + d * 20)]], theme.WARN, 1.4)
+        except Exception:
+            pass
+        if f["profiles"] and abs(f["angle"]) >= 0.01:
+            try:
+                tool = revolve_tool(f, self.win.doc.applied())
+                col = theme.BAD if f["op"] == "cut" else theme.ACCENT
+                self.vp.add_surface("preview", mesh_of(tool), col, 0.35)
+            except Exception as exc:
+                self.win.message(f"Revolve: {exc}")
+                self.vp.render()
+                return
+        n = len(f["profiles"])
+        self.win.message(f"REVOLVE {self.panel.op.currentText().upper()} · {n} profile{'s' if n != 1 else ''} · "
+                         "pick the axis in the panel (yellow line) · Enter = OK · Esc = cancel" if n else
+                         "REVOLVE: click a profile (a half cross-section) · Esc = cancel")
+        self.vp.render()
+
+    def commit(self):
+        f = self.feature()
+        if not f["profiles"]:
+            self.vp.show_toast("Select a profile", bad=True)
+            return
+        if abs(f["angle"]) < 0.01:
+            self.vp.show_toast("Angle must not be zero", bad=True)
+            return
+        self.win.commit_feature(f)
+
+
+# ------------------------------------------------------------------ fillet / chamfer (solid edges)
+class EdgePanel(Panel):
+    def __init__(self, session: "EdgeSession", op: str):
+        super().__init__("Fillet" if op == "fillet" else "Chamfer")
+        s = session
+        self.edges = self.row("Edges", self.value("Select"))
+        self.op = QComboBox()
+        self.op.addItem("Fillet (round)", "fillet")
+        self.op.addItem("Chamfer (bevel)", "chamfer")
+        self.op.setCurrentIndex(0 if op == "fillet" else 1)
+        self.row("Type", self.op)
+        self.size = NumBox(0.125)
+        self.size.setRange(0.0001, 1000)
+        self.size_row = self.row("Radius", self.size)
+        _dlg_footer(self, s)
+        self.op.currentIndexChanged.connect(s.op_changed)
+
+    def set_count(self, n: int):
+        self.edges.setText(f"{n} selected" if n else "Select")
+        self.edges.setProperty("none", not n)
+        self.edges.style().polish(self.edges)
+
+
+class EdgeSession:
+    """Click edges of the solid to round (fillet) or bevel (chamfer) them."""
+    captures_left = False                   # left drag still orbits; a click picks
+    PICK_PX = 8
+
+    def __init__(self, win, op: str):
+        self.win, self.vp = win, win.viewport
+        self.edges = edge_list(win.model.bodies)
+        self.sel: list[int] = []
+        self.hover = None
+        self.panel = EdgePanel(self, op)
+        self.op_changed()
+
+    def op_changed(self, *_):
+        fil = self.panel.op.currentData() == "fillet"
+        self.panel.title.setText("FILLET" if fil else "CHAMFER")
+        for lb in self.panel.findChildren(QLabel):
+            if lb.text() in ("Radius", "Distance"):
+                lb.setText("Radius" if fil else "Distance")
+        self.win.ribbon.set_active("Fillet" if fil else "Chamfer")
+        self.paint()
+
+    def pick(self, ev):
+        """Index of the edge under the cursor (nearest in px; front-most on a tie)."""
+        pos = ev.position()
+        best, hit = None, None
+        for i, e in enumerate(self.edges):
+            q = self.vp.project(e["pts"])
+            a, b = q[:-1], q[1:]
+            d = b[:, :2] - a[:, :2]
+            L = (d ** 2).sum(1)
+            t = np.clip(((pos.x() - a[:, 0]) * d[:, 0] + (pos.y() - a[:, 1]) * d[:, 1]) / np.where(L, L, 1), 0, 1)
+            px = a[:, 0] + t * d[:, 0] - pos.x()
+            py = a[:, 1] + t * d[:, 1] - pos.y()
+            dist = np.hypot(px, py)
+            k = int(dist.argmin())
+            if dist[k] <= self.PICK_PX:
+                depth = a[k, 2] + t[k] * (b[k, 2] - a[k, 2])
+                score = (round(dist[k] / 3), depth)
+                if best is None or score < best:
+                    best, hit = score, i
+        return hit
+
+    def paint(self):
+        self.vp.clear("edges", render=False)
+        if self.sel:
+            self.vp.add_lines("edges", [self.edges[i]["pts"] for i in self.sel], theme.ACCENT, 3.5)
+        if self.hover is not None and self.hover not in self.sel:
+            self.vp.add_lines("edges", [self.edges[self.hover]["pts"]], theme.FG, 3.0)
+        n = len(self.sel)
+        self.panel.set_count(n)
+        self.win.status.sel.setText(f"SEL: {n} EDGE{'' if n == 1 else 'S'}")
+        word = self.panel.op.currentText().split()[0].upper()
+        self.win.message(f"{word}: click edges to add or remove them · set the size · Enter = OK · Esc = cancel")
+        self.vp.render()
+
+    def on_move(self, w, ev):
+        if ev.buttons():
+            return
+        h = self.pick(ev)
+        if h != self.hover:
+            self.hover = h
+            self.vp.plotter.setCursor(Qt.PointingHandCursor if h is not None else Qt.ArrowCursor)
+            self.paint()
+
+    def on_click(self, w, ev):
+        h = self.pick(ev)
+        if h is None:
+            return
+        self.sel.remove(h) if h in self.sel else self.sel.append(h)
+        self.paint()
+
+    def commit(self):
+        if not self.sel:
+            self.vp.show_toast("Click at least one edge", bad=True)
+            return
+        self.win.commit_feature({"kind": "fillet", "op": self.panel.op.currentData(),
+                                 "size": self.panel.size.value(), "edges": [self.edges[i]["mid"] for i in self.sel]})
+
+    def on_key(self, ev) -> bool:
+        if ev.key() in (Qt.Key_Return, Qt.Key_Enter):
+            self.commit()
+            return True
+        if ev.key() == Qt.Key_Escape:
+            self.win.cancel_command()
+            return True
+        return False
+
+    def ribbon_tool(self, label):
+        if label in ("Fillet", "Chamfer"):
+            self.panel.op.setCurrentIndex(0 if label == "Fillet" else 1)
+            return
+        self.win.cancel_command()
+        self.win.run_tool(label)
+
+    def close(self):
+        self.vp.clear("edges", render=False)
         self.vp.plotter.setCursor(Qt.ArrowCursor)
 
 

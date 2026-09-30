@@ -12,7 +12,7 @@ from ..core import Document, bracket_plate
 from ..core import plane as pl
 from ..kernel import Kernel
 from . import theme
-from .commands import ExtrudeSession, PlanePickSession, SketchSession, regions_for
+from .commands import EdgeSession, ExtrudeSession, PlanePickSession, RevolveSession, SketchSession, regions_for
 from .panels import Browser, Ribbon, StatusBar, Timeline, TopBar
 
 FILE_FILTER = f"{APP_NAME} (*.gcad);;All files (*)"
@@ -165,8 +165,8 @@ class MainWindow(QMainWindow):
 
     def not_built(self, label: str):
         self.viewport.show_toast(f"{label} · not in this build yet")
-        self.message(f"{label} is on the list. Working now: Sketch (L), Extrude (E), timeline rollback, "
-                     "Export STEP / STL (Utilities).")
+        self.message(f"{label} is on the list. Working now: Sketch (L), Extrude (E), Revolve, Fillet (F) / Chamfer, "
+                     "timeline rollback, Export STEP / STL (Utilities).")
 
     # ---------------------------------------------------------- edits (undoable)
     def _snapshot(self):
@@ -329,6 +329,10 @@ class MainWindow(QMainWindow):
             self.start_sketch()
         elif label == "Extrude":
             self.start_extrude()
+        elif label == "Revolve":
+            self.start_revolve()
+        elif label in ("Fillet", "Chamfer"):
+            self.start_edges(label.lower())
         elif label == "Export":
             self.export("step")
         elif label == "3D Print":
@@ -445,7 +449,7 @@ class MainWindow(QMainWindow):
 
     def _report_edit(self, fid: str):
         name = self.doc.feature(fid)["name"]
-        users = [g for g in self.doc.features if g["kind"] == "extrude" and any(p["sketch"] == fid for p in g["profiles"])]
+        users = self.doc.dependents(fid)
         broken = [g["name"] for g in users if g["id"] in self.kernel.build(self.doc, len(self.doc.features)).errors]
         if broken:
             self.viewport.show_toast(f"{name} updated · {', '.join(broken)} lost its profile", bad=True)
@@ -468,6 +472,45 @@ class MainWindow(QMainWindow):
         self.viewport.set_side(self.session.panel)
         self.ribbon.set_active("Extrude")
         self.draw_sketches()
+
+    def start_revolve(self):
+        regions, planes = regions_for(self.doc)
+        if not regions:
+            self.viewport.show_toast("No closed profiles · press L to sketch", bad=True)
+            self.message("Revolve needs a closed profile: sketch half the part's cross-section on one side "
+                         "of an axis (the sketch's X or Y axis, or a line you draw).")
+            return
+        self.session = RevolveSession(self, regions, planes)
+        self.viewport.handler = self.session
+        self.viewport.set_side(self.session.panel)
+        self.ribbon.set_active("Revolve")
+        self.draw_sketches()
+
+    def start_edges(self, op: str):
+        if not self.model.bodies:
+            self.viewport.show_toast("No solid yet · sketch and extrude first", bad=True)
+            return
+        self.session = EdgeSession(self, op)
+        self.viewport.handler = self.session
+        self.viewport.set_side(self.session.panel)
+
+    def commit_feature(self, f: dict):
+        """OK in the Revolve or Fillet / Chamfer panel."""
+        self.cancel_command()
+        self._snapshot()
+        if f["kind"] == "revolve":
+            feat = self.doc.add_revolve(f["profiles"], f["axis"], f["angle"], op=f["op"])
+        else:
+            feat = self.doc.add_fillet(f["edges"], f["size"], op=f["op"])
+        self.rebuild()
+        self.document_changed.emit()
+        err = self.model.errors.get(feat["id"])
+        if err:
+            self.viewport.show_toast(err, bad=True)
+            self.message(err + " · Ctrl+Z to undo")
+        else:
+            self.viewport.show_toast(f"{feat['name']} · {self.doc.describe(feat)}")
+            self.message(f"{feat['name']} added to the timeline.")
 
     def commit_extrude(self, f: dict):
         self.cancel_command()
@@ -631,8 +674,10 @@ class MainWindow(QMainWindow):
             self.start_extrude()
         elif k == Qt.Key_Home:
             self.viewport.set_view("home")
-        elif k in (Qt.Key_H, Qt.Key_F, Qt.Key_I):
-            self.not_built({Qt.Key_H: "Hole", Qt.Key_F: "Fillet", Qt.Key_I: "Measure"}[k])
+        elif k == Qt.Key_F:
+            self.start_edges("fillet")
+        elif k in (Qt.Key_H, Qt.Key_I):
+            self.not_built({Qt.Key_H: "Hole", Qt.Key_I: "Measure"}[k])
 
     def keyPressEvent(self, ev):
         self.handle_key(ev)

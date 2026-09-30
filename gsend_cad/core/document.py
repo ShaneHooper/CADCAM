@@ -102,6 +102,35 @@ class Document:
         return self.add({"kind": "extrude", "op": op, "distance": float(distance), "direction": direction,
                          "profiles": refs, **kw})
 
+    def add_revolve(self, profiles, axis: dict, angle=360.0, op="join", **kw):
+        """axis: {"sketch": id, "kind": "x" | "y" | "line", "ent": index (for "line")} - the
+        sketch's X / Y axis through its origin, or one of its lines."""
+        if op not in ("join", "cut", "new"):
+            raise ValueError(f"bad revolve op {op!r}")
+        if not 0 < abs(angle) <= 360:
+            raise ValueError("revolve angle must be between 0 and 360")
+        refs = [p.to_data() if hasattr(p, "to_data") else dict(p) for p in profiles]
+        if not refs:
+            raise ValueError("revolve needs at least one profile")
+        return self.add({"kind": "revolve", "op": op, "angle": float(angle), "axis": dict(axis),
+                         "profiles": refs, **kw})
+
+    def add_fillet(self, edges, size: float, op="fillet", **kw):
+        """Round (op "fillet", size = radius) or bevel ("chamfer", size = distance) solid edges,
+        each remembered by its halfway point [x, y, z] (kernel.edge_list's "mid")."""
+        if op not in ("fillet", "chamfer"):
+            raise ValueError(f"bad fillet op {op!r}")
+        if size <= 0:
+            raise ValueError("size must be greater than 0")
+        if not edges:
+            raise ValueError("pick at least one edge")
+        if op == "chamfer" and "name" not in kw:
+            n = 1
+            while self.name_taken(f"Chamfer{n}"):
+                n += 1
+            kw["name"] = f"Chamfer{n}"
+        return self.add({"kind": "fillet", "op": op, "size": float(size), "edges": [list(m) for m in edges], **kw})
+
     def add_remove(self, body_id: str, **kw):
         return self.add({"kind": "remove", "body": body_id, **kw})
 
@@ -116,8 +145,9 @@ class Document:
         return gone
 
     def dependents(self, sketch_id: str) -> list[dict]:
-        """Extrudes made from a sketch."""
-        return [f for f in self.features if f["kind"] == "extrude" and any(p["sketch"] == sketch_id for p in f["profiles"])]
+        """Extrudes and revolves made from a sketch."""
+        return [f for f in self.features if f["kind"] in ("extrude", "revolve")
+                and any(p["sketch"] == sketch_id for p in f["profiles"])]
 
     def name_taken(self, name: str, skip_id: str | None = None) -> bool:
         return any(f["name"] == name and f["id"] != skip_id for f in self.features)
@@ -133,7 +163,10 @@ class Document:
         f = self.feature(fid)
         if origin is None:
             origin = list(range(len(ents)))
-        remap = {old: new for new, old in enumerate(origin) if old is not None}
+        remap: dict[int, list] = {}           # one old shape can become several (Fillet splits a rect)
+        for new, old in enumerate(origin):
+            if old is not None:
+                remap.setdefault(old, []).append(new)
         f["ents"] = copy.deepcopy(list(ents))
         f["plane_z"] = float(plane_z)
         if plane is not None and not pl.is_xy(plane):
@@ -141,12 +174,15 @@ class Document:
         elif plane is not None:
             f.pop("plane", None)
         for g in self.features:
-            if g["kind"] != "extrude":
+            if g["kind"] not in ("extrude", "revolve"):
                 continue
+            ax = g.get("axis")
+            if ax and ax["sketch"] == fid and ax["kind"] == "line":
+                ax["ent"] = remap.get(ax["ent"], [-1])[0]
             for ref in g["profiles"]:
                 if ref["sketch"] == fid:
-                    ref["outer"] = [remap.get(i, -1) for i in ref["outer"]]
-                    ref["holes"] = [[remap.get(i, -1) for i in h] for h in ref.get("holes", [])]
+                    ref["outer"] = [n for i in ref["outer"] for n in remap.get(i, [-1])]
+                    ref["holes"] = [[n for i in h for n in remap.get(i, [-1])] for h in ref.get("holes", [])]
         self._changed("features")
         return f
 
@@ -171,7 +207,8 @@ class Document:
     def consumed_sketches(self, upto: int | None = None) -> set[str]:
         """Sketch ids used by an applied extrude (those sketches hide, like in Fusion)."""
         n = self.marker if upto is None else upto
-        return {p["sketch"] for f in self.features[:n] if f["kind"] == "extrude" for p in f["profiles"]}
+        return {p["sketch"] for f in self.features[:n] if f["kind"] in ("extrude", "revolve")
+                for p in f["profiles"]}
 
     def sketch_shown(self, f: dict, consumed: set | None = None) -> bool:
         """Whether a sketch is drawn. Without a user choice ("show" on the feature) a sketch
@@ -189,6 +226,14 @@ class Document:
             sym = " symmetric" if f["direction"] == "sym" else ""
             n = len(f["profiles"])
             return f"{op} · {f['distance']:.3f} in{sym} · {n} profile{'s' if n != 1 else ''}"
+        if k == "revolve":
+            op = {"join": "Join", "cut": "Cut", "new": "New Body"}[f["op"]]
+            ax = {"x": "X axis", "y": "Y axis", "line": "a line"}[f["axis"]["kind"]]
+            return f"{op} · {f['angle']:.1f}° about {ax}"
+        if k == "fillet":
+            n = len(f["edges"])
+            word = "R" if f["op"] == "fillet" else "Chamfer "
+            return f"{word}{f['size']:.4f} · {n} edge{'s' if n != 1 else ''}"
         if k == "remove":
             return f"Remove {self.body_names.get(f['body'], f['body'].replace('body', 'Body'))}"
         if k == "hole":

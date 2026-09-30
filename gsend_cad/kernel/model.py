@@ -5,12 +5,13 @@ import math
 from dataclasses import dataclass, field
 
 import numpy as np
-from build123d import (Circle, Cylinder, Face, GeomType, Part, Plane, Pos, Rectangle, RectangleRounded, Vector,
-                       Wire, export_step, extrude)
+from build123d import (Axis, Circle, Cylinder, Edge, Face, GeomType, Part, Plane, Pos, Rectangle, RectangleRounded,
+                       Vector, Wire, export_step, extrude, revolve)
 
 from ..core import DENSITY, resolve
 from ..core import plane as pl
 from ..core.profiles import Loop, Region
+from ..core.sketch import arc_mid
 
 EPS_VOL = 1e-9
 
@@ -105,6 +106,16 @@ def _loop_face(L: Loop):
         at = Pos((x0 + x1) / 2, (y0 + y1) / 2, 0)
         cr = L.rect.get("corner_r", 0)
         return at * (RectangleRounded(w, h, cr) if cr else Rectangle(w, h))
+    if any(e["type"] == "arc" for e in L.segs):         # true arcs (Fillet), not a faceted polygon
+        edges = []
+        for e in L.segs:
+            (x0, y0), (x1, y1) = e["pts"]
+            if e["type"] == "arc":
+                mx, my = arc_mid(e)
+                edges.append(Edge.make_three_point_arc(Vector(x0, y0, 0), Vector(mx, my, 0), Vector(x1, y1, 0)))
+            else:
+                edges.append(Edge.make_line(Vector(x0, y0, 0), Vector(x1, y1, 0)))
+        return Face(Wire(edges))
     return Face(Wire.make_polygon([Vector(x, y, 0) for x, y in L.pts], close=True))
 
 
@@ -190,6 +201,99 @@ def extrude_tool(f: dict, feats: list):
     return tool
 
 
+def revolve_axis(f: dict, feats: list) -> Axis:
+    """World axis of a revolve: the sketch's own X or Y axis, or one of its lines."""
+    s = next((g for g in feats if g["kind"] == "sketch" and g["id"] == f["axis"]["sketch"]), None)
+    if s is None:
+        raise ValueError(f"{f['name']}: its sketch is gone")
+    fr = pl.of_feature(s)
+    ax = f["axis"]
+    if ax["kind"] == "line":
+        ents = s["ents"]
+        if not (0 <= ax["ent"] < len(ents)) or ents[ax["ent"]]["type"] != "line":
+            raise ValueError(f"{f['name']}: its axis line is gone")
+        a, b = ents[ax["ent"]]["pts"]
+    else:
+        a, b = (0.0, 0.0), ((1.0, 0.0) if ax["kind"] == "x" else (0.0, 1.0))
+    wa, wb = pl.to_world(fr, a), pl.to_world(fr, b)
+    return Axis(tuple(wa), tuple(q - p for p, q in zip(wa, wb)))
+
+
+def revolve_tool(f: dict, feats: list):
+    """The solid a revolve feature adds or removes (also the live preview)."""
+    sketches = {s["id"]: s for s in feats if s["kind"] == "sketch"}
+    axis = revolve_axis(f, feats)
+    tool = None
+    for ref in f["profiles"]:
+        s = sketches.get(ref["sketch"])
+        if s is None:
+            raise ValueError(f"{f['name']}: sketch {ref['sketch']} is not before it in the timeline")
+        face = region_face(resolve(ref, s["ents"]), pl.of_feature(s))
+        try:
+            solid = revolve(face, axis, f["angle"])
+        except Exception as exc:
+            raise ValueError(f"{f['name']}: can't revolve - the profile must not cross the axis") from exc
+        tool = solid if tool is None else tool + solid
+    if not _nonempty(tool):
+        raise ValueError(f"{f['name']}: the profile must sit on one side of the axis")
+    return tool
+
+
+def edge_list(bodies, segments=24) -> list[dict]:
+    """Every real edge of the bodies (no seams), for picking: [{"body", "mid": [x, y, z], "pts"}].
+    `mid` (the edge's halfway point) is how a Fillet feature remembers which edges it rounds."""
+    out = []
+    for b in bodies:
+        count: dict[int, int] = {}
+        for f in b.shape.faces():
+            for e in f.edges():
+                count[hash(e)] = count.get(hash(e), 0) + 1
+        for e in b.shape.edges():
+            if count.get(hash(e), 0) < 2:
+                continue
+            n = 1 if e.geom_type == GeomType.LINE else segments
+            m = e.position_at(0.5)
+            out.append({"body": b.id, "mid": [m.X, m.Y, m.Z],
+                        "pts": np.array([tuple(p) for p in e.positions([i / n for i in range(n + 1)])], float)})
+    return out
+
+
+def _find_edges(shape, mids, tol=1e-4):
+    edges, missing = [], 0
+    all_e = shape.edges()
+    for m in mids:
+        v = Vector(*m)
+        best = min(all_e, key=lambda e: (e.position_at(0.5) - v).length, default=None)
+        if best is None or (best.position_at(0.5) - v).length > tol:
+            missing += 1
+        elif best not in edges:
+            edges.append(best)
+    return edges, missing
+
+
+def _tangent_chain(shape, edges, tol=1e-6, cos_tol=0.9999):
+    """The picked edges plus every edge running on smoothly from them (like Fusion's default
+    "tangent chain"): a straight edge that flows into a rounded corner takes the corner too."""
+    pool = shape.edges()
+    ends = []
+    for e in pool:
+        ends.append(((e.position_at(0), e.tangent_at(0)), (e.position_at(1), e.tangent_at(1))))
+    todo = [i for i, e in enumerate(pool) if any(e.is_same(x) for x in edges)]
+    seen = set(todo)
+    while todo:
+        i = todo.pop()
+        for p, t in ends[i]:
+            for j, other in enumerate(ends):
+                if j in seen:
+                    continue
+                for q, u in other:
+                    if (p - q).length < tol and abs(t.dot(u)) > cos_tol:
+                        seen.add(j)
+                        todo.append(j)
+                        break
+    return [pool[i] for i in sorted(seen)]
+
+
 def _hole_tool(f: dict, zmin: float):
     r = f["diameter"] / 2
     top = f["top_z"]
@@ -249,12 +353,48 @@ class Kernel:
             if not any(bid == f["body"] for bid, _, _ in state):
                 raise ValueError(f"{f['name']}: body {f['body']} is not there to remove")
             return [s for s in state if s[0] != f["body"]], count
+        if k == "revolve":
+            tool = revolve_tool(f, feats)
+            if f["op"] == "new" or (f["op"] == "join" and not state):
+                count += 1
+                return state + [(f"body{count}", f"Body{count}", tool)], count
+            if f["op"] == "join":
+                bid, name, shape = state[0]
+                return [(bid, name, shape + tool)] + state[1:], count
+            return self._cut(state, tool, f), count
+        if k == "fillet":
+            return self._fillet(state, f), count
         if k == "hole":
             if not state:
                 raise ValueError(f"{f['name']}: no body to drill")
             zmin = min(s.bounding_box().min.Z for _, _, s in state)
             return self._cut(state, _hole_tool(f, zmin), f), count
         raise ValueError(f"unknown feature kind {k!r}")
+
+    @staticmethod
+    def _fillet(state, f):
+        """Round (fillet) or bevel (chamfer) the picked edges of each body."""
+        out, done, lost = [], 0, 0
+        size = f["size"]
+        for bid, name, shape in state:
+            edges, _ = _find_edges(shape, f["edges"])
+            n_found = len(edges)
+            if edges:
+                edges = _tangent_chain(shape, edges)
+                try:
+                    shape = shape.fillet(size, edges) if f["op"] == "fillet" else shape.chamfer(size, None, edges)
+                except Exception as exc:
+                    word = "Fillet" if f["op"] == "fillet" else "Chamfer"
+                    raise ValueError(f"{f['name']}: {word} {size:.4f} does not fit these edges "
+                                     "(too big for a face next to them?)") from exc
+                done += n_found
+            out.append((bid, name, shape))
+        lost = len(f["edges"]) - done
+        if done == 0:
+            raise ValueError(f"{f['name']}: its edges are gone (an earlier change moved them)")
+        if lost > 0:
+            raise ValueError(f"{f['name']}: {lost} of its edges are gone (an earlier change moved them)")
+        return out
 
     @staticmethod
     def _cut(state, tool, f):

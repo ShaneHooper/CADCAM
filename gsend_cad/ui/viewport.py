@@ -199,6 +199,17 @@ class Viewport(QWidget):
             self.top.AddActor(a)
             self._groups.setdefault(group, []).append(a)
 
+    def project(self, pts) -> np.ndarray:
+        """World points (Nx3) -> Nx3 of (widget x px, widget y px, depth 0..1), all at once."""
+        pts = np.asarray(pts, float).reshape(-1, 3)
+        ren = self.plotter.renderer
+        w, h = self.plotter.width(), self.plotter.height()
+        m = ren.GetActiveCamera().GetCompositeProjectionTransformMatrix(w / max(h, 1), -1, 1)
+        M = np.array([[m.GetElement(i, j) for j in range(4)] for i in range(4)])
+        q = np.c_[pts, np.ones(len(pts))] @ M.T
+        q = q[:, :3] / q[:, 3:4]
+        return np.c_[(q[:, 0] + 1) / 2 * w, (1 - q[:, 1]) / 2 * h, (q[:, 2] + 1) / 2]
+
     def pixel_size(self, pos: QPoint) -> float:
         """World inches covered by one screen pixel on the active plane near `pos` (for picking)."""
         a, b = self.world_at(pos), self.world_at(pos + QPoint(10, 0))

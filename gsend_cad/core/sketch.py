@@ -6,6 +6,8 @@
     {"type": "rect",    "pts": [...], "corner_r": R}        optional rounded corners
     {"type": "polygon", "pts": [[x, y]] * n, "r": R}       closed loop
     {"type": "point",   "p": [x, y]}                        reference point (no profile)
+    {"type": "arc",     "c": [x, y], "r": R, "a0": deg, "a1": deg, "pts": [start, end]}
+                        counter-clockwise a0 -> a1; made by Fillet, chains with lines
 
 A rect drawn with Center Rect carries "anchor": "center" so its X/Y are its center.
 
@@ -25,6 +27,27 @@ def line(a, b):
 
 def circle(c, r):
     return {"type": "circle", "c": list(c), "r": float(r)}
+
+
+def arc(c, r, a0, a1, pts=None):
+    """Counter-clockwise arc a0 -> a1 (degrees). `pts` pins the end points exactly (so they
+    meet the lines they join without float drift)."""
+    a0, a1 = float(a0), float(a1)
+    while a1 <= a0:
+        a1 += 360.0
+    while a1 - a0 > 360.0:
+        a1 -= 360.0
+    ends = pts or [_on(c, r, a0), _on(c, r, a1)]
+    return {"type": "arc", "c": list(c), "r": float(r), "a0": a0, "a1": a1, "pts": [list(q) for q in ends]}
+
+
+def _on(c, r, deg):
+    a = math.radians(deg)
+    return [c[0] + r * math.cos(a), c[1] + r * math.sin(a)]
+
+
+def arc_mid(e):
+    return _on(e["c"], e["r"], (e["a0"] + e["a1"]) / 2)
 
 
 def point(p):
@@ -103,6 +126,11 @@ def entity_points(e, closed=True):
         return [[x + d, y], [x, y + d], [x - d, y], [x, y - d], [x + d, y]]
     if t == "line":
         return [list(p) for p in e["pts"]]
+    if t == "arc":
+        n = max(4, math.ceil((e["a1"] - e["a0"]) / 6))
+        pts = [_on(e["c"], e["r"], e["a0"] + (e["a1"] - e["a0"]) * i / n) for i in range(n + 1)]
+        pts[0], pts[-1] = list(e["pts"][0]), list(e["pts"][1])
+        return pts
     if t == "circle":
         pts = circle_points(e["c"], e["r"])
     elif t == "rect" and e.get("corner_r"):
@@ -126,6 +154,8 @@ def entity_label(e):
         return "Line", "L " + fmt(math.hypot(x1 - x0, y1 - y0))
     if t == "circle":
         return "Circle", "Ø " + fmt(e["r"] * 2)
+    if t == "arc":
+        return "Arc", "R " + fmt(e["r"])
     if t == "rect":
         p = e["pts"]
         return "Rect", f"{fmt(abs(p[2][0] - p[0][0]))} × {fmt(abs(p[2][1] - p[0][1]))}"
@@ -175,6 +205,8 @@ def params(e) -> dict:
                 "ang": math.degrees(math.atan2(y1 - y0, x1 - x0))}
     if t == "circle":
         return {"x": e["c"][0], "y": e["c"][1], "dia": e["r"] * 2}
+    if t == "arc":
+        return {"x": e["c"][0], "y": e["c"][1], "r": e["r"]}
     if t == "rect":
         (x0, y0), (x1, y1) = e["pts"][0], e["pts"][2]
         w, h = x1 - x0, y1 - y0
@@ -220,6 +252,8 @@ def _set_param(e, key, value):
         return line((v["x"], v["y"]), (v["x2"], v["y2"]))
     if t == "circle":
         return circle((v["x"], v["y"]), v["dia"] / 2)
+    if t == "arc":
+        return arc((v["x"], v["y"]), v["r"], e["a0"], e["a1"])
     if t == "rect":
         if v["cr"] < 0 or v["cr"] > min(v["w"], v["h"]) / 2 + 1e-9:
             raise ValueError("Corner R must be between 0 and half the short side")
@@ -294,6 +328,8 @@ def dimensions(e) -> list[dict]:
         out.append(_dim(e["pts"][0], e["pts"][1], g, fmt(v["len"]), key="len"))
     elif t == "polygon":
         out.append(_dim([ax, ay], e["pts"][0], 0, "R " + fmt(v["r"]), key="r"))
+    elif t == "arc":
+        out.append(_dim([ax, ay], arc_mid(e), 0, "R " + fmt(v["r"]), key="r"))
     return out
 
 
@@ -343,6 +379,10 @@ def snap_points(ents) -> list[tuple]:
         elif t == "line":
             (x0, y0), (x1, y1) = e["pts"]
             out += [(x0, y0, "end"), (x1, y1, "end"), ((x0 + x1) / 2, (y0 + y1) / 2, "mid")]
+        elif t == "arc":
+            m = arc_mid(e)
+            out += [(*e["pts"][0], "end"), (*e["pts"][1], "end"), (m[0], m[1], "mid"),
+                    (e["c"][0], e["c"][1], "center")]
         else:                                   # rect, polygon: every corner, every side's middle, the center
             pts = e["pts"]
             for (x0, y0), (x1, y1) in zip(pts, pts[1:] + pts[:1]):
@@ -413,3 +453,109 @@ def nearest(ents, p, tol: float):
         if d <= best:
             best, bi = d, i
     return bi
+
+
+# ---------------------------------------------------------------- corner fillet / chamfer
+# A corner is where two lines (or a line and a rect/polygon side) meet at a sharp angle.
+# Rects and polygons are split into lines first, like Fusion does; `origin` (old index of each
+# entity, see ui SketchSession) follows along, so extrudes made from the shape keep working.
+
+def _key(p):
+    return (round(p[0], 6), round(p[1], 6))
+
+
+def explode(e) -> list:
+    """A rect / polygon as its sides (a rounded rect as sides + corner arcs)."""
+    if e["type"] == "rect" and e.get("corner_r"):
+        (x0, y0), (x1, y1), r = e["pts"][0], e["pts"][2], e["corner_r"]
+        return [line((x0 + r, y0), (x1 - r, y0)), arc((x1 - r, y0 + r), r, -90, 0, [[x1 - r, y0], [x1, y0 + r]]),
+                line((x1, y0 + r), (x1, y1 - r)), arc((x1 - r, y1 - r), r, 0, 90, [[x1, y1 - r], [x1 - r, y1]]),
+                line((x1 - r, y1), (x0 + r, y1)), arc((x0 + r, y1 - r), r, 90, 180, [[x0 + r, y1], [x0, y1 - r]]),
+                line((x0, y1 - r), (x0, y0 + r)), arc((x0 + r, y0 + r), r, 180, 270, [[x0, y0 + r], [x0 + r, y0]])]
+    pts = e["pts"]
+    return [line(a, b) for a, b in zip(pts, pts[1:] + pts[:1])]
+
+
+def corners(ents) -> list[tuple]:
+    """[(point, i, j)]: sharp corners. i, j are the two entities meeting there; for a
+    rect/polygon corner i == j (the shape itself; it is split into lines when used)."""
+    out, ends = [], {}
+    for i, e in enumerate(ents):
+        if e["type"] == "line":
+            for p in e["pts"]:
+                ends.setdefault(_key(p), []).append(i)
+        elif e["type"] == "polygon" or (e["type"] == "rect" and not e.get("corner_r")):
+            out += [(list(p), i, i) for p in e["pts"]]
+    for k, lst in ends.items():
+        if len(lst) == 2 and lst[0] != lst[1]:
+            out.append((list(k), lst[0], lst[1]))
+    return out
+
+
+def nearest_corner(ents, p, tol: float):
+    best, hit = tol, None
+    for c in corners(ents):
+        d = math.hypot(c[0][0] - p[0], c[0][1] - p[1])
+        if d <= best:
+            best, hit = d, c
+    return hit
+
+
+def corner_op(ents, origin, p, size: float, kind: str, tol: float):
+    """Fillet (kind 'fillet', size = radius) or chamfer ('chamfer', size = distance along each
+    side) the corner nearest p. Returns new (ents, origin); raises ValueError with a message
+    for the user when there is no corner there or the size does not fit."""
+    if size <= 1e-9:
+        raise ValueError(f"{kind.capitalize()} size must be greater than 0")
+    hit = nearest_corner(ents, p, tol)
+    if hit is None:
+        raise ValueError("Click on a sharp corner (where two lines meet)")
+    ents, origin = [dict(e) for e in ents], list(origin)
+    P, i, j = hit
+    if i == j:                                    # split the rect / polygon into lines
+        parts = explode(ents[i])
+        ents[i] = parts[0]
+        for q in parts[1:]:
+            ents.append(q)
+            origin.append(origin[i])
+        mine = {i, *range(len(ents) - len(parts) + 1, len(ents))}
+        P, i, j = next(c for c in corners(ents) if _key(c[0]) == _key(P) and {c[1], c[2]} <= mine)
+    ends = []
+    for k in (i, j):
+        a, b = ents[k]["pts"]
+        at_start = _key(a) == _key(P)
+        other = b if at_start else a
+        L = math.hypot(other[0] - P[0], other[1] - P[1])
+        ends.append((k, at_start, other, [(other[0] - P[0]) / L, (other[1] - P[1]) / L], L))
+    (_, _, _, u1, L1), (_, _, _, u2, L2) = ends
+    cos_t = max(-1.0, min(1.0, u1[0] * u2[0] + u1[1] * u2[1]))
+    theta = math.acos(cos_t)
+    if theta < 1e-6 or abs(math.pi - theta) < 1e-6:
+        raise ValueError("Those lines are in line with each other: no corner to round")
+    t = size / math.tan(theta / 2) if kind == "fillet" else size
+    if t > min(L1, L2) + 1e-9:
+        biggest = min(L1, L2) * (math.tan(theta / 2) if kind == "fillet" else 1)
+        raise ValueError(f"{kind.capitalize()} {fmt(size)} is too big here (max {fmt(biggest)})")
+    T = []
+    for k, at_start, other, u, L in ends:
+        tp = [P[0] + u[0] * t, P[1] + u[1] * t]
+        T.append(tp)
+        if abs(L - t) < 1e-9:                     # the side is used up entirely
+            ents[k] = None
+        else:
+            ents[k] = line(tp, other) if at_start else line(other, tp)
+    if kind == "fillet":
+        bis = [u1[0] + u2[0], u1[1] + u2[1]]
+        bl = math.hypot(*bis)
+        d = size / math.sin(theta / 2)
+        c = [P[0] + bis[0] / bl * d, P[1] + bis[1] / bl * d]
+        a0 = math.degrees(math.atan2(T[0][1] - c[1], T[0][0] - c[0]))
+        a1 = math.degrees(math.atan2(T[1][1] - c[1], T[1][0] - c[0]))
+        span = (a1 - a0) % 360
+        new = arc(c, size, a0, a1, T) if span <= 180 else arc(c, size, a1, a0, [T[1], T[0]])
+    else:
+        new = line(T[0], T[1])
+    ents.append(_clean(new))
+    origin.append(origin[i])
+    keep = [k for k, e in enumerate(ents) if e is not None]
+    return [ents[k] for k in keep], [origin[k] for k in keep]

@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from .sketch import circle_points, rounded_rect_points
+from .sketch import circle_points, entity_points, rounded_rect_points
 
 
 @dataclass
@@ -19,6 +19,7 @@ class Loop:
     area: float = 0.0
     circle: dict | None = None   # the circle entity, when the loop is one circle
     rect: dict | None = None     # the rect entity (may carry corner_r)
+    segs: list = field(default_factory=list)   # chain loops: the line / arc entities in order
 
 
 @dataclass
@@ -83,7 +84,7 @@ def sketch_loops(ents) -> list[Loop]:
             loops.append(Loop([i], pts, rect=e))
         elif t == "polygon":
             loops.append(Loop([i], [list(p) for p in e["pts"]]))
-        elif t == "line":
+        elif t in ("line", "arc"):           # arcs (from Fillet) chain like lines
             lines.append(i)
 
     # closed line chains: every vertex on the loop must join exactly two lines
@@ -100,9 +101,11 @@ def sketch_loops(ents) -> list[Loop]:
         while cur not in used:
             used.add(cur)
             chain.append(cur)
-            pts.append(list(adj[at]["p"]))
             a, b = ents[cur]["pts"]
-            nxt = _key(b) if _key(a) == at else _key(a)
+            forward = _key(a) == at
+            nxt = _key(b) if forward else _key(a)
+            seg = entity_points(ents[cur])      # an arc adds its curve, a line just its start
+            pts.extend(seg[:-1] if forward else seg[::-1][:-1])
             if len(adj[nxt]["l"]) != 2 or len(adj[start]["l"]) != 2:
                 break
             if nxt == start:
@@ -110,8 +113,8 @@ def sketch_loops(ents) -> list[Loop]:
                 break
             l = adj[nxt]["l"]
             cur, at = (l[1] if l[0] == cur else l[0]), nxt
-        if closed and len(chain) >= 3:
-            loops.append(Loop(chain, pts))
+        if closed and (len(chain) >= 3 or any(ents[c]["type"] == "arc" for c in chain)):
+            loops.append(Loop(chain, pts, segs=[ents[c] for c in chain]))
 
     for L in loops:
         L.area = abs(poly_area(L.pts))
@@ -148,10 +151,11 @@ def region_at(regions, p) -> Region | None:
 
 def resolve(ref: dict, ents) -> Region:
     """Turn a stored profile reference ({sketch, outer, holes}) back into a Region."""
-    loops = {tuple(L.ents): L for L in sketch_loops(ents)}
+    # matched by the SET of entities: a Fillet or Edit Sketch can reorder or add to a chain
+    loops = {frozenset(L.ents): L for L in sketch_loops(ents)}
     try:
-        outer = loops[tuple(ref["outer"])]
-        holes = [loops[tuple(h)] for h in ref.get("holes", [])]
+        outer = loops[frozenset(ref["outer"])]
+        holes = [loops[frozenset(h)] for h in ref.get("holes", [])]
     except KeyError as exc:
         raise ValueError(f"profile {ref} no longer exists in sketch {ref['sketch']}") from exc
     return Region(ref["sketch"], outer, holes, outer.area - sum(h.area for h in holes))

@@ -32,7 +32,8 @@ RIBBON = {
              ("Select", [("select", "Select")])],
     "sketch": [("Create", [("line", "Line"), ("rect", "Rectangle"), ("crect", "Center Rect"), ("circle", "Circle"),
                            ("poly", "Polygon"), ("pt", "Point")]),
-               ("Modify", [("select", "Select"), ("undo", "Undo"), ("trash", "Clear")]),
+               ("Modify", [("select", "Select"), ("fillet", "Fillet"), ("chamfer", "Chamfer"), ("undo", "Undo"),
+                           ("trash", "Clear")]),
                ("Inspect", [("measure", "Measure")]),
                ("Finish", [("cancel", "Cancel"), ("finish", "Finish Sketch")])],
 }
@@ -675,7 +676,8 @@ class Timeline(QFrame):
     edit = Signal(int)            # feature index of a sketch: Edit Sketch
     toggle = Signal(int)          # feature index of a sketch: show / hide
 
-    ICON = {"sketch": "sketch", "extrude": "extrude", "hole": "hole", "remove": "trash"}
+    ICON = {"sketch": "sketch", "extrude": "extrude", "hole": "hole", "remove": "trash", "revolve": "revolve",
+            "fillet": "fillet"}
 
     def __init__(self):
         super().__init__()

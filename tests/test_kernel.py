@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from gsend_cad.core import bracket_plate, sketch_regions
+from gsend_cad.core import Document, bracket_plate, sketch_regions
 from gsend_cad.core import sketch as sk
 from gsend_cad.kernel import Kernel
 
@@ -127,3 +127,75 @@ def test_extrude_from_a_side_face(kernel):
     vs = [p[1] for e in edges for p in e["pts"]]
     assert min(vs) == pytest.approx(0) and max(vs) == pytest.approx(0.5)
     assert min(us) == pytest.approx(-1.25) and max(us) == pytest.approx(1.25)
+
+
+# ---- 2D corner fillet / chamfer, revolve, 3D edge fillet / chamfer
+def _plate(ents, h=0.5):
+    d = Document()
+    s = d.add_sketch(ents)
+    d.add_extrude([sketch_regions(s["id"], s["ents"])[0].to_data()], h)
+    return d, s
+
+
+def test_sketch_fillet_corner_extrudes_true_arc():
+    ents, origin = sk.corner_op([sk.rect((0, 0), (2, 1))], [0], (2, 1), 0.25, "fillet", 0.05)
+    d, _ = _plate(ents)
+    m = Kernel().build(d)
+    area = 2 - 0.25 ** 2 * (1 - math.pi / 4)
+    assert not m.errors and abs(m.bodies[0].volume - area * 0.5) < 1e-6      # exact arc, not facets
+
+
+def test_sketch_chamfer_and_edit_keeps_extrude():
+    d, s = _plate([sk.rect((0, 0), (2, 1))])
+    ents, origin = sk.corner_op(s["ents"], [0], (0, 0), 0.2, "chamfer", 0.05)
+    d.update_sketch(s["id"], ents, 0.0, origin)                 # rect split into lines: extrude follows
+    m = Kernel().build(d)
+    assert not m.errors and abs(m.bodies[0].volume - (2 - 0.02) * 0.5) < 1e-6
+
+
+def test_revolve_about_sketch_y_axis():
+    d = Document()
+    s = d.add_sketch([sk.rect((1, 0), (2, 1))])
+    d.add_revolve([sketch_regions(s["id"], s["ents"])[0].to_data()], {"sketch": s["id"], "kind": "y"})
+    m = Kernel().build(d)
+    assert not m.errors and abs(m.bodies[0].volume - 3 * math.pi) < 1e-6   # tube OD 4 ID 2 x 1
+
+
+def test_revolve_about_a_line_and_half_turn():
+    d = Document()
+    s = d.add_sketch([sk.rect((0, 0), (1, 2)), sk.line((-1, 0), (-1, 1))])
+    d.add_revolve([sketch_regions(s["id"], s["ents"])[0].to_data()],
+                  {"sketch": s["id"], "kind": "line", "ent": 1}, angle=180)
+    m = Kernel().build(d)
+    assert not m.errors and abs(m.bodies[0].volume - math.pi * (4 - 1) * 2 / 2) < 1e-6
+
+
+def test_revolve_crossing_axis_is_an_error():
+    d = Document()
+    s = d.add_sketch([sk.rect((-1, 0), (1, 1))])
+    d.add_revolve([sketch_regions(s["id"], s["ents"])[0].to_data()], {"sketch": s["id"], "kind": "y"})
+    assert Kernel().build(d).errors
+
+
+def test_solid_fillet_and_chamfer_edges():
+    from gsend_cad.kernel import edge_list
+    d, _ = _plate([sk.rect((0, 0), (2, 1))], 1.0)
+    k = Kernel()
+    edges = edge_list(k.build(d).bodies)
+    vertical = [e["mid"] for e in edges if abs(e["mid"][2] - 0.5) < 1e-9]
+    assert len(vertical) == 4
+    d.add_fillet(vertical, 0.25)
+    m = k.build(d)
+    assert not m.errors and abs(m.bodies[0].volume - (2 - 4 * 0.25 ** 2 * (1 - math.pi / 4))) < 1e-6
+    d2, _ = _plate([sk.rect((0, 0), (2, 1))], 1.0)
+    f = d2.add_fillet(vertical[:1], 0.2, op="chamfer")
+    m2 = k.build(d2)
+    assert f["name"] == "Chamfer1" and not m2.errors and abs(m2.bodies[0].volume - (2 - 0.02)) < 1e-6
+
+
+def test_solid_fillet_too_big_is_an_error():
+    from gsend_cad.kernel import edge_list
+    d, _ = _plate([sk.rect((0, 0), (2, 1))], 1.0)
+    edges = edge_list(Kernel().build(d).bodies)
+    d.add_fillet([edges[0]["mid"]], 5.0)
+    assert Kernel().build(d).errors
