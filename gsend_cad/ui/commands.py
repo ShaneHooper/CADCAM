@@ -20,7 +20,7 @@ from ..core import cam, post
 from ..core import plane as pl
 from ..core import sketch as sk
 from ..core.profiles import region_at, sketch_regions
-from ..kernel import (bodies_bbox, edge_list, max_radius, model_snap_points, outline_loops, extrude_tool, face_outline, planar_face_at, plane_edges, region_face, revolve_axis,
+from ..kernel import (bodies_bbox, edge_list, max_radius, model_snap_points, outline_loops, turn_profile, extrude_tool, face_outline, planar_face_at, plane_edges, region_face, revolve_axis,
                       revolve_tool, triangles)
 from . import theme
 
@@ -1643,7 +1643,15 @@ def op_moves(win, setup, op):
         if key not in cache:
             cache[key] = outline_loops(bodies, grow)
         loops = cache[key]
-    moves = cam.toolpath(bbox, setup, op, r, loops)
+    profile = None
+    if op.get("type") == "rough":             # the part's OD silhouette about the spindle axis
+        i, center, _ = cam.turning_frame(bbox, setup)
+        key = ("profile", id(win.model), tuple(b.id for b in bodies), setup["axis"])
+        cache = win.__dict__.setdefault("_radius_cache", {})
+        if key not in cache:
+            cache[key] = turn_profile(bodies, center, cam._unit(i))
+        profile = cache[key]
+    moves = cam.toolpath(bbox, setup, op, r, loops, profile)
     return moves, cam.toolpath_world(bbox, setup, moves, r)
 
 
@@ -1670,12 +1678,17 @@ class OpPanel(Panel):
                                         ("stepdown", "Max stepdown", 4), ("leave", "Wall stock", 4),
                                         ("bottom_offset", "Below part bottom", 4), ("lead", "Lead in / out", 4),
                                         ("rpm", "Spindle RPM", 0), ("feed", "Feed (in/min)", 2),
-                                        ("plunge", "Plunge (in/min)", 2)]}}
+                                        ("plunge", "Plunge (in/min)", 2)]},
+              "rough": {cam.TURNING: [("tool", "Tool number", 0), ("stepdown", "Depth of cut (side)", 4),
+                                      ("leave_x", "Stock to leave X", 4), ("leave_z", "Stock to leave Z", 4),
+                                      ("past_back", "Past part back (Z)", 4), ("retract", "Pull-off", 4),
+                                      ("sfm", "Surface speed SFM", 0), ("ipr", "Feed (in/rev)", 4),
+                                      ("max_rpm", "Max RPM", 0)]}}
     DIRECTIONS = {"face": [("Along X", "x"), ("Along Y", "y")],
                   "contour": [("Climb", "climb"), ("Conventional", "conventional")]}
 
     def __init__(self, session: "OpSession", kind: str):
-        super().__init__({"face": "Face", "contour": "2D Contour"}[kind], 260)
+        super().__init__({"face": "Face", "contour": "2D Contour", "rough": "OD Rough"}[kind], 260)
         s = session
         self.setup = QComboBox()
         for st in s.win.doc.setups:
@@ -1686,11 +1699,11 @@ class OpPanel(Panel):
         self.boxes = {}
         self.groups = {}
         self.direction = QComboBox()
-        for label, key in self.DIRECTIONS[kind]:
+        for label, key in self.DIRECTIONS.get(kind, []):
             self.direction.addItem(label, key)
         self.direction.currentIndexChanged.connect(s.preview)
-        self.output = QComboBox()                # turning Face: G01 lines or a G94 canned cycle
-        for key, label in cam.TURN_OUTPUT.items():
+        self.output = QComboBox()                # turning: G01 lines or a canned cycle (G94 / G71)
+        for key, label in (cam.ROUGH_OUTPUT if kind == "rough" else cam.TURN_OUTPUT).items():
             self.output.addItem(label, key)
         self.output.currentIndexChanged.connect(s.preview)
         for stype, fields in self.FIELDS[kind].items():
@@ -1707,7 +1720,7 @@ class OpPanel(Panel):
                 items.append((label, nb))
             if stype == cam.MILLING:
                 items.insert(5, ("Cut direction", self.direction))
-            elif kind == "face":
+            elif kind in ("face", "rough"):
                 items.append(("Output", self.output))
             for label, w in items:
                 r = QWidget()
@@ -1788,7 +1801,7 @@ class OpSession:
                 o[key] = box.value()
         if st["type"] == cam.MILLING:
             o["direction"] = p.direction.currentData()
-        elif self.kind == "face":
+        elif self.kind in ("face", "rough"):
             o["output"] = p.output.currentData()
         return o
 
@@ -1810,7 +1823,11 @@ class OpSession:
             {i for i, (k, _p) in enumerate(moves) if k == "feed" and moves[i - 1][0] == "rapid"}   # facing cuts
         t = cam.cycle_time(moves, st, self.op())
         n = len(zs)
-        self.panel.info.setText(f"{n} depth pass{'es' if n != 1 else ''} · about {t:.1f} min cutting")
+        if self.kind == "rough":
+            self.panel.info.setText(f"{n - 1} roughing pass{'es' if n != 2 else ''} + profile pass · about {t:.1f} min "
+                                    "cutting")
+        else:
+            self.panel.info.setText(f"{n} depth pass{'es' if n != 1 else ''} · about {t:.1f} min cutting")
         word = self.panel.title.text()
         self.win.message(f"{word}: blue = cutting, yellow = rapid · change values to update · Enter / OK saves · "
                          "Esc cancels")

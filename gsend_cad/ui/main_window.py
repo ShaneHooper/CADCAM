@@ -162,17 +162,20 @@ class MainWindow(QMainWindow):
             return
         self.cancel_command()
         sid = getattr(self, "cam_setup", None)
-        want = "milling" if kind == "contour" else self.ribbon.current
-        if not self.doc.setup(sid) or (kind == "contour" and self.doc.setup(sid)["type"] != "milling"):
+        need = {"contour": "milling", "rough": "turning"}.get(kind)
+        want = need or self.ribbon.current
+        if not self.doc.setup(sid) or (need and self.doc.setup(sid)["type"] != need):
             sid = next((x["id"] for x in reversed(self.doc.setups) if x["type"] == want), None)
-            if sid is None and kind == "contour" and not edit_id:
-                self.viewport.show_toast("2D Contour needs a Milling setup · CAM → Setup → MILLING", bad=True)
+            if sid is None and need and not edit_id:
+                name = {"contour": "2D Contour", "rough": "OD Rough"}[kind]
+                self.viewport.show_toast(f"{name} needs a {need.capitalize()} setup · CAM → Setup → {need.upper()}",
+                                         bad=True)
                 return
             sid = sid or self.doc.setups[-1]["id"]
         self.viewport.clear("cam")
         self.session = OpSession(self, sid, kind, edit_id)
         self.viewport.handler = self.session
-        self.ribbon.set_active({"face": "Face", "contour": "2D Contour"}.get(self.session.kind))
+        self.ribbon.set_active({"face": "Face", "contour": "2D Contour", "rough": "OD Rough"}.get(self.session.kind))
 
     def simulate(self, nid: str | None = None):
         """Right-click → Simulate on a setup (all its ops) or one op; ribbon Simulate = the picked one."""
@@ -509,6 +512,8 @@ class MainWindow(QMainWindow):
             self.post_process()
         elif label == "2D Contour" and self.ribbon.switch.mode == "cam":
             self.start_op("contour")
+        elif label == "OD Rough" and self.ribbon.switch.mode == "cam":
+            self.start_op("rough")
         elif label == "Simulate" and self.ribbon.switch.mode == "cam":
             self.simulate()
         elif label == "Export":

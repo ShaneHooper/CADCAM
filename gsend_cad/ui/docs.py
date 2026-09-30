@@ -302,6 +302,21 @@ F2 to rename. Clicking an operation shows its path bright; the setup's other pat
 <li>Each operation has a <b>Tool number</b> (T1, T0101 on a lathe) used by the post.</li>
 </ul>
 """),
+    ("rough", "CAM: OD Rough (turning)", """
+<h1>OD Rough</h1>
+<p>Roughs the outside of a turned part down to its shape plus stock to leave. Needs a Turning setup.</p>
+<ol>
+<li>CAM → Turning tab → <b>OD Rough</b>.</li>
+<li><b>Depth of cut (side)</b> per pass (radius), <b>Stock to leave X</b> (per side) and <b>Z</b> (on shoulders),
+<b>Past part back (Z)</b> to run further toward the chuck, <b>Pull-off</b> (the 45° lift at the end of each
+pass), surface speed SFM, feed in/rev, max RPM.</li>
+<li>Passes run along Z toward the chuck at falling diameters, each stopping where it meets the part
+(plus stock to leave), then a last pass follows the profile to take off the steps. Grooves and
+undercuts are skipped: an OD tool can't reach into them.</li>
+<li><b>Output</b>: <b>Single lines (G01)</b> writes every move; <b>Canned cycle (G71)</b> writes a G71 with the
+finished contour in N-blocks (Haas: one line with D; Fanuc: two G71 lines). U / W carry the stock to leave.</li>
+</ol>
+"""),
     ("contour", "CAM: 2D Contour and Simulate", """
 <h1>2D Contour (milling)</h1>
 <ol>

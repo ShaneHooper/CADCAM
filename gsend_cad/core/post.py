@@ -68,8 +68,9 @@ def post_setup(setup: dict, ops: list[tuple[dict, list]], controller: str = "haa
     L.append(_comment(f"G-SEND CAD/CAM {CONTROLLERS[controller]} {'LATHE' if turning else 'MILL'}"))
     L.append(_comment(cam.describe(setup)))
     L.append("G20 G18 G40 G80 G99" if turning else "G20 G17 G40 G49 G80 G90")
-    for op, moves in ops:
-        L += (_lathe_op if turning else _mill_op)(setup, op, moves, offset, coolant)
+    for k, (op, moves) in enumerate(ops):
+        L += (_lathe_op(setup, op, moves, offset, coolant, controller, 100 * (k + 1)) if turning
+              else _mill_op(setup, op, moves, offset, coolant))
     if turning:
         L += ["G28 U0. W0.", "M30", "%"]
     else:
@@ -105,14 +106,16 @@ def _mill_op(setup, op, moves, offset, coolant):
     return [x for x in L if x is not None]
 
 
-def _lathe_op(setup, op, moves, offset, coolant):
+def _lathe_op(setup, op, moves, offset, coolant, controller="haas", n=100):
     t = int(op.get("tool", 1))
     cycle = op.get("output") == "cycle"
-    L = ["", _comment(f"{op['name']} T{t:02d} FACE" + (" G94 CYCLE" if cycle else "")), "G28 U0. W0.", f"T{t:02d}{t:02d}", offset,
+    rough = op.get("type") == "rough"
+    what = ("OD ROUGH" + (" G71 CYCLE" if cycle else "")) if rough else ("FACE" + (" G94 CYCLE" if cycle else ""))
+    L = ["", _comment(f"{op['name']} T{t:02d} {what}"), "G28 U0. W0.", f"T{t:02d}{t:02d}", offset,
          f"G50 S{int(round(op['max_rpm']))}", f"G96 S{int(round(op['sfm']))} M03" + (" M08" if coolant else "")]
     m = _Modal()
     if cycle:
-        return L + _g94(moves, op, m) + (["M09"] if coolant else []) + ["M05"]
+        return L + (_g71(moves, op, m, controller, n) if rough else _g94(moves, op, m)) + (["M09"] if coolant else []) + ["M05"]
     for kind, (x, _y, z) in moves:                    # X radius -> diameter
         words = [("G", "G00" if kind == "rapid" else "G01"), ("X", num(x * 2)), ("Z", num(z))]
         if kind == "feed":
@@ -133,4 +136,34 @@ def _g94(moves, op, m):
     for i, (x, _y, z) in enumerate(cuts):
         L.append(f"G94 X{num(x * 2)} Z{num(z)} F{num(op['ipr'])}" if i == 0 else f"Z{num(z)}")
     L.append(f"G00 X{num(xs * 2)} Z{num(zs)}")         # G00 ends the modal cycle
+    return L
+
+
+def _g71(moves, op, m, controller, n):
+    """OD roughing as a G71 cycle. The finish contour (N n .. N n+1) is the rough's profile pass
+    with the stock to leave taken back off (the control adds it again from U / W). Haas takes the
+    depth of cut as D on one line; Fanuc wants two G71 blocks (U depth R retract, then P Q U W F)."""
+    _k, (xs, _y, zs) = moves[0]
+    end = max(i for i, (k, _p) in enumerate(moves) if k == "feed")
+    a = end
+    while moves[a - 1][0] == "feed":
+        a -= 1
+    lx, lz = op["leave_x"], op["leave_z"]
+    prof = [(x - lx, z - lz) for _k, (x, _y, z) in moves[a:end]]      # the pull-off is not contour
+    p, q = n, n + 1
+    u, w = num(2 * lx), num(lz)
+    L = [m.block([("G", "G00"), ("X", num(xs * 2)), ("Z", num(zs))])]
+    if controller == "haas":
+        L.append(f"G71 P{p} Q{q} U{u} W{w} D{num(op['stepdown'])} F{num(op['ipr'])}")
+    else:
+        L += [f"G71 U{num(op['stepdown'])} R{num(op['retract'])}", f"G71 P{p} Q{q} U{u} W{w} F{num(op['ipr'])}"]
+    c = _Modal()
+    L.append(f"N{p} " + c.block([("G", "G00"), ("X", num(prof[0][0] * 2))]))
+    c.last["Z"] = num(zs)
+    for x, z in prof:
+        line = c.block([("G", "G01"), ("X", num(x * 2)), ("Z", num(z))])
+        if line and line != "G01":
+            L.append(line)
+    L.append(f"N{q} " + c.block([("G", "G01"), ("X", num(xs * 2))]))
+    L.append(f"G00 X{num(xs * 2)} Z{num(zs)}")
     return L

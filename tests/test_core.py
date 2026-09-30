@@ -432,3 +432,27 @@ def test_wcs_picked_point_and_x_direction():
     pts = cam.stock_snap_points(box, cam.new_setup("milling"))
     assert sum(k == "stock corner" for _p, k in pts) == 8 and sum(k == "stock edge mid" for _p, k in pts) == 12
     assert sum(k == "stock face center" for _p, k in pts) == 6
+
+
+def test_od_rough_toolpath_and_g71():
+    from gsend_cad.core import cam, post
+    box = ((0, -1, -1), (3, 1, 1))                     # turned along X, front at +X
+    s = {**cam.validate({**cam.new_setup("turning"), "axis": "x"}), "name": "S"}
+    # t from the bbox middle (x = 1.5): Ø2 back, a groove, a 45° slope up from a Ø1 front
+    prof = [(-1.5, 1.0), (-0.5, 1.0), (-0.5, 0.6), (-0.3, 0.6), (-0.3, 1.0), (0.0, 1.0), (0.5, 0.5), (1.5, 0.5)]
+    op = {**cam.new_op(s, "rough"), "name": "R"}
+    c = cam.rough_contour(box, s, op, prof, 1.0)
+    assert min(r for _z, r in c) == 0.5 and all(r >= 1.0 for z, r in c if z < -1.55)   # groove skipped
+    mv = cam.toolpath(box, s, op, 1.0, profile=prof)
+    feeds = [p for k, p in mv if k == "feed"]
+    assert all(x >= 0.51 - 1e-9 for x, _y, _z in feeds)                     # stock to leave X kept
+    cuts = [p for i, (k, p) in enumerate(mv) if k == "feed" and mv[i - 1][0] == "rapid"]
+    for x, _y, z in cuts[:-1]:                                               # each pass stops on the slope
+        want = -1.05 - (x - 0.51) + 0.005                                    # slope z(r) + leave Z
+        assert z == pytest.approx(want) or x > 1.01
+    g = post.post_setup(s, [(cam.validate_op(s, {**op, "output": "cycle"}),
+                             cam.toolpath(box, s, {**op, "output": "cycle"}, 1.0, profile=prof))], "fanuc", 1)
+    assert "G71 U0.05 R0.02" in g and "G71 P100 Q101 U0.02 W0.005 F0.01" in g
+    assert "N100 G00 X1." in g and "X2. Z-1.55" in g and "N101 X2.3" in g
+    with pytest.raises(ValueError):
+        cam.new_op(cam.new_setup("milling"), "rough")

@@ -353,6 +353,63 @@ def max_radius(bodies, point, direction) -> float:
     return r
 
 
+def turn_profile(bodies, point, direction) -> list[tuple]:
+    """The parts' OD silhouette about an axis: [(t, r)] with t = distance along `direction` from
+    `point`, r = the largest radius there, sorted by t. Steps (shoulders) show as two points at
+    the same t. Built from a light mesh (arcs within 0.002 in), so it also sees features that
+    aren't round - whatever sticks out furthest at each station."""
+    p, d = np.asarray(point, float), np.asarray(direction, float)
+    d = d / np.linalg.norm(d)
+    segs = []
+    for b in bodies:
+        v, f = triangles(b.shape, 0.002, 0.1)
+        if not len(v):
+            continue
+        w = v - p
+        t = w @ d
+        r = np.sqrt(np.maximum(((w - np.outer(t, d)) ** 2).sum(1), 0.0))
+        f = np.asarray(f).reshape(-1, 3)
+        e = np.concatenate([f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]])
+        e = np.unique(np.sort(e, 1), axis=0)
+        segs.append(np.column_stack([t[e[:, 0]], r[e[:, 0]], t[e[:, 1]], r[e[:, 1]]]))
+    if not segs:
+        return []
+    S = np.concatenate(segs)
+    S = np.where((S[:, 0] > S[:, 2])[:, None], S[:, [2, 3, 0, 1]], S)   # t0 <= t1
+    S[:, [0, 2]] = np.round(S[:, [0, 2]], 6)
+    ts = np.unique(np.concatenate([S[:, 0], S[:, 2]]))
+    flat = S[:, 2] - S[:, 0] > 0
+    out = []
+    for i, b in enumerate(ts):
+        cover = (S[:, 0] <= b) & (S[:, 2] >= b)
+        c = S[cover]
+        k = (c[:, 2] - c[:, 0]) > 0
+        at = np.where(k, c[:, 1] + (c[:, 3] - c[:, 1]) * (b - c[:, 0]) / np.where(k, c[:, 2] - c[:, 0], 1), 0)
+        top = float(max(at[k].max(initial=0), c[~k][:, [1, 3]].max(initial=0)))
+        left = S[flat & (S[:, 0] < b) & (S[:, 2] >= b)]
+        right = S[flat & (S[:, 0] <= b) & (S[:, 2] > b)]
+
+        def lim(c):
+            return float((c[:, 1] + (c[:, 3] - c[:, 1]) * (b - c[:, 0]) / (c[:, 2] - c[:, 0])).max(initial=0))
+        pts = [(b, lim(left))] if i else []
+        pts.append((b, top))
+        if i < len(ts) - 1:
+            pts.append((b, lim(right)))
+        for q in pts:
+            if not out or abs(out[-1][1] - q[1]) > 1e-6 or abs(out[-1][0] - q[0]) > 1e-9:
+                out.append((float(q[0]), float(q[1])))
+    clean = []                                     # drop points in the middle of a straight run
+    for q in out:
+        while len(clean) >= 2:
+            (x0, y0), (x1, y1) = clean[-2], clean[-1]
+            if abs((x1 - x0) * (q[1] - y0) - (y1 - y0) * (q[0] - x0)) < 1e-9 and x0 <= x1 <= q[0]:
+                clean.pop()
+            else:
+                break
+        clean.append(q)
+    return clean
+
+
 def _tangent_chain(shape, edges, tol=1e-6, cos_tol=0.9999):
     """The picked edges plus every edge running on smoothly from them (like Fusion's default
     "tangent chain"): a straight edge that flows into a rounded corner takes the corner too."""

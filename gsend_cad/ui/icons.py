@@ -59,6 +59,7 @@ PATHS = {
     "face": '<path d="M3 16h18M5 12h14M7 8h10M12 3v5"/>',
     "contour": '<path d="M6 18V8a3 3 0 0 1 3-3h9v13zM3 21V5a3 3 0 0 1 3-3"/>',
     "drill": '<path d="M9 3h6v6l-3 12-3-12zM9 9h6"/>',
+    "rough": '<path d="M3 7h9v4h9M3 17h18M5 4v16M12 7l3 4"/>',
     "turn": '<path d="M3 8h8l3 3h7M3 16h8l3-3h7M5 5v14"/>',
     "groove": '<path d="M3 8h7v6h4V8h7M3 16h18"/>',
     "partoff": '<path d="M3 8h18M3 16h18M12 4v16"/>',

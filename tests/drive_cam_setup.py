@@ -10,6 +10,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 import gsend_cad
+from gsend_cad.ui.commands import op_moves
 from gsend_cad.core import sketch as sk
 from gsend_cad.core import sketch_regions
 
@@ -191,6 +192,27 @@ st = win.doc.setups[-1]
 check("Face1 saved in the turning setup, listed in the Browser",
       [x["name"] for x in st.get("ops", [])] == ["Face1"] and st["ops"][0]["id"] in win.browser.setup_ids)
 check("Face1 keeps the canned cycle output", st["ops"][0]["output"] == "cycle")
+
+# ---- OD Rough on the turning setup (Ø1.5 x 2 then Ø1 x 1, front at +X)
+win.select_tab("turning")
+win.run_tool("OD Rough")
+o = win.session
+check("OD Rough opens on the turning setup", o.__class__.__name__ == "OpSession" and o.kind == "rough"
+      and o.current_setup()["type"] == "turning")
+mv, _w = op_moves(win, o.current_setup(), o.op())
+feeds = [p for k, p in mv if k == "feed"]
+check("rough stops at the shoulder + leave Z, never below the part + leave X",
+      min(p[0] for p in feeds) >= 0.5 + 0.01 - 1e-6
+      and all(p[0] >= 0.75 + 0.01 - 1e-6 for p in feeds if p[2] < -1.05 - 0.005 - 1e-6))
+check("rough preview counts passes", "roughing pass" in o.panel.info.text())
+o.panel.output.setCurrentIndex(o.panel.output.findData("cycle"))
+shot("cam_04b_rough")
+key(Qt.Key_Return)
+st = win.doc.setups[-1]
+check("OD Rough1 saved after Face1", [x["name"] for x in st["ops"]] == ["Face1", "OD Rough1"])
+from gsend_cad.core import post
+g = post.post_setup(st, [(cam.validate_op(st, x), op_moves(win, st, x)[0]) for x in st["ops"]], "haas", 1)
+check("post writes G94 face + G71 rough with its contour", "G94 " in g and "G71 P200 Q201" in g and "N200 G00 X1.\n" in g and "X1.5\n" in g)
 
 win.select_tab("milling")
 win.run_tool("Setup")
