@@ -55,6 +55,24 @@ def app_icon():
     return ic
 
 
+def palette():
+    """A dark palette matching the stylesheet, for the widgets the stylesheet does not reach:
+    the native style paints message boxes and dialog frames from the palette, and Windows 11's
+    dark palette put near-black text on a dark box (9/29/26)."""
+    from PySide6.QtGui import QColor, QPalette
+    pal = QPalette()
+    for role, col in ((QPalette.Window, PANEL), (QPalette.WindowText, FG), (QPalette.Base, PANEL2),
+                      (QPalette.AlternateBase, PANEL), (QPalette.Text, FG), (QPalette.Button, PANEL2),
+                      (QPalette.ButtonText, FG), (QPalette.ToolTipBase, PANEL), (QPalette.ToolTipText, FG),
+                      (QPalette.Highlight, ACCENT), (QPalette.HighlightedText, "#ffffff"),
+                      (QPalette.PlaceholderText, FG3), (QPalette.Link, ACCENT)):
+        pal.setColor(role, QColor(col))
+    pal.setColor(QPalette.Disabled, QPalette.Text, QColor(FG3))
+    pal.setColor(QPalette.Disabled, QPalette.ButtonText, QColor(FG3))
+    pal.setColor(QPalette.Disabled, QPalette.WindowText, QColor(FG3))
+    return pal
+
+
 def pick(families) -> str:
     have = set(QFontDatabase.families())
     return next((f for f in families if f in have), families[-1])
@@ -166,6 +184,14 @@ QPushButton#dlgBtn {{ border: 1px solid {LINE2}; background: transparent; paddin
                      font-weight: 600; letter-spacing: 1px; font-size: 11px; color: {FG2}; }}
 QPushButton#dlgBtn[ok="true"] {{ border-color: {ACCENT}; color: {ACCENT}; }}
 QPushButton#dlgBtn:hover {{ background: {PANEL2}; }}
+/* Message boxes (save changes?, delete?, startup warnings): on Windows 11 the native style drew
+   the question in dark grey on a dark box (9/29/26, unreadable), so every part is spelled out. */
+QMessageBox {{ background: {PANEL}; border: 1px solid {LINE2}; }}
+QMessageBox QLabel {{ color: {FG}; background: transparent; font-size: 13px; padding: 4px 2px; }}
+QMessageBox QPushButton {{ border: 1px solid {LINE2}; background: {PANEL2}; color: {FG}; padding: 5px 16px;
+                          min-width: 72px; font-family: '{head}'; font-weight: 600; letter-spacing: 1px; }}
+QMessageBox QPushButton:hover {{ border-color: {ACCENT}; color: {ACCENT}; }}
+QMessageBox QPushButton:default {{ border-color: {ACCENT}; color: {ACCENT}; }}
 QMenu {{ background: {PANEL}; border: 1px solid {LINE2}; }}
 QMenu::item {{ padding: 4px 22px 4px 14px; }}
 QMenu::item:selected {{ background: {ACCENT_DIM}; }}

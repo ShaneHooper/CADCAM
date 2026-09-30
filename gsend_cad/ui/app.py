@@ -16,6 +16,7 @@ from . import theme
 def _style(app: QApplication) -> dict:
     theme.load_fonts()
     head, mono = theme.pick(theme.HEAD), theme.pick(theme.MONO)
+    app.setPalette(theme.palette())      # what the stylesheet does not reach reads dark-on-dark otherwise
     app.setStyleSheet(theme.qss(head, mono))
     return {"head": head, "mono": mono, "g": theme.pick(theme.BRAND_G), "wm": theme.pick(theme.BRAND_WM)}
 
