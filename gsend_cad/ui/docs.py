@@ -64,6 +64,8 @@ The blue tag next to the cursor shows the size as you move (width × height, Ø,
 <li>Every position is measured from the <b>origin</b> (X0 Y0, where the red and green axes meet).</li>
 <li>A shape you just drew is <b>selected</b>: the palette shows its values. Click a value, type
 the exact number, press <b>Enter</b> (<b>Tab</b> goes to the next one). The shape updates at once.</li>
+<li>Or <b>right-click a dimension in the view</b> (its number, or its line): a box opens on it with
+the value selected. Type the new one, <b>Enter</b>. <b>Esc</b> closes it unchanged.</li>
 <li><b>Rectangle:</b> X / Y of its lower-left corner (Center Rect: of its center), Width, Height,
 Corner R. <b>Circle:</b> center X / Y, Diameter. <b>Line:</b> start X / Y, end X / Y, Length,
 Angle (Length and Angle keep the start where it is). <b>Polygon:</b> center X / Y, Radius, Sides,

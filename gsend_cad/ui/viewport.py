@@ -47,6 +47,7 @@ class Viewport(QWidget):
         self._groups: dict[str, list] = {}
         self._body_actors: list = []
         self._press = None
+        self._right_taken = False            # a right-click a session handled: swallow its release too
 
         lay = QGridLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -226,6 +227,17 @@ class Viewport(QWidget):
             if self.handler and w:
                 self.handler.on_move(w, ev)
             return False
+        if t == QEvent.MouseButtonPress and ev.button() == Qt.RightButton:
+            # a session may claim a right-click (a dimension under it); otherwise VTK pans
+            if self.handler is not None and hasattr(self.handler, "on_right_click"):
+                w = self.world_at(ev.position().toPoint())
+                if w and self.handler.on_right_click(w, ev):
+                    self._right_taken = True
+                    return True
+            return False
+        if t == QEvent.MouseButtonRelease and ev.button() == Qt.RightButton and self._right_taken:
+            self._right_taken = False
+            return True                      # VTK saw no press, so it must not see the release
         if t in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick) and ev.button() == Qt.LeftButton:
             # a fast second click arrives as DblClick: it must count as a click, and VTK must
             # never see it (it starts an orbit whose release we swallow = stuck rotating)

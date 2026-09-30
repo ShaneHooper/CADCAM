@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 import pyvista as pv
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QPoint, Qt, QTimer
 from functools import partial
 
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QHBoxLayout, QLabel, QPushButton,
@@ -24,8 +24,9 @@ HINTS = {"line": "Click start, click end. Keep clicking to chain. Esc ends the c
          "rect": "Click two opposite corners.", "center_rect": "Click center, then a corner.",
          "circle": "Click center, then a point on the circle.", "polygon": "Click center, then a vertex.",
          "point": "Click to place a point."}
-SELECT_HINT = ("Click a line or shape (or its row in the palette) to type exact values. "
-               "Delete removes it. L line · R rectangle · C circle · P polygon · Enter finishes")
+SELECT_HINT = ("Click a line or shape (or its row in the palette) to type exact values; right-click a "
+               "dimension to change it. Delete removes it. L line · R rectangle · C circle · P polygon · "
+               "Enter finishes")
 
 
 def mesh_of(shape) -> pv.PolyData:
@@ -111,6 +112,56 @@ class EntRow(QWidget):
         self._on_click()
 
 
+class DimEditor(QFrame):
+    """Right-click a dimension in the view and this box opens on it with the value selected.
+    Enter (or clicking away) applies it through set_param, exactly like a palette field;
+    Esc closes it and changes nothing."""
+
+    def __init__(self, vp):
+        super().__init__(vp)
+        self.setObjectName("dimEdit")
+        self.setStyleSheet(f"#dimEdit {{ background:{theme.PANEL}; border:1px solid {theme.ACCENT}; }}")
+        hl = QHBoxLayout(self)
+        hl.setContentsMargins(8, 4, 8, 4)
+        hl.setSpacing(6)
+        self.label = QLabel("")
+        self.label.setStyleSheet(f"color:{theme.ACCENT};font-weight:700;")
+        self.box = NumBox(0.0)
+        hl.addWidget(self.label)
+        hl.addWidget(self.box)
+        self.box.installEventFilter(self)
+        self.box.editingFinished.connect(self._done)
+        self.on_apply = None
+        self.hide()
+
+    def open(self, label: str, value: float, decimals: int, pos: QPoint, on_apply):
+        self.on_apply = on_apply
+        self.label.setText(label)
+        self.box.setDecimals(decimals)
+        self.box.setValue(value)
+        self.adjustSize()
+        host = self.parentWidget()
+        x = min(max(0, pos.x() - 12), max(0, host.width() - self.width()))
+        y = min(max(0, pos.y() - self.height() // 2), max(0, host.height() - self.height()))
+        self.move(x, y)
+        self.show()
+        self.raise_()
+        self.box.setFocus()
+        self.box.selectAll()
+
+    def eventFilter(self, obj, ev):
+        if obj is self.box and ev.type() == QEvent.KeyPress and ev.key() == Qt.Key_Escape:
+            self.hide()                     # NumBox then drops the typed text; _done sees us hidden
+        return super().eventFilter(obj, ev)
+
+    def _done(self):
+        if not self.isVisible():
+            return
+        self.hide()
+        if self.on_apply is not None:
+            self.on_apply(self.box.value())
+
+
 class SketchPalette(Panel):
     def __init__(self, session: "SketchSession"):
         super().__init__("Edit Sketch" if session.edit_id else "Sketch Palette", 230)
@@ -156,6 +207,7 @@ class SketchPalette(Panel):
         self.ev.setSpacing(0)
         self.v.addWidget(self.edit)
         self.boxes: dict[str, NumBox] = {}
+        self._rows: list[EntRow] = []
         self.update_list([])
         self.show_selected(None)
 
@@ -168,6 +220,7 @@ class SketchPalette(Panel):
             if w is not None:
                 w.deleteLater()
         self.count.setText(str(len(ents)))
+        self._rows = []
         if not ents:
             e = QLabel("No entities yet")
             e.setAlignment(Qt.AlignCenter)
@@ -195,9 +248,14 @@ class SketchPalette(Panel):
             r.setAttribute(Qt.WA_StyledBackground, True)
             r.setStyleSheet(f"border-bottom:1px solid {theme.LINE};"
                             + (f"background:{theme.ACCENT_DIM};" if sel else ""))
+            r.setFixedHeight(r.sizeHint().height())
             self.lv.addWidget(r)
+            self._rows.append(r)
         self.lv.addStretch()
-        self.sc.setFixedHeight(min(154, 22 * max(1, len(ents)) + 2))   # up to 7 rows, then scroll
+        # up to 7 rows, then scroll - measured from a real row, not an assumed 22 px (fonts and
+        # DPI scaling make rows taller on Shane's laptop, and a too-short list clips its last row)
+        rh = self._rows[0].height() if self._rows else 22
+        self.sc.setFixedHeight(rh * min(7, max(1, len(ents))) + 2)
         self.fit()
 
     def show_selected(self, ent):
@@ -212,6 +270,7 @@ class SketchPalette(Panel):
             kind, _ = sk.entity_label(ent)
             head = QLabel(f"{kind.upper()} · FROM ORIGIN")
             head.setStyleSheet(f"color:{theme.ACCENT};font-weight:700;padding:6px 10px 2px 10px;")
+            head.setFixedHeight(head.sizeHint().height())
             self.ev.addWidget(head)
             gen = self.s.gen
             for key, val in sk.params(ent).items():
@@ -227,17 +286,35 @@ class SketchPalette(Panel):
                 hl.addWidget(QLabel(sk.LABELS[key]))
                 hl.addStretch()
                 hl.addWidget(box)
+                r.setFixedHeight(r.sizeHint().height())
                 self.ev.addWidget(r)
-            tip = QLabel("Type a value, Enter applies · Tab next · Delete removes")
-            tip.setWordWrap(True)
+            # one line, no word wrap: a wrapping label reports a one-line height until the
+            # layout has run, and fit() reading that is how the rows below got crushed
+            tip = QLabel("Enter applies · Del removes")
             tip.setStyleSheet(f"color:{theme.FG3};padding:4px 10px 6px 10px;")
+            tip.setFixedHeight(tip.sizeHint().height())
             self.ev.addWidget(tip)
         self.fit()
 
     def fit(self):
-        """Overlay panels aren't in a layout, so grow/shrink to the content by hand."""
-        self.layout().activate()
-        self.resize(self.width(), self.sizeHint().height())
+        """Overlay panels aren't in a layout, so size to the content by hand.
+
+        A FIXED height, and every row above has a fixed height too. resize() to a size hint
+        read before the rows had settled let the layout squeeze the FROM ORIGIN rows to a few
+        pixels each (Shane's 200% laptop, 9/30/26: only the tops of X / Y / Diameter showed).
+        Fixed rows cannot be squeezed, and a second fit after the event loop has laid the
+        panel out corrects any hint that was still stale."""
+        self._size_to_content()
+        QTimer.singleShot(0, self._size_to_content)
+
+    def _size_to_content(self):
+        try:
+            self.layout().activate()
+            h = max(self.sizeHint().height(), self.minimumSizeHint().height())   # incl. the frame
+            if h != self.height() or self.minimumHeight() != h:
+                self.setFixedHeight(h)
+        except RuntimeError:
+            pass                            # the sketch closed before the deferred call ran
 
     def refresh_values(self, ent):
         for key, val in sk.params(ent).items():
@@ -266,6 +343,7 @@ class SketchSession:
         self.sel: int | None = None          # entity whose exact values are in the palette
         self.gen = 0                         # bumps when the palette's fields are rebuilt
         self.palette = SketchPalette(self)
+        self.editor = DimEditor(self.vp)     # right-click a dimension: type its value in place
         self.vp.plane_z = plane_z
         if self.ents:
             self.redraw()
@@ -392,6 +470,45 @@ class SketchSession:
         self.origin.append(None)
         self.select(len(self.ents) - 1)     # its exact values show right away
 
+    def shown_dims(self):
+        """(entity index, dimension dict) for every dimension drawn right now."""
+        show = range(len(self.ents)) if self.palette.all_dims.isChecked() else \
+            ([self.sel] if self.sel is not None else [])
+        return [(i, d) for i in show for d in sk.dimensions(self.ents[i])]
+
+    def on_right_click(self, w, ev) -> bool:
+        """Right-click on a dimension opens its value box. Anywhere else is not ours: False,
+        and the view pans as usual."""
+        pos = ev.position().toPoint()
+        tol = 10 * self.vp.pixel_size(pos)
+        show = range(len(self.ents)) if self.palette.all_dims.isChecked() else \
+            ([self.sel] if self.sel is not None else [])
+        for i in show:
+            d = sk.dimension_at(self.ents[i], w, tol)
+            if d is not None:
+                key = d["key"]
+                self.editor.open(sk.LABELS[key], sk.params(self.ents[i])[key], 0 if key == "sides" else 4,
+                                 pos, partial(self.apply_dim, i, key))
+                return True
+        return False
+
+    def apply_dim(self, i: int, key: str, value: float):
+        """A value typed into the right-click box (same rules as a palette field)."""
+        if not 0 <= i < len(self.ents):
+            return
+        e = self.ents[i]
+        if abs(sk.params(e)[key] - value) < 1e-10:
+            return
+        try:
+            new = sk.set_param(e, key, value)
+        except ValueError as exc:
+            self.vp.show_toast(str(exc), bad=True)
+            return
+        self._push()
+        self.ents[i] = new
+        self.select(i)                       # palette fields follow, view redraws
+        self.vp.plotter.setFocus()
+
     def on_click(self, w, ev):
         self.vp.plotter.setFocus()           # take keys back from a palette field
         if not self.tool:                    # select mode: pick what's under the cursor
@@ -496,6 +613,8 @@ class SketchSession:
         for g in ("sketch", "sel", "dims", "preview"):
             self.vp.clear(g, render=False)
         self.vp.dim.hide()
+        self.editor.hide()
+        self.editor.deleteLater()
         self.vp.show_banner(None)
 
 

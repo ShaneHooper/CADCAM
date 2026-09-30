@@ -11,7 +11,7 @@ import sys
 
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 
 import gsend_cad
 
@@ -102,6 +102,45 @@ c = s.ents[1]
 check("circle typed to Ø0.75 at X1.75 Y0.375", close(c["c"], (1.75, 0.375)) and abs(c["r"] - 0.375) < 1e-9)
 type_value("dia", "0")
 check("zero diameter is refused", abs(s.ents[1]["r"] - 0.375) < 1e-9)
+
+# ---- the palette shows the whole FROM ORIGIN section (9/30/26: rows were crushed to a few px)
+pal = s.palette
+pump()
+rows = [w for w in pal.edit.findChildren(QWidget) if w.parent() is pal.edit and w.isVisible()]
+check("every FROM ORIGIN row keeps its height", rows and all(w.height() >= 18 for w in rows))
+check("the FROM ORIGIN section ends inside the palette", pal.edit.geometry().bottom() <= pal.height())
+shot("dims_01b_palette")
+
+# ---- right-click a dimension, type its value
+def rclick(x, y):
+    p = screen(x, y)
+    QTest.mouseMove(vp.plotter, p)
+    pump(30)
+    QTest.mouseClick(vp.plotter, Qt.RightButton, Qt.NoModifier, p)
+    pump(60)
+
+c = s.ents[1]
+rclick(c["c"][0], c["c"][1] + min(c["r"] * .35, .15))      # the Ø label of the circle
+check("right-click on the Ø label opens the value box", s.editor.isVisible() and s.editor.label.text() == "Diameter")
+shot("dims_01c_rclick")
+QTest.keyClicks(s.editor.box, "1.5")
+QTest.keyClick(s.editor.box, Qt.Key_Return)
+pump(120)
+check("Enter applies the typed diameter", abs(s.ents[1]["r"] - 0.75) < 1e-9 and not s.editor.isVisible())
+check("the palette field follows", abs(s.palette.boxes["dia"].value() - 1.5) < 1e-9)
+from gsend_cad.core import sketch as sk
+xd = next(d for d in sk.dimensions(s.ents[1]) if d["key"] == "x")
+(a, b) = xd["lines"][0]                                     # the X dimension line under the circle
+rclick(a[0] + (b[0] - a[0]) * 0.25, a[1] + (b[1] - a[1]) * 0.25)   # on the line, away from its label
+check("right-click on the X dimension line opens X", s.editor.isVisible() and s.editor.label.text() == "X")
+QTest.keyClick(s.editor.box, Qt.Key_Escape)
+pump(60)
+check("Esc closes it and changes nothing", not s.editor.isVisible() and abs(s.ents[1]["c"][0] - 1.75) < 1e-9)
+rclick(4, 4)                                               # empty space: not ours
+check("right-click on nothing opens nothing", not s.editor.isVisible())
+check("and the view is not left panning", vp.plotter.iren.interactor.GetInteractorStyle().GetState() == 0)
+key(Qt.Key_Z, Qt.ControlModifier)
+check("Ctrl+Z undoes the right-click edit", abs(s.ents[1]["r"] - 0.375) < 1e-9)
 
 win.run_tool("Point")
 click(4, 2)

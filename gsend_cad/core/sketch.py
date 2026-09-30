@@ -241,9 +241,10 @@ def _bbox(e):
     return min(xs), min(ys), max(xs), max(ys)
 
 
-def _dim(a, b, off, text, at=None):
+def _dim(a, b, off, text, at=None, key=None):
     """Linear dimension a-b. With `off` the dimension line sits `off` to the left of a->b and
-    extension lines run back to a and b."""
+    extension lines run back to a and b. `key` names the params() value the dimension shows,
+    so a right-click on it can edit that value."""
     dx, dy = b[0] - a[0], b[1] - a[1]
     L = math.hypot(dx, dy) or 1.0
     nx, ny = -dy / L * off, dx / L * off
@@ -252,7 +253,7 @@ def _dim(a, b, off, text, at=None):
     if off:
         ex, ey = nx / abs(off) * DIM_TICK, ny / abs(off) * DIM_TICK
         lines += [[a, [a2[0] + ex, a2[1] + ey]], [b, [b2[0] + ex, b2[1] + ey]]]
-    return {"lines": lines, "at": at or [(a2[0] + b2[0]) / 2, (a2[1] + b2[1]) / 2], "text": text}
+    return {"lines": lines, "at": at or [(a2[0] + b2[0]) / 2, (a2[1] + b2[1]) / 2], "text": text, "key": key}
 
 
 DIM_GAP = 0.3     # inches between a shape and its dimension line
@@ -262,8 +263,9 @@ DIM_TICK = 0.06
 def dimensions(e) -> list[dict]:
     """Dimension graphics for one entity: its X/Y from the origin and its size.
 
-    Each item: {"lines": [polyline...], "at": [x, y], "text": "X 1.2500"}. Pure geometry, so
-    the UI only has to draw it."""
+    Each item: {"lines": [polyline...], "at": [x, y], "text": "X 1.2500", "key": "x"}. Pure
+    geometry, so the UI only has to draw it. `key` is the params() entry the dimension shows
+    (its value is params(e)[key]); set_param(e, key, new) is how a right-click edits it."""
     v = params(e)
     ax, ay = v["x"], v["y"]
     x0, y0, x1, y1 = _bbox(e)
@@ -272,26 +274,44 @@ def dimensions(e) -> list[dict]:
     # position from the origin: X measured below everything, Y to the left of everything
     if abs(ax) > 1e-9:
         yb = min(0.0, y0, ay) - g
-        d = _dim([0.0, yb], [ax, yb], 0, "X " + fmt(ax))
+        d = _dim([0.0, yb], [ax, yb], 0, "X " + fmt(ax), key="x")
         d["lines"] += [[[0.0, 0.0], [0.0, yb - DIM_TICK]], [[ax, ay], [ax, yb - DIM_TICK]]]
         out.append(d)
     if abs(ay) > 1e-9:
         xb = min(0.0, x0, ax) - g
-        d = _dim([xb, 0.0], [xb, ay], 0, "Y " + fmt(ay))
+        d = _dim([xb, 0.0], [xb, ay], 0, "Y " + fmt(ay), key="y")
         d["lines"] += [[[0.0, 0.0], [xb - DIM_TICK, 0.0]], [[ax, ay], [xb - DIM_TICK, ay]]]
         out.append(d)
     t = e["type"]
     if t == "rect":
-        out.append(_dim([x0, y1], [x1, y1], -g, fmt(v["w"])))           # width above
-        out.append(_dim([x1, y0], [x1, y1], -g, fmt(v["h"])))           # height to the right
+        out.append(_dim([x0, y1], [x1, y1], -g, fmt(v["w"]), key="w"))           # width above
+        out.append(_dim([x1, y0], [x1, y1], -g, fmt(v["h"]), key="h"))           # height to the right
     elif t == "circle":
         r = v["dia"] / 2
-        out.append(_dim([ax - r, ay], [ax + r, ay], 0, "Ø " + fmt(v["dia"]), [ax, ay + min(r * .35, .15)]))
+        out.append(_dim([ax - r, ay], [ax + r, ay], 0, "Ø " + fmt(v["dia"]), [ax, ay + min(r * .35, .15)],
+                        key="dia"))
     elif t == "line":
-        out.append(_dim(e["pts"][0], e["pts"][1], g, fmt(v["len"])))
+        out.append(_dim(e["pts"][0], e["pts"][1], g, fmt(v["len"]), key="len"))
     elif t == "polygon":
-        out.append(_dim([ax, ay], e["pts"][0], 0, "R " + fmt(v["r"])))
+        out.append(_dim([ax, ay], e["pts"][0], 0, "R " + fmt(v["r"]), key="r"))
     return out
+
+
+def dimension_at(e, p, tol: float):
+    """The dimension of `e` under point p (within tol): the dict from dimensions(), else None.
+    A hit is the label position or any line of the dimension - what a right-click aims at."""
+    best, hit = tol, None
+    for d in dimensions(e):
+        dist = math.hypot(p[0] - d["at"][0], p[1] - d["at"][1])
+        for ln in d["lines"]:
+            for (ax, ay), (bx, by) in zip(ln, ln[1:]):
+                dx, dy = bx - ax, by - ay
+                L = dx * dx + dy * dy
+                t = max(0.0, min(1.0, ((p[0] - ax) * dx + (p[1] - ay) * dy) / L)) if L else 0.0
+                dist = min(dist, math.hypot(ax + t * dx - p[0], ay + t * dy - p[1]))
+        if dist <= best:
+            best, hit = dist, d
+    return hit
 
 
 def _ticks(a, b):

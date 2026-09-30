@@ -149,6 +149,25 @@ def test_dimensions_from_origin():
     assert [d["text"] for d in sk.dimensions(sk.circle((0, 0), 1))] == ["Ø 2.0000"]   # at origin: no X/Y
 
 
+def test_every_dimension_names_the_value_it_shows():
+    """A right-click on a dimension edits params(e)[key]; the key must exist and match the text."""
+    for e in (sk.rect((1, 2), (3, 3)), sk.circle((0.5, 0), 1), sk.line((1, 1), (3, 2)),
+              sk.polygon((1, 1), (2, 1), 6), sk.point((2, 3))):
+        for d in sk.dimensions(e):
+            assert d["key"] in sk.params(e), d
+            assert sk.fmt(sk.params(e)[d["key"]]) in d["text"], d
+    assert [d["key"] for d in sk.dimensions(sk.rect((1, 2), (3, 3)))] == ["x", "y", "w", "h"]
+    assert [d["key"] for d in sk.dimensions(sk.circle((0, 0), 1))] == ["dia"]
+
+
+def test_a_right_click_finds_the_dimension_under_it():
+    c = sk.circle((0.5, 0), 1)                       # X dim below, Ø dim across the middle
+    assert sk.dimension_at(c, (0.5, 0.1), 0.05)["key"] == "dia"      # on the Ø label
+    assert sk.dimension_at(c, (0.25, -1.3), 0.05)["key"] == "x"      # on the X dimension line
+    assert sk.dimension_at(c, (3, 3), 0.05) is None                  # nowhere near
+    assert sk.dimension_at(sk.circle((0, 0), 1), (0.0, 0.15), 0.05)["key"] == "dia"
+
+
 def test_points_are_not_profiles_and_pick():
     ents = [sk.rect((0, 0), (2, 2)), sk.point((1, 1))]
     assert len(sketch_regions("s", ents)) == 1
