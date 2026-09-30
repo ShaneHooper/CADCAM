@@ -67,5 +67,48 @@ pump()
 check("leaving the sketch hands back to the setting (HOME = perspective)", not cam.parallel_projection)
 win.topbar.proj_actions["ortho"].trigger()
 QSettings("G-SEND", "CADCAM").setValue("view/projection", "ortho")
+
+# ---- right-click (no drag) → Direct View: snap to the nearest straight view, same zoom
+import numpy as np
+from PySide6.QtCore import QPoint
+vp.set_view("front")
+cam.Azimuth(25)
+cam.Elevation(-18)                              # tilted off FRONT
+vp.plotter.render()
+d0 = cam.distance
+c = QPoint(vp.plotter.width() // 2, vp.plotter.height() // 2)
+QTest.mousePress(vp.plotter, Qt.RightButton, Qt.NoModifier, c)
+QTest.mouseRelease(vp.plotter, Qt.RightButton, Qt.NoModifier, c)
+pump(200)
+m = getattr(vp, "_menu", None)
+acts = m.actions() if m else []
+check("right-click shows Direct View (nearest: FRONT)", len(acts) == 3 and acts[0].text().startswith("Direct View")
+      and "FRONT" in acts[0].text())
+if m:
+    m.close()
+acts and acts[0].trigger()
+pump()
+v = np.subtract(cam.position, cam.focal_point)
+check("Direct View looks straight at the front, same distance, ortho",
+      np.allclose(v / np.linalg.norm(v), (0, -1, 0)) and abs(cam.distance - d0) < 1e-6 and cam.parallel_projection
+      and vp.hud_view.text() == "FRONT")
+check("menu also has Rotate View Clockwise / Counterclockwise",
+      [x.text() for x in acts[1:]] == ["Rotate View Clockwise", "Rotate View Counterclockwise"])
+vp.set_view("top")
+x0 = vp.project([(1, 0, 0)])[0]
+o0 = vp.project([(0, 0, 0)])[0]
+acts[1].trigger()
+pump()
+x1, o1 = vp.project([(1, 0, 0)])[0], vp.project([(0, 0, 0)])[0]
+check("clockwise: +X (was to the right) is now below on screen", x0[0] > o0[0] + 5 and x1[1] > o1[1] + 5
+      and abs(x1[0] - o1[0]) < 2)
+acts[2].trigger()
+pump()
+x2, o2 = vp.project([(1, 0, 0)])[0], vp.project([(0, 0, 0)])[0]
+check("counterclockwise turns it back", x2[0] > o2[0] + 5 and abs(x2[1] - o2[1]) < 2)
+vp.set_view("front")
+cam.Elevation(70)
+vp.plotter.render()
+check("tilted mostly from above → TOP", vp.nearest_view() == "top")
 print("FAILURES:", failures or "none")
 sys.exit(1 if failures else 0)

@@ -9,7 +9,8 @@ import numpy as np
 import pyvista as pv
 from pyvistaqt import QtInteractor
 from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QToolButton, QVBoxLayout,
+                               QWidget)
 from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
 from vtkmodules.vtkRenderingCore import vtkBillboardTextActor3D, vtkCellPicker, vtkMapper, vtkRenderer
 
@@ -21,7 +22,10 @@ VIEWS = {"home": (6, -7, 5), "top": (0, 0, 10), "front": (0, -10, 0), "left": (-
 DISPLAY_MODES = ["SHADED + EDGES", "SHADED", "WIREFRAME"]
 # Settings → View projection (like Fusion's camera options)
 PROJECTIONS = {"ortho": "Orthographic", "persp": "Perspective", "persp-ortho-faces": "Perspective with ortho faces"}
-FACE_VIEWS = ("top", "front", "left", "right")
+FACE_VIEWS = ("top", "front", "left", "right", "bottom", "back")
+# Direct View: the straight view whose direction (camera -> model) is nearest the current one
+STRAIGHT = {"top": ((0, 0, 1), (0, 1, 0)), "bottom": ((0, 0, -1), (0, -1, 0)), "front": ((0, -1, 0), (0, 0, 1)),
+            "back": ((0, 1, 0), (0, 0, 1)), "left": ((-1, 0, 0), (0, 0, 1)), "right": ((1, 0, 0), (0, 0, 1))}
 
 
 def polyline_mesh(lines) -> pv.PolyData:
@@ -56,6 +60,7 @@ class Viewport(QWidget):
         self._body_actors: list = []
         self._press = None
         self._right_taken = False            # a right-click a session handled: swallow its release too
+        self._rpress = None                  # right press spot: a release there (no pan) = context menu
 
         lay = QGridLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -247,6 +252,43 @@ class Viewport(QWidget):
         self.hud_view.setText(key.upper().replace("-", " "))
         self.plotter.render()
 
+    def nearest_view(self) -> str:
+        """The straight view (top / front / ...) closest to where the camera looks from now."""
+        cam = self.plotter.camera
+        d = np.subtract(cam.position, cam.focal_point)
+        d = d / (np.linalg.norm(d) or 1.0)
+        return max(STRAIGHT, key=lambda k: float(np.dot(d, STRAIGHT[k][0])))
+
+    def direct_view(self):
+        """Right-click → Direct View: turn to the nearest straight view, keeping the zoom and the
+        point the view is centred on."""
+        key = self.nearest_view()
+        cam = self.plotter.camera
+        f, dist = np.array(cam.focal_point), cam.distance
+        v, up = STRAIGHT[key]
+        self.plotter.camera_position = [tuple(f + dist * np.array(v)), tuple(f), up]
+        self._face_view = True
+        self.apply_projection(render=False)
+        self.plotter.renderer.ResetCameraClippingRange()
+        self.hud_view.setText(key.upper())
+        self.plotter.render()
+
+    def rotate_view(self, deg: float):
+        """Spin the view about the line of sight (the model turns on screen; -90 = clockwise)."""
+        self.plotter.camera.Roll(deg)
+        self.plotter.render()
+
+    def context_menu(self, at):
+        m = QMenu(self)
+        key = self.nearest_view()
+        act = m.addAction(f"Direct View  ·  {key.upper()}")
+        act.setToolTip("Turn to the nearest straight view (top, front, side...), same zoom")
+        act.triggered.connect(self.direct_view)
+        m.addAction("Rotate View Clockwise").triggered.connect(lambda: self.rotate_view(-90))
+        m.addAction("Rotate View Counterclockwise").triggered.connect(lambda: self.rotate_view(90))
+        self._menu = m                        # kept for tests / so it isn't collected while open
+        m.popup(at)
+
     def set_projection(self, mode: str):
         """Settings → View projection: 'ortho', 'persp' or 'persp-ortho-faces'."""
         if mode in PROJECTIONS:
@@ -318,10 +360,17 @@ class Viewport(QWidget):
                 if w and self.handler.on_right_click(w, ev):
                     self._right_taken = True
                     return True
+            self._rpress = ev.position().toPoint()
             return False
         if t == QEvent.MouseButtonRelease and ev.button() == Qt.RightButton and self._right_taken:
             self._right_taken = False
             return True                      # VTK saw no press, so it must not see the release
+        if t == QEvent.MouseButtonRelease and ev.button() == Qt.RightButton and self._rpress is not None:
+            p0, self._rpress = self._rpress, None
+            if (ev.position().toPoint() - p0).manhattanLength() <= 4 and \
+                    not (self.handler and getattr(self.handler, "captures_left", False)):
+                QTimer.singleShot(0, lambda g=ev.globalPosition().toPoint(): self.context_menu(g))
+            return False
         if t in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick) and ev.button() == Qt.LeftButton:
             # a fast second click arrives as DblClick: it must count as a click, and VTK must
             # never see it (it starts an orbit whose release we swallow = stuck rotating)

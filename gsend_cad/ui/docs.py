@@ -33,6 +33,13 @@ bottom, so you can go back and change it.</p>
 <tr><td class="k">Mouse wheel</td><td>Zoom</td></tr>
 <tr><td class="k">Home key</td><td>Back to the home view</td></tr>
 </table>
+<h3>Right-click in the view: Direct View / Rotate View</h3>
+<ul>
+<li>Right-click empty space (a click, not a drag; right-drag still pans).</li>
+<li><b>Direct View</b> turns to the nearest straight view (Top, Bottom, Front, Back, Left, Right, named in
+the menu), keeping your zoom and centre. Handy after orbiting when you can't quite get it square.</li>
+<li><b>Rotate View Clockwise / Counterclockwise</b> spins the view 90° about your line of sight.</li>
+</ul>
 <h3>Settings → View projection</h3>
 <ul>
 <li><b>Orthographic</b> (default): straight, no perspective. Edges stay parallel, so FRONT / RIGHT / TOP look
