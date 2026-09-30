@@ -419,7 +419,7 @@ class Browser(QFrame):
         self._editor = None
         self.sketch_ids: dict[str, bool] = {}     # sketch id -> shown
         self.body_ids: dict[str, bool] = {}       # body id -> exists at the timeline marker
-        self.setup_ids: set[str] = set()          # CAM setups
+        self.setup_ids: set[str] = set()          # CAM setups and their operations
         self._renaming = None                     # (id, old name) while the name editor is open
         v.addWidget(self.tree, 1)
         self.props = QFrame()
@@ -529,7 +529,7 @@ class Browser(QFrame):
             m.addAction("Hide Sketch" if self.sketch_ids[nid] else "Show Sketch", partial(self.toggle.emit, nid))
             m.addSeparator()
         if nid in self.setup_ids:
-            m.addAction("Edit Setup", partial(self.edit.emit, nid))
+            m.addAction("Edit Operation" if nid.startswith("op") else "Edit Setup", partial(self.edit.emit, nid))
             m.addSeparator()
         m.addAction("Rename\tF2", partial(self.start_rename, nid))
         d = m.addAction("Delete\tDel", partial(self.delete.emit, nid))
@@ -541,14 +541,14 @@ class Browser(QFrame):
         """bodies: [(id, name, visible)], sketches: [(id, name, visible, n_ents, shown)] where
         visible = drawn now and shown = not hidden by the user / an extrude,
         editing: (name, n_ents, sketch id or None) while Sketch mode is open,
-        setups: [(id, name, "milling" | "turning")] - CAM setups, in their own folder"""
+        setups: [(id, name, "milling" | "turning", [(op id, op name)])] - CAM setups + operations"""
         t = self.tree
         t.blockSignals(True)               # building items fires itemChanged; only renames count
         t.clear()
         self._renaming = None
         self.sketch_ids = {sk[0]: sk[4] for sk in sketches}
         self.body_ids = {bid: vis for bid, _n, vis in bodies}
-        self.setup_ids = {sid for sid, _n, _t in setups}
+        self.setup_ids = {sid for sid, _n, _t, _ops in setups} | {oid for *_x, ops in setups for oid, _n in ops}
 
         def node(parent, name, kind, on, nid=None, tag="", dim=False):
             it = QTreeWidgetItem(parent, [name, tag])
@@ -585,9 +585,12 @@ class Browser(QFrame):
             node(sf, editing[0] + " (editing)", "sketch", True, "skedit", f"{editing[1]} ENT")
         if setups:
             cf = node(root, "CAM Setups", "folder", True, "setups")
-            for sid, name, kind in setups:
+            for sid, name, kind, ops in setups:
                 it = node(cf, name, "setup", True, sid, kind.upper())
                 it.setToolTip(0, "Double-click to edit · Delete removes it")
+                for oid, oname in ops:
+                    o = node(it, oname, "face", True, oid, "FACE")
+                    o.setToolTip(0, "Double-click to edit · Delete removes it")
         t.expandAll()
         for i in (1, 2):   # keep Document Settings / Named Views collapsed like the prototype
             root.child(i - 1).setExpanded(False)

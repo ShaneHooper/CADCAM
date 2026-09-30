@@ -300,3 +300,52 @@ def test_fixed_size_stock():
     assert "Ø" in cam.fits(tb, t, 1.0)
     old = {"type": "milling", "body": "all", "stock": {"side": 0.1, "top": 0.05, "bottom": 0}, "wcs": "model"}
     assert cam.validate(old)["stock"]["mode"] == "offset"            # setups saved before modes still load
+
+
+def test_milling_face_toolpath():
+    from gsend_cad.core import cam
+    box = ((0, 0, 0), (4, 3, 0.5))
+    s = cam.new_setup("milling")                         # stock top 0.55, WCS on it (top center)
+    op = cam.new_op(s)
+    mv = cam.face_toolpath(box, s, op)
+    feeds = [p for k, p in mv if k == "feed"]
+    assert {round(p[2], 9) for p in feeds} == {-0.05}   # one 0.05 pass down to the part top
+    ys = sorted({round(p[1], 6) for p in feeds})
+    assert ys[0] - 1.0 <= -1.6 and ys[-1] + 1.0 >= 1.6   # tool edge covers the 3.2 wide stock
+    assert all(b - a <= 1.4 + 1e-9 for a, b in zip(ys, ys[1:]))          # 70 % of Ø2
+    xs = [p[0] for p in feeds]
+    assert min(xs) <= -2.1 - 1.0 and max(xs) >= 2.1 + 1.0                # off the stock both ends
+    s["stock"]["top"] = 0.12
+    mv = cam.face_toolpath(box, s, op)
+    assert sorted({round(p[2], 9) for k, p in mv if k == "feed"}) == [-0.12, -0.08, -0.04]
+    assert cam.cycle_time(mv, s, op) > 0
+
+
+def test_turning_face_toolpath():
+    from gsend_cad.core import cam
+    box = ((-1, -1, 0), (1, 1, 3))
+    s = cam.new_setup("turning")                         # face stock 0.05, Z0 on the stock face
+    op = cam.new_op(s)
+    mv = cam.face_toolpath(box, s, op, 1.0)
+    feeds = [p for k, p in mv if k == "feed"]
+    assert [p[2] for p in feeds] == pytest.approx([-0.05 / 3, -0.1 / 3, -0.05])   # 3 passes <= 0.02
+    assert all(p[0] == -0.02 for p in feeds)             # each pass runs past center
+    w = cam.toolpath_world(box, s, mv, 1.0)
+    assert abs(w[0][1][2] - (3.05 + 0.1)) < 1e-9         # first rapid clears the stock face
+
+
+def test_ops_in_document():
+    from gsend_cad.core import cam
+    d = Document()
+    st = d.add_setup(cam.new_setup("milling"))
+    o = d.add_op(st["id"], cam.new_op(st))
+    assert (o["id"], o["name"]) == ("op1", "Face1")
+    d.update_op("op1", {**o, "stepover": 50})
+    d.update_setup(st["id"], {**d.setup(st["id"]), "stock": {"mode": "offset", "side": .2, "top": .1, "bottom": 0}})
+    assert d.setup(st["id"])["ops"][0]["stepover"] == 50         # editing the setup keeps its ops
+    d2 = Document.from_dict(d.to_dict())
+    assert d2.op("op1")[1]["name"] == "Face1"
+    with pytest.raises(ValueError):
+        d.update_op("op1", {**o, "tool_dia": 0})
+    d.remove_op("op1")
+    assert d.op("op1") == (None, None)

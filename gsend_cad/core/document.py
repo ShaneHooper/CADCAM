@@ -262,13 +262,53 @@ class Document:
 
     def update_setup(self, sid: str, setup: dict) -> dict:
         i = next(i for i, x in enumerate(self.setups) if x["id"] == sid)
-        s = cam.validate({**setup, "id": sid, "name": setup.get("name", self.setups[i]["name"])})
+        s = cam.validate({**setup, "id": sid, "name": setup.get("name", self.setups[i]["name"]),
+                          "ops": setup.get("ops", self.setups[i].get("ops", []))})
         self.setups[i] = s
         self._changed("setups")
         return s
 
     def remove_setup(self, sid: str):
         self.setups = [x for x in self.setups if x["id"] != sid]
+        self._changed("setups")
+
+    def add_op(self, sid: str, op: dict) -> dict:
+        """Add an operation (core.cam) to a setup. Gets an id and a name like Face1."""
+        st = self.setup(sid)
+        o = cam.validate_op(st, op)
+        ids = {x["id"] for s in self.setups for x in s.get("ops", [])}
+        n = 1
+        while f"op{n}" in ids:
+            n += 1
+        o["id"] = f"op{n}"
+        base = cam.OP_TYPES[o["type"]]
+        names = {x["name"] for x in st.get("ops", [])}
+        k = 1
+        while f"{base}{k}" in names:
+            k += 1
+        o.setdefault("name", f"{base}{k}")
+        st.setdefault("ops", []).append(o)
+        self._changed("setups")
+        return o
+
+    def op(self, oid: str):
+        """(setup, op) for an operation id, or (None, None)."""
+        for s in self.setups:
+            for o in s.get("ops", []):
+                if o["id"] == oid:
+                    return s, o
+        return None, None
+
+    def update_op(self, oid: str, op: dict) -> dict:
+        st, old = self.op(oid)
+        o = cam.validate_op(st, {**op, "id": oid, "name": op.get("name", old["name"])})
+        st["ops"] = [o if x["id"] == oid else x for x in st["ops"]]
+        self._changed("setups")
+        return o
+
+    def remove_op(self, oid: str):
+        for s in self.setups:
+            s["ops"] = [x for x in s.get("ops", []) if x["id"] != oid]
         self._changed("setups")
 
     def setup(self, sid: str) -> dict | None:

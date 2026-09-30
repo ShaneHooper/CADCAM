@@ -1500,6 +1500,193 @@ class SetupSession:
         self.vp.clear("setup", render=False)
 
 
+# ------------------------------------------------------------------ CAM operations (Face)
+def op_moves(win, setup, op):
+    """(WCS moves, world moves) for an operation; ([], []) when there's no part."""
+    bodies = setup_bodies(win, setup)
+    if not bodies:
+        return [], []
+    bbox = bodies_bbox(bodies)
+    r = turning_radius(win, setup, bodies) if setup["type"] == cam.TURNING else 0.0
+    moves = cam.face_toolpath(bbox, setup, op, r)
+    return moves, cam.toolpath_world(bbox, setup, moves, r)
+
+
+def draw_toolpath(vp, world, group="cam", dim=False):
+    """Feeds blue, rapids yellow (thin), like Fusion."""
+    feeds, rapids = [], []
+    for (_k0, a), (k1, b) in zip(world, world[1:]):
+        (feeds if k1 == "feed" else rapids).append([a, b])
+    vp.add_lines(group, rapids, theme.WARN, 1.0, opacity=0.5 if dim else 0.8)
+    vp.add_lines(group, feeds, theme.ACCENT, 1.4 if dim else 2.2, opacity=0.6 if dim else 1.0)
+
+
+class OpPanel(Panel):
+    FIELDS = {cam.MILLING: [("tool_dia", "Tool diameter", 4), ("stepover", "Stepover %", 1),
+                            ("stepdown", "Max stepdown", 4), ("leave", "Stock to leave", 4),
+                            ("rpm", "Spindle RPM", 0), ("feed", "Feed (in/min)", 2)],
+              cam.TURNING: [("stepdown", "Max stepdown", 4), ("leave", "Stock to leave", 4),
+                            ("past_center", "Past center (X)", 4), ("sfm", "Surface speed SFM", 0),
+                            ("ipr", "Feed (in/rev)", 4), ("max_rpm", "Max RPM", 0)]}
+
+    def __init__(self, session: "OpSession"):
+        super().__init__("Face", 250)
+        s = session
+        self.setup = QComboBox()
+        for st in s.win.doc.setups:
+            self.setup.addItem(f"{st['name']} · {cam.TYPES[st['type']]}", st["id"])
+        self.row("Setup", self.setup)
+        self.name = self.row("Name", self.value(""))
+        self.boxes = {}
+        self.groups = {}
+        for kind, fields in self.FIELDS.items():
+            g = QWidget()
+            lay = QVBoxLayout(g)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(0)
+            items = []
+            for key, label, dec in fields:
+                nb = NumBox(0, dec)
+                nb.setRange(0, 100000)
+                nb.valueChanged.connect(s.preview)
+                self.boxes[(kind, key)] = nb
+                items.append((label, nb))
+            if kind == cam.MILLING:
+                self.direction = QComboBox()
+                self.direction.addItem("Along X", "x")
+                self.direction.addItem("Along Y", "y")
+                self.direction.currentIndexChanged.connect(s.preview)
+                items.insert(4, ("Cut direction", self.direction))
+            for label, w in items:
+                r = QWidget()
+                r.setObjectName("panelRow")
+                hl = QHBoxLayout(r)
+                hl.setContentsMargins(10, 4, 10, 4)
+                hl.addWidget(QLabel(label))
+                hl.addStretch()
+                hl.addWidget(w)
+                lay.addWidget(r)
+            self.v.addWidget(g)
+            self.groups[kind] = g
+        self.info = QLabel("")
+        self.info.setWordWrap(True)
+        self.info.setStyleSheet(f"color:{theme.FG2};padding:4px 10px;")
+        self.v.addWidget(self.info)
+        _dlg_footer(self, s)
+        self.setup.currentIndexChanged.connect(s.setup_changed)
+
+    fit = SetupPanel.fit
+
+
+class OpSession:
+    """CAM → Face: pick the setup, set the cut, see the toolpath. Also edits an operation."""
+    captures_left = False
+
+    def __init__(self, win, setup_id: str | None, edit_id: str | None = None):
+        self.win, self.vp = win, win.viewport
+        self.edit_id = edit_id
+        self.panel = OpPanel(self)
+        p = self.panel
+        self._loading = True
+        if edit_id:
+            st, op = win.doc.op(edit_id)
+            setup_id = st["id"]
+            p.setup.setEnabled(False)          # an op stays in its setup
+        p.setup.setCurrentIndex(max(0, p.setup.findData(setup_id)))
+        self._loading = False
+        self.setup_changed(op=op if edit_id else None)
+
+    def current_setup(self):
+        return self.win.doc.setup(self.panel.setup.currentData())
+
+    def setup_changed(self, *_, op=None):
+        p = self.panel
+        st = self.current_setup()
+        op = op or cam.new_op(st)
+        self._loading = True
+        for (kind, key), box in p.boxes.items():
+            if kind == st["type"] and key in op:
+                box.setValue(op[key])
+        if st["type"] == cam.MILLING:
+            p.direction.setCurrentIndex(p.direction.findData(op.get("direction", "x")))
+        names = {o["name"] for o in st.get("ops", [])}
+        k = 1
+        while f"Face{k}" in names:
+            k += 1
+        p.name.setText(op.get("name", f"Face{k}"))
+        self._loading = False
+        for kind, g in p.groups.items():
+            g.setVisible(kind == st["type"])
+        p.fit()
+        self.vp.set_side(p)
+        self.preview()
+
+    def op(self) -> dict:
+        p = self.panel
+        st = self.current_setup()
+        o = {"type": "face", "name": p.name.text()}
+        for (kind, key), box in p.boxes.items():
+            if kind == st["type"]:
+                o[key] = box.value()
+        if st["type"] == cam.MILLING:
+            o["direction"] = p.direction.currentData()
+        return o
+
+    def preview(self, *_):
+        if self._loading:
+            return
+        st = self.current_setup()
+        self.vp.clear("cam", render=False)
+        self.vp.clear("op", render=False)
+        draw_setup(self.vp, self.win, st, "op")
+        try:
+            moves, world = op_moves(self.win, st, self.op())
+        except ValueError as exc:
+            self.panel.info.setText(str(exc))
+            self.vp.render()
+            return
+        draw_toolpath(self.vp, world, "op")
+        passes = sum(1 for (_a, p0), (k, p1) in zip(moves, moves[1:]) if k == "feed" and p0[2] != p1[2]) \
+            if st["type"] == cam.MILLING else sum(1 for k, _p in moves if k == "feed")
+        t = cam.cycle_time(moves, st, self.op())
+        self.panel.info.setText(f"{passes} depth pass{'es' if passes != 1 else ''} · about {t:.1f} min cutting")
+        self.win.message("FACE: blue = cutting, yellow = rapid · change values to update · Enter / OK saves · Esc cancels")
+        self.vp.render()
+
+    def commit(self):
+        st = self.current_setup()
+        try:
+            cam.validate_op(st, self.op())
+        except ValueError as exc:
+            self.vp.show_toast(str(exc), bad=True)
+            return
+        self.win.commit_op(st["id"], self.op(), self.edit_id)
+
+    def on_move(self, w, ev):
+        pass
+
+    def on_click(self, w, ev):
+        pass
+
+    def on_key(self, ev) -> bool:
+        if ev.key() in (Qt.Key_Return, Qt.Key_Enter):
+            self.commit()
+            return True
+        if ev.key() == Qt.Key_Escape:
+            self.win.cancel_command()
+            return True
+        return False
+
+    def ribbon_tool(self, label):
+        if label == "Face":
+            return
+        self.win.cancel_command()
+        self.win.run_tool(label)
+
+    def close(self):
+        self.vp.clear("op", render=False)
+
+
 def regions_for(doc):
     """Pickable regions from every applied sketch, plus each sketch's plane (core.plane frame)."""
     regions, planes = [], {}

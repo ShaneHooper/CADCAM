@@ -261,6 +261,27 @@ removes it (Ctrl+Z brings it back); F2 renames it. Click one to show its stock.<
 <li>Setups are saved in the .gcad file. They don't change the design timeline.</li>
 </ul>
 """),
+    ("face", "CAM: Face Operation", """
+<h1>Face</h1>
+<p>Faces the stock down to the part (plus any stock to leave). Make a Setup first.</p>
+<ol>
+<li>CAM → <b>Face</b> (Milling or Turning tab). It opens on the setup you last picked, or a setup
+of the tab's type. The <b>Setup</b> box at the top switches it.</li>
+<li><b>Milling setup</b>: tool diameter (a face mill), stepover % of the tool, max stepdown, stock
+to leave, cut direction (along X or Y), spindle RPM and feed (in/min). Zigzag passes run fully off
+the stock at both ends, from the stock top down to the part top.</li>
+<li><b>Turning setup</b>: max stepdown per pass, stock to leave, how far past center (X, radius), surface
+speed SFM, feed in/rev and max RPM. Each pass feeds from outside the bar in past center, then rapids
+back, from the bar's front face down to the part face.</li>
+<li>The toolpath shows live (blue = cutting, yellow = rapid) with the number of passes and a rough
+cutting time. <b>OK</b> or Enter.</li>
+</ol>
+<ul>
+<li>The operation is listed under its setup in the Browser. Double-click to change it, Delete to remove,
+F2 to rename. Clicking an operation shows its path bright; the setup's other paths are dim.</li>
+<li>Post processing (G-code out) comes next.</li>
+</ul>
+"""),
     ("timeline", "Timeline, Undo, Files", """
 <h1>Timeline, Undo and Files</h1>
 <h3>Timeline</h3>

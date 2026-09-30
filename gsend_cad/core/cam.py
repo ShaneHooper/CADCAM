@@ -202,3 +202,143 @@ def describe(s: dict) -> str:
     stock = (f"bar Ø{st['dia']:.3f} × {st['length']:.3f}" if sized
              else f"OD +{st['od']:.3f}, face +{st['face']:.3f}")
     return f"Turning · {s['axis'].upper()} axis · {stock} · Z0 {TURN_WCS[s['wcs']].lower()}"
+
+
+# ---------------------------------------------------------------- operations
+# An operation belongs to a setup (setup["ops"]). Toolpaths are lists of moves in the setup's
+# WCS: ("rapid" | "feed", (x, y, z)). Milling: WCS axes are the model's (Z up). Turning:
+# (X = radius, 0, Z along the spindle), like lathe G-code but X as radius, not diameter.
+
+FACE_MILL = {"type": "face", "tool_dia": 2.0, "stepover": 70.0, "stepdown": 0.05, "leave": 0.0,
+             "direction": "x", "rpm": 3000.0, "feed": 60.0, "clearance": 0.5}
+FACE_TURN = {"type": "face", "stepdown": 0.02, "leave": 0.0, "past_center": 0.02, "sfm": 600.0,
+             "ipr": 0.008, "max_rpm": 3000.0, "clearance": 0.1}
+OP_TYPES = {"face": "Face"}
+
+
+def new_op(setup: dict, kind: str = "face") -> dict:
+    if kind != "face":
+        raise ValueError(f"operation {kind!r} is not built yet")
+    return copy.deepcopy(FACE_MILL if setup["type"] == MILLING else FACE_TURN)
+
+
+def validate_op(setup: dict, op: dict) -> dict:
+    op = {**new_op(setup, op.get("type", "face")), **copy.deepcopy(op)}
+    for k, v in list(op.items()):
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            op[k] = float(v)
+    for k in ("tool_dia", "stepdown", "rpm", "feed", "sfm", "ipr", "max_rpm"):
+        if k in op and op[k] <= 0:
+            raise ValueError(f"{k.replace('_', ' ')} must be greater than 0")
+    if setup["type"] == MILLING:
+        if not 1 <= op["stepover"] <= 100:
+            raise ValueError("stepover must be 1 to 100 % of the tool")
+        if op["direction"] not in ("x", "y"):
+            raise ValueError("direction must be x or y")
+    for k in ("leave", "past_center", "clearance"):
+        if k in op and op[k] < 0:
+            raise ValueError(f"{k.replace('_', ' ')} can't be negative")
+    return op
+
+
+def _levels(top: float, bottom: float, stepdown: float) -> list[float]:
+    """Z of each pass from top down to bottom, equal steps no bigger than stepdown."""
+    depth = top - bottom
+    if depth <= 1e-9:
+        return [bottom]                           # nothing to remove: one skim pass at the target
+    n = math.ceil(depth / stepdown - 1e-9)
+    return [top - depth * k / n for k in range(1, n + 1)]
+
+
+def face_toolpath(bbox, setup: dict, op: dict, radius: float = 0.0) -> list[tuple]:
+    """Moves for a Face operation, in the setup's WCS (see the note above)."""
+    op = validate_op(setup, op)
+    w = wcs(bbox, setup, radius)
+    moves = []
+    if setup["type"] == MILLING:
+        o = w["origin"]
+        lo, hi = stock_box(bbox, setup)
+        lo = [lo[i] - o[i] for i in range(3)]      # stock in WCS coordinates
+        hi = [hi[i] - o[i] for i in range(3)]
+        part_top = bbox[1][2] - o[2]
+        r = op["tool_dia"] / 2
+        step = op["tool_dia"] * op["stepover"] / 100
+        a, b = (0, 1) if op["direction"] == "x" else (1, 0)   # a = cutting direction, b = stepping
+        start, end = lo[a] - r - 0.1, hi[a] + r + 0.1         # fully off the stock at both ends
+        width = hi[b] - lo[b]
+        if op["tool_dia"] >= width + 0.2:                     # one pass down the middle covers it
+            rows = [(lo[b] + hi[b]) / 2]
+        else:
+            rows, v = [], lo[b] - r + step
+            while True:
+                rows.append(v)
+                if v + r >= hi[b] - 1e-9:
+                    break
+                v += step
+        safe = hi[2] + op["clearance"]
+        levels = _levels(hi[2], part_top + op["leave"], op["stepdown"])
+
+        def pt(u, v, z):
+            p = [0.0, 0.0, z]
+            p[a], p[b] = u, v
+            return tuple(p)
+
+        for z in levels:
+            moves.append(("rapid", pt(start, rows[0], safe)))
+            moves.append(("rapid", pt(start, rows[0], z + 0.1)))
+            moves.append(("feed", pt(start, rows[0], z)))
+            fwd = True
+            for k, v in enumerate(rows):
+                u0, u1 = (start, end) if fwd else (end, start)
+                if k:
+                    moves.append(("feed", pt(u0, v, z)))      # step over, off the stock
+                moves.append(("feed", pt(u1, v, z)))
+                fwd = not fwd
+            moves.append(("rapid", pt(moves[-1][1][a], rows[-1], safe)))
+        return moves
+    # turning: X = radius, Z along the spindle (0 at the WCS), tool comes from +Z
+    c = stock_cylinder(bbox, radius, setup)
+    i, center, (_back, front) = turning_frame(bbox, setup)
+    sign = 1.0 if setup["front"] == "+" else -1.0
+    z_stock = (c["front"][i] - w["origin"][i]) * sign
+    z_part = (front - w["origin"][i]) * sign
+    x_out = c["r"] + op["clearance"]
+    x_end = -op["past_center"]
+    levels = _levels(z_stock, z_part + op["leave"], op["stepdown"])
+    moves.append(("rapid", (x_out, 0.0, z_stock + op["clearance"])))
+    for z in levels:
+        moves.append(("rapid", (x_out, 0.0, z)))
+        moves.append(("feed", (x_end, 0.0, z)))
+        moves.append(("rapid", (x_end, 0.0, z + op["clearance"])))
+        moves.append(("rapid", (x_out, 0.0, z + op["clearance"])))
+    return moves
+
+
+def toolpath_world(bbox, setup: dict, moves, radius: float = 0.0) -> list[tuple]:
+    """The same moves in model coordinates (for drawing)."""
+    w = wcs(bbox, setup, radius)
+    o, x, z = w["origin"], w["x"], w["z"]
+    y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]]
+    return [(kind, tuple(o[k] + p[0] * x[k] + p[1] * y[k] + p[2] * z[k] for k in range(3))) for kind, p in moves]
+
+
+def cycle_time(moves, setup: dict, op: dict) -> float:
+    """Rough cutting time in minutes (feed moves only; rapids assumed quick)."""
+    t, prev = 0.0, None
+    for kind, p in moves:
+        if prev is not None and kind == "feed":
+            d = math.dist(prev, p)
+            if setup["type"] == MILLING:
+                t += d / op["feed"]
+            else:                                   # constant surface speed, capped RPM
+                r_mid = max((abs(prev[0]) + abs(p[0])) / 2, 1e-3)
+                rpm = min(op["sfm"] * 12 / (2 * math.pi * r_mid), op["max_rpm"])
+                t += d / (op["ipr"] * rpm)
+        prev = p
+    return t
+
+
+def describe_op(setup: dict, op: dict) -> str:
+    if setup["type"] == MILLING:
+        return f"Face · Ø{op['tool_dia']:.3f} tool · {op['stepover']:.0f}% stepover · {op['stepdown']:.3f} DOC"
+    return f"Face · {op['stepdown']:.3f} per pass · {op['sfm']:.0f} SFM · {op['ipr']:.4f} IPR"

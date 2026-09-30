@@ -12,8 +12,8 @@ from ..core import Document, bracket_plate
 from ..core import plane as pl
 from ..kernel import Kernel
 from . import theme
-from .commands import (EdgeSession, ExtrudeSession, PlanePickSession, RevolveSession, SetupSession, SketchSession,
-                       draw_setup, regions_for)
+from .commands import (EdgeSession, ExtrudeSession, OpSession, PlanePickSession, RevolveSession, SetupSession,
+                       SketchSession, draw_setup, draw_toolpath, op_moves, regions_for)
 from .panels import Browser, Ribbon, StatusBar, Timeline, TopBar
 
 FILE_FILTER = f"{APP_NAME} (*.gcad);;All files (*)"
@@ -123,10 +123,15 @@ class MainWindow(QMainWindow):
         """In CAM mode, the picked (or newest) setup's stock and WCS."""
         vp = self.viewport
         vp.clear("cam", render=False)
-        if self.ribbon.switch.mode == "cam" and self.doc.setups and not isinstance(self.session, SetupSession):
+        if self.ribbon.switch.mode == "cam" and self.doc.setups and not isinstance(self.session, (SetupSession, OpSession)):
             sid = getattr(self, "cam_setup", None)
             s = self.doc.setup(sid) or self.doc.setups[-1]
             draw_setup(vp, self, s)
+            for o in s.get("ops", []):              # its toolpaths; the picked op bright, the rest dim
+                try:
+                    draw_toolpath(vp, op_moves(self, s, o)[1], "cam", dim=o["id"] != getattr(self, "cam_op", None))
+                except ValueError:
+                    pass
         vp.render()
 
     def start_setup(self, kind: str = "milling", edit_id: str | None = None):
@@ -139,6 +144,41 @@ class MainWindow(QMainWindow):
         self.session = SetupSession(self, kind, edit)
         self.viewport.handler = self.session
         self.ribbon.set_active("Setup")
+
+    def start_op(self, kind: str = "face", edit_id: str | None = None):
+        if not self.doc.setups:
+            self.viewport.show_toast("Create a Setup first (CAM → Setup)", bad=True)
+            return
+        if not self.model.bodies:
+            self.viewport.show_toast("No solid to machine · make a part in CAD first", bad=True)
+            return
+        self.cancel_command()
+        sid = getattr(self, "cam_setup", None)
+        if not self.doc.setup(sid):
+            want = self.ribbon.current                   # a setup of the tab's type, else the newest
+            sid = next((x["id"] for x in reversed(self.doc.setups) if x["type"] == want), self.doc.setups[-1]["id"])
+        self.viewport.clear("cam")
+        self.session = OpSession(self, sid, edit_id)
+        self.viewport.handler = self.session
+        self.ribbon.set_active("Face")
+
+    def commit_op(self, sid: str, op: dict, edit_id: str | None):
+        self.cancel_command()
+        self._snapshot()
+        try:
+            o = self.doc.update_op(edit_id, op) if edit_id else self.doc.add_op(sid, op)
+        except ValueError as exc:
+            self.undo_stack.pop()
+            self.viewport.show_toast(str(exc), bad=True)
+            return
+        self.cam_setup, self.cam_op = sid, o["id"]
+        self.document_changed.emit()
+        self.rebuild()
+        from ..core import cam
+        st = self.doc.setup(sid)
+        t = cam.cycle_time(op_moves(self, st, o)[0], st, o)
+        self.viewport.show_toast(f"{o['name']} · about {t:.1f} min")
+        self.message(f"{o['name']} in {st['name']}: {cam.describe_op(st, o)}. Double-click it in the Browser to change it.")
 
     def commit_setup(self, setup: dict, edit_id: str | None):
         self.cancel_command()
@@ -184,7 +224,8 @@ class MainWindow(QMainWindow):
         editing = None
         if isinstance(self.session, SketchSession):
             editing = (self.session.name, len(self.session.ents), self.session.edit_id)
-        setups = [(x["id"], x["name"], x["type"]) for x in self.doc.setups]
+        setups = [(x["id"], x["name"], x["type"], [(o["id"], o["name"]) for o in x.get("ops", [])])
+                  for x in self.doc.setups]
         self.browser.set_rows(self.doc.name, bodies, sketches, self.selected, editing, setups)
 
     def refresh_props(self):
@@ -247,6 +288,14 @@ class MainWindow(QMainWindow):
         if self.session is not None:
             self.viewport.show_toast("Finish the current command first")
             return
+        if self.doc.op(nid)[1]:
+            self._snapshot()
+            name = self.doc.op(nid)[1]["name"]
+            self.doc.remove_op(nid)
+            self.document_changed.emit()
+            self.rebuild()
+            self.viewport.show_toast(f"{name} deleted · Ctrl+Z brings it back")
+            return
         if self.doc.setup(nid):
             self._snapshot()
             name = self.doc.setup(nid)["name"]
@@ -298,6 +347,12 @@ class MainWindow(QMainWindow):
     def rename_node(self, nid: str, name: str):
         """Right-click → Rename (or F2) on a sketch or body in the Browser."""
         name = " ".join(name.split())[:40]
+        if self.doc.op(nid)[1]:
+            self._snapshot()
+            self.doc.op(nid)[1]["name"] = name
+            self.document_changed.emit()
+            self.rebuild()
+            return
         if self.doc.setup(nid):
             if any(x["name"] == name and x["id"] != nid for x in self.doc.setups):
                 self.viewport.show_toast(f"There is already a setup called {name}", bad=True)
@@ -394,6 +449,8 @@ class MainWindow(QMainWindow):
             self.start_edges(label.lower())
         elif label == "Setup":
             self.start_setup("turning" if self.ribbon.current == "turning" else "milling")
+        elif label == "Face" and self.ribbon.switch.mode == "cam":
+            self.start_op("face")
         elif label == "Export":
             self.export("step")
         elif label == "3D Print":
@@ -467,6 +524,11 @@ class MainWindow(QMainWindow):
 
     def edit_sketch(self, fid: str):
         """Reopen a sketch that is already in the timeline (right-click it → Edit Sketch)."""
+        if self.doc.op(fid)[1]:                    # a CAM operation in the Browser
+            if self.ribbon.switch.mode != "cam":
+                self.set_mode("cam")
+            self.start_op(edit_id=fid)
+            return
         if self.doc.setup(fid):                    # a CAM setup in the Browser: edit that instead
             if self.ribbon.switch.mode != "cam":
                 self.set_mode("cam")
@@ -612,7 +674,8 @@ class MainWindow(QMainWindow):
         b = self.browser
         self.sel_node = nid if nid in b.sketch_ids or nid in b.body_ids or nid in b.setup_ids else None
         if nid in b.setup_ids:
-            self.cam_setup = nid
+            st, o = self.doc.op(nid)
+            self.cam_setup, self.cam_op = (st["id"], nid) if o else (nid, None)
             self.draw_cam()
         if nid.startswith("body"):
             self.selected = nid

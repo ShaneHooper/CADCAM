@@ -135,5 +135,42 @@ c = cam.stock_cylinder(bb, r, t)
 check("bar stock Ø = part Ø1.5 + 2 × 0.05", abs(c["r"] * 2 - 1.6) < 5e-3)
 check("WCS Z0 on the front face of the stock", abs(cam.wcs(bb, t, r)["origin"][0] - 3.05) < 1e-6)
 shot("cam_03_turning_saved")
+
+# ---- Face: turning setup (tab = Turning), then a milling one
+win.run_tool("Face")
+o = win.session
+check("Face opens on the turning setup with turning fields",
+      o.__class__.__name__ == "OpSession" and o.current_setup()["type"] == "turning"
+      and o.panel.groups["turning"].isVisible() and not o.panel.groups["milling"].isVisible())
+o.panel.boxes[("turning", "stepdown")].setValue(0.02)
+check("preview says 3 passes (0.05 face stock / 0.02)", o.panel.info.text().startswith("3 depth passes"))
+shot("cam_04_face_turning")
+key(Qt.Key_Return)
+st = win.doc.setups[-1]
+check("Face1 saved in the turning setup, listed in the Browser",
+      [x["name"] for x in st.get("ops", [])] == ["Face1"] and st["ops"][0]["id"] in win.browser.setup_ids)
+
+win.select_tab("milling")
+win.run_tool("Setup")
+key(Qt.Key_Return)                               # a milling setup on the same part
+win.run_tool("Face")
+o = win.session
+check("Face from the Milling tab picks the milling setup", o.current_setup()["type"] == "milling"
+      and o.panel.groups["milling"].isVisible())
+o.panel.boxes[("milling", "tool_dia")].setValue(1.0)
+shot("cam_05_face_milling")
+key(Qt.Key_Return)
+ms = win.doc.setups[-1]
+oid = ms["ops"][0]["id"]
+check("milling Face saved with the Ø1 tool", ms["ops"][0]["tool_dia"] == 1.0)
+win.browser.edit.emit(oid)
+pump()
+check("double-click reopens the Face op", win.session.edit_id == oid and
+      win.session.panel.boxes[("milling", "tool_dia")].value() == 1.0)
+key(Qt.Key_Escape)
+win.delete_node(oid)
+check("Delete removes the op", not win.doc.setup(ms["id"]).get("ops"))
+win.undo()
+check("Ctrl+Z restores it", len(win.doc.setup(ms["id"])["ops"]) == 1)
 print("FAILURES:", failures or "none")
 sys.exit(1 if failures else 0)
