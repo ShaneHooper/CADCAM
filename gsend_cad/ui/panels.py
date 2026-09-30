@@ -4,8 +4,8 @@ from __future__ import annotations
 import getpass
 from functools import partial
 
-from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QPixmap, QPolygon
+from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPointF, QRectF, QSize, Qt, QTimer, QVariantAnimation, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPen, QPixmap, QPolygon
 from PySide6.QtWidgets import (QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QScrollArea,
                                QSizePolicy,
                                QStackedWidget, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
@@ -36,7 +36,20 @@ RIBBON = {
                ("Inspect", [("measure", "Measure")]),
                ("Finish", [("cancel", "Cancel"), ("finish", "Finish Sketch")])],
 }
+# CAM mode (the CAD/CAM switch). Tools are placeholders until the toolpath side is built.
+RIBBON.update({
+    "milling": [("Setup", [("setup", "Setup")]),
+                ("2D", [("face", "Face"), ("adaptive", "2D Adaptive"), ("pocket", "2D Pocket"),
+                        ("contour", "2D Contour")]),
+                ("Drilling", [("drill", "Drill")]),
+                ("Actions", [("sim", "Simulate"), ("post", "Post Process")])],
+    "turning": [("Setup", [("setup", "Setup")]),
+                ("Turning", [("face", "Face"), ("turn", "Profile Rough"), ("turn", "Profile Finish"),
+                             ("groove", "Groove"), ("thread", "Thread"), ("partoff", "Part Off")]),
+                ("Actions", [("sim", "Simulate"), ("post", "Post Process")])],
+})
 TABS = [("solid", "Solid"), ("surface", "Surface"), ("util", "Utilities"), ("sketch", "Sketch")]
+CAM_TABS = [("milling", "Milling"), ("turning", "Turning")]
 
 
 def hbox(w=None, margins=(0, 0, 0, 0), spacing=0):
@@ -51,6 +64,109 @@ def vbox(w=None, margins=(0, 0, 0, 0), spacing=0):
     lay.setContentsMargins(*margins)
     lay.setSpacing(spacing)
     return lay
+
+
+class Wordmark(QWidget):
+    """G-SEND.IO's editor wordmark: a square Squada One "G" leading Anton "-SEND", drawn on one
+    baseline with the G's cap height matched to Anton's (Squada draws caps smaller)."""
+
+    CAP = 17                                    # px cap height; fits the 34px top bar
+
+    def __init__(self):
+        super().__init__()
+        g_txt, rest_txt = theme.BRAND_TEXT
+        self.texts = (g_txt, rest_txt)
+        self.f_rest = QFont(theme.BRAND_WM[0])
+        self.f_g = QFont(theme.BRAND_G[0])
+        self.f_rest.setPixelSize(self._px(self.f_rest, "H", self.CAP))
+        self.f_g.setPixelSize(self._px(self.f_g, "G", self.CAP) + 1)   # optical nudge, as in G-SEND.IO
+        self.w_g = QFontMetricsF(self.f_g).horizontalAdvance(g_txt)
+        w = self.w_g + QFontMetricsF(self.f_rest).horizontalAdvance(rest_txt)
+        self.setFixedSize(int(w) + 2, 30)
+        self.setToolTip(APP_NAME)
+
+    @staticmethod
+    def _px(font, ch, cap):
+        f = QFont(font)
+        f.setPixelSize(100)
+        h = QFontMetricsF(f).tightBoundingRect(ch).height() or 70
+        return max(8, round(100 * cap / h))
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.TextAntialiasing)
+        p.setPen(QColor(theme.BRAND_INK))
+        base = (self.height() + self.CAP) / 2
+        p.setFont(self.f_g)
+        p.drawText(QPointF(0, base), self.texts[0])
+        p.setFont(self.f_rest)
+        p.drawText(QPointF(self.w_g, base), self.texts[1])
+        p.end()
+
+
+class ModeSwitch(QWidget):
+    """The CAD / CAM switch: a pill with a blue knob that slides to the active side."""
+    changed = Signal(str)                       # "cad" | "cam"
+    MODES = ("cad", "cam")
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(108, 20)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("Switch between CAD (design the part) and CAM (toolpaths)")
+        self.mode = "cad"
+        self._pos = 0.0                         # knob: 0 = CAD side, 1 = CAM side
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(160)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._anim.valueChanged.connect(self._slide)
+
+    def _slide(self, v):
+        self._pos = float(v)
+        self.update()
+
+    def set_mode(self, mode: str, animate=True):
+        if mode not in self.MODES:
+            return
+        self.mode = mode
+        end = float(self.MODES.index(mode))
+        self._anim.stop()
+        if animate:
+            self._anim.setStartValue(self._pos)
+            self._anim.setEndValue(end)
+            self._anim.start()
+        else:
+            self._slide(end)
+
+    def mousePressEvent(self, ev):
+        # click either half to pick it; clicking the lit half flips it (it's a toggle)
+        side = "cam" if ev.position().x() > self.width() / 2 else "cad"
+        new = side if side != self.mode else ("cam" if self.mode == "cad" else "cad")
+        self.changed.emit(new)
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        rad = r.height() / 2
+        p.setPen(QPen(QColor(theme.ACCENT), 1))
+        p.setBrush(QColor(theme.BG))
+        p.drawRoundedRect(r, rad, rad)
+        half = r.width() / 2
+        knob = QRectF(r.left() + 2 + self._pos * (half - 2), r.top() + 2, half - 2, r.height() - 4)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(theme.ACCENT))
+        p.drawRoundedRect(knob, knob.height() / 2, knob.height() / 2)
+        f = QFont(theme.HEAD[0])
+        f.setPixelSize(12)
+        f.setBold(True)
+        f.setLetterSpacing(QFont.AbsoluteSpacing, 1.5)
+        p.setFont(f)
+        for i, label in enumerate(("CAD", "CAM")):
+            on = abs(self._pos - i) < 0.5
+            p.setPen(QColor("#ffffff" if on else theme.FG2))
+            p.drawText(QRectF(r.left() + i * half, r.top(), half, r.height()), Qt.AlignCenter, label)
+        p.end()
 
 
 class TopBar(QFrame):
@@ -69,15 +185,13 @@ class TopBar(QFrame):
         self.setObjectName("topbar")
         self.setFixedHeight(34)
         lay = hbox(self, (10, 0, 10, 0), 6)
-        # the G00 logo (blue graffiti G, white 00) then the product label
+        # the G00 logo (blue graffiti G, white 00) then the G-SEND wordmark
         logo = QLabel()
         logo.setPixmap(theme.logo_pixmap(30))
         logo.setToolTip(APP_NAME)
-        cad = QLabel("CAD/CAM")
-        cad.setObjectName("brandCad")
         lay.addWidget(logo)
-        lay.addWidget(cad)
-        lay.addSpacing(8)
+        lay.addWidget(Wordmark(), 0, Qt.AlignVCenter)
+        lay.addSpacing(12)
         self.file = QToolButton()
         self.file.setObjectName("menuBtn")
         self.file.setText("FILE")
@@ -150,12 +264,11 @@ class Ribbon(QFrame):
         tabs.setObjectName("ribbonTabs")
         tabs.setFixedHeight(24)
         tl = hbox(tabs, (6, 0, 0, 0))
-        ws = QLabel(f"DESIGN <span style='color:{theme.ACCENT};font-size:10px'>▼</span>")
-        ws.setObjectName("ws")
-        tl.addWidget(ws)
-        tl.addSpacing(6)
+        self.switch = ModeSwitch()
+        tl.addWidget(self.switch, 0, Qt.AlignVCenter)
+        tl.addSpacing(10)
         self.tab_buttons = {}
-        for key, label in TABS:
+        for key, label in TABS + CAM_TABS:
             b = QPushButton(label.upper())
             b.setObjectName("rtab")
             b.setCheckable(True)
@@ -164,7 +277,8 @@ class Ribbon(QFrame):
             tl.addWidget(b)
             self.tab_buttons[key] = b
         tl.addStretch()
-        self.tab_buttons["sketch"].hide()
+        for key, _ in [("sketch", "")] + CAM_TABS:
+            self.tab_buttons[key].hide()
         v.addWidget(tabs)
         # every tab's tools are built once and switched with a stack; rebuilding buttons on each
         # switch leaves PySide slots pointing at deleted widgets
@@ -178,7 +292,7 @@ class Ribbon(QFrame):
         v.addWidget(sc)
         self.pages: dict[str, dict[str, QToolButton]] = {}
         self.page_index = {}
-        for key, _ in TABS:
+        for key, _ in TABS + CAM_TABS:
             page, tools = self._build_page(key)
             self.page_index[key] = self.stack.addWidget(page)
             self.pages[key] = tools
@@ -233,6 +347,16 @@ class Ribbon(QFrame):
     def set_active(self, label: str | None):
         for k, b in self.tools.items():
             b.setChecked(k == label)
+
+    def show_mode(self, mode: str):
+        """CAD shows the design tabs, CAM the toolpath tabs. The switch lights the active side."""
+        cam = mode == "cam"
+        for key, _ in TABS:
+            self.tab_buttons[key].setVisible(not cam and key != "sketch")
+        for key, _ in CAM_TABS:
+            self.tab_buttons[key].setVisible(cam)
+        self.switch.set_mode(mode)
+        self.show_tab(CAM_TABS[0][0] if cam else "solid")
 
     def show_sketch_tab(self, on: bool):
         self.tab_buttons["sketch"].setVisible(on)

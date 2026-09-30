@@ -12,6 +12,7 @@ small and cheap.** Read only the file(s) the task needs, change only what he ask
 | Logo / app icon | `gsend_cad/ui/assets/g00code_logo.png` / `.ico` (same file names) |
 | Widget styling (QSS) | `theme.py` → `qss()` |
 | Ribbon tabs / tools | `gsend_cad/ui/panels.py` → `RIBBON` dict at the top |
+| CAD/CAM switch, CAM tabs (`CAM_TABS`), G-SEND wordmark (`Wordmark`, text/colour in `theme.BRAND_TEXT` / `BRAND_INK`) | `gsend_cad/ui/panels.py` |
 | Toolbar/tree icons | `gsend_cad/ui/icons.py` → `PATHS` |
 | Help → Documentation text | `gsend_cad/ui/docs.py` |
 | Sketch tools, palette value fields, Extrude dialog | `gsend_cad/ui/commands.py` |

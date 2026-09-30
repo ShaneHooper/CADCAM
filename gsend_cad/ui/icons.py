@@ -52,6 +52,18 @@ PATHS = {
     "disp": '<path d="M12 3 3 8l9 5 9-5-9-5zM3 16l9 5 9-5"/>',
     "open": '<path d="M3 6h6l2 2h10v11H3z M3 10h18"/>',
     "new": '<path d="M6 3h8l4 4v14H6z M14 3v4h4 M12 11v6 M9 14h6"/>',
+    # CAM
+    "setup": '<path d="M3 17h18v3H3zM6 17V9h12v8M9 9V5h6v4"/>',
+    "adaptive": '<path d="M4 20V4h16v16zM8 8c4 0 8 1 8 4s-4 4-8 4M8 12h4"/>',
+    "pocket": '<path d="M3 5h18v14H3zM7 9h10v6H7zM10 12h4"/>',
+    "face": '<path d="M3 16h18M5 12h14M7 8h10M12 3v5"/>',
+    "contour": '<path d="M6 18V8a3 3 0 0 1 3-3h9v13zM3 21V5a3 3 0 0 1 3-3"/>',
+    "drill": '<path d="M9 3h6v6l-3 12-3-12zM9 9h6"/>',
+    "turn": '<path d="M3 8h8l3 3h7M3 16h8l3-3h7M5 5v14"/>',
+    "groove": '<path d="M3 8h7v6h4V8h7M3 16h18"/>',
+    "partoff": '<path d="M3 8h18M3 16h18M12 4v16"/>',
+    "sim": '<path d="M7 4l12 8-12 8z"/>',
+    "post": '<path d="M6 3h8l4 4v14H6zM14 3v4h4M9 12h6M9 16h4"/>',
     # timeline transport (filled)
     "tl_start": '<path fill="C" stroke="none" d="M4 4h4v16H4zM20 4 10 12l10 8z"/>',
     "tl_prev": '<path fill="C" stroke="none" d="M18 4 6 12l12 8z"/>',

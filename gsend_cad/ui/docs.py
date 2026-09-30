@@ -17,6 +17,7 @@ SECTIONS = [
 bottom, so you can go back and change it.</p>
 <h3>The screen</h3>
 <table>
+<tr><td class="k">CAD / CAM switch</td><td>Under the logo, top left. <b>CAD</b> (lit blue) shows the design tools; click it to flip to <b>CAM</b> for the toolpath tools (Milling / Turning tabs, being built). Click again to flip back.</td></tr>
 <tr><td class="k">Ribbon (top)</td><td>Tools. <b>Solid</b> tab has Sketch and Extrude; <b>Utilities</b> has Export (STEP) and 3D Print (STL).</td></tr>
 <tr><td class="k">Browser (left)</td><td>Bodies and sketches in the part, and the part's size, volume and weight.</td></tr>
 <tr><td class="k">3D view (middle)</td><td>The part. View cube and Home button at the top right.</td></tr>
@@ -26,7 +27,9 @@ bottom, so you can go back and change it.</p>
 <h3>Moving the view</h3>
 <table>
 <tr><td class="k">Left drag</td><td>Orbit (spin the part)</td></tr>
+<tr><td class="k">Shift + wheel-button drag</td><td>Orbit freely in any direction. Works while sketching too (left click draws there).</td></tr>
 <tr><td class="k">Right drag</td><td>Pan</td></tr>
+<tr><td class="k">Wheel-button drag</td><td>Pan</td></tr>
 <tr><td class="k">Mouse wheel</td><td>Zoom</td></tr>
 <tr><td class="k">Home key</td><td>Back to the home view</td></tr>
 </table>

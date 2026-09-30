@@ -32,6 +32,8 @@ HEAD = ["Rajdhani", "Bahnschrift", "DejaVu Sans Condensed", "DejaVu Sans"]
 MONO = ["Share Tech Mono", "Consolas", "DejaVu Sans Mono", "Liberation Mono"]
 BRAND_G = ["Squada One", "Bahnschrift", "DejaVu Sans"]
 BRAND_WM = ["Anton", "Impact", "Bahnschrift", "DejaVu Sans"]
+BRAND_INK = "#ece7db"        # G-SEND.IO wordmark colour: poster cream, not white (from rev4_theme)
+BRAND_TEXT = ("G", "-SEND")  # square Squada One G + Anton rest, like the G-SEND.IO editor sidebar
 
 
 def load_fonts():

@@ -16,7 +16,7 @@ from .commands import ExtrudeSession, PlanePickSession, SketchSession, regions_f
 from .panels import Browser, Ribbon, StatusBar, Timeline, TopBar
 
 FILE_FILTER = f"{APP_NAME} (*.gcad);;All files (*)"
-DEFAULT_MSG = "Left drag: orbit · Right drag: pan · Wheel: zoom · Click a feature in the timeline to roll back"
+DEFAULT_MSG = "Left drag: orbit · Shift + wheel-button drag: orbit (works while sketching) · Right drag: pan · Wheel: zoom · Click a feature in the timeline to roll back"
 
 
 class MainWindow(QMainWindow):
@@ -64,6 +64,7 @@ class MainWindow(QMainWindow):
 
         self.ribbon.tool.connect(self.run_tool)
         self.ribbon.tab_changed.connect(self.select_tab)
+        self.ribbon.switch.changed.connect(self.set_mode)
         self.browser.selected.connect(self.select_node)
         self.timeline.roll.connect(self.roll_to)
         self.timeline.play.connect(self.play)
@@ -308,6 +309,16 @@ class MainWindow(QMainWindow):
             self.viewport.show_toast("Finish the sketch first")
             return
         self.ribbon.show_tab(key)
+
+    def set_mode(self, mode: str):
+        """The CAD / CAM switch under the logo."""
+        if self.session is not None:
+            self.viewport.show_toast("Finish the sketch first" if isinstance(self.session, SketchSession)
+                                     else "Finish the command first")
+            return
+        self.ribbon.show_mode(mode)
+        self.message("CAM: toolpath tools (coming next). Your model stays as it is; flip back to CAD to edit it."
+                     if mode == "cam" else DEFAULT_MSG)
 
     def run_tool(self, label: str):
         if self.session is not None:

@@ -75,8 +75,9 @@ class Viewport(QWidget):
         style = vtkInteractorStyleTrackballCamera()
         style.AddObserver("RightButtonPressEvent", lambda o, e: o.StartPan())
         style.AddObserver("RightButtonReleaseEvent", lambda o, e: o.EndPan())
-        style.AddObserver("MiddleButtonPressEvent", lambda o, e: o.StartPan())
-        style.AddObserver("MiddleButtonReleaseEvent", lambda o, e: o.EndPan())
+        # wheel button: drag pans; Shift + wheel button drag rotates freely (trackball, any direction)
+        style.AddObserver("MiddleButtonPressEvent", self._middle_down)
+        style.AddObserver("MiddleButtonReleaseEvent", self._middle_up)
         p.iren.interactor.SetInteractorStyle(style)
         self._build_grid()
         self.plotter.installEventFilter(self)
@@ -116,6 +117,16 @@ class Viewport(QWidget):
         if picker.GetActor() is None:
             return None
         return tuple(float(c) for c in picker.GetPickPosition())
+
+    def _middle_down(self, style, _e):
+        if style.GetInteractor().GetShiftKey():
+            style.StartRotate()
+        else:
+            style.StartPan()
+
+    @staticmethod
+    def _middle_up(style, _e):
+        style.EndRotate() if style.GetState() == 1 else style.EndPan()   # 1 = VTKIS_ROTATE
 
     # ---------- scene ----------
     def _build_grid(self):

@@ -27,6 +27,8 @@ CONTROLS
   Ctrl+S / O   save / open (.gcad files)
   Home         home view
   Mouse        left drag = orbit, right drag = pan, wheel = zoom
+               Shift + hold the wheel and drag = rotate freely (also while sketching)
+  CAD / CAM    the switch under the logo flips between design tools and CAM tools
   Timeline     click a feature to roll back; right-click to delete
   Utilities    Export = STEP, 3D Print = STL
 
