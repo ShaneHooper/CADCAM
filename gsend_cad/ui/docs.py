@@ -33,6 +33,15 @@ bottom, so you can go back and change it.</p>
 <tr><td class="k">Mouse wheel</td><td>Zoom</td></tr>
 <tr><td class="k">Home key</td><td>Back to the home view</td></tr>
 </table>
+<h3>Settings → View projection</h3>
+<ul>
+<li><b>Orthographic</b> (default): straight, no perspective. Edges stay parallel, so FRONT / RIGHT / TOP look
+like a drawing.</li>
+<li><b>Perspective</b>: things further away look smaller, like a photo.</li>
+<li><b>Perspective with ortho faces</b>: perspective, but TOP / FRONT / LEFT / RIGHT (view cube) are straight;
+orbiting away goes back to perspective.</li>
+<li>Sketches always look straight down. The choice is remembered next time.</li>
+</ul>
 <h3>Start a new part</h3>
 <p><b>FILE → New</b> (or <b>Ctrl+N</b>, or the page icon next to FILE) gives an empty part.
 Then: <b>L</b> to sketch, draw a closed shape, <b>Enter</b>, <b>E</b> to make it solid (see

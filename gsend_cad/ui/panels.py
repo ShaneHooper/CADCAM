@@ -180,6 +180,7 @@ class TopBar(QFrame):
     redo = Signal()
     docs = Signal()
     about = Signal()
+    projection = Signal(str)      # Settings → View projection
 
     def __init__(self, fonts):
         super().__init__()
@@ -233,6 +234,25 @@ class TopBar(QFrame):
         units.setObjectName("units")
         user = QLabel(getpass.getuser().upper())
         user.setObjectName("user")
+        from PySide6.QtGui import QActionGroup
+        from .viewport import PROJECTIONS
+        self.settings = QToolButton()
+        self.settings.setObjectName("menuBtn")
+        self.settings.setText("SETTINGS")
+        self.settings.setPopupMode(QToolButton.InstantPopup)
+        sm = QMenu(self.settings)
+        pm = sm.addMenu("View projection")
+        grp = QActionGroup(pm)
+        grp.setExclusive(True)
+        self.proj_actions = {}
+        for key, label in PROJECTIONS.items():
+            a = pm.addAction(label)
+            a.setCheckable(True)
+            a.triggered.connect(partial(self.projection.emit, key))
+            grp.addAction(a)
+            self.proj_actions[key] = a
+        self.settings.setMenu(sm)
+        lay.addWidget(self.settings)
         self.help = QToolButton()
         self.help.setObjectName("menuBtn")
         self.help.setText("HELP")
@@ -246,6 +266,10 @@ class TopBar(QFrame):
         lay.addSpacing(4)
         lay.addWidget(units)
         lay.addWidget(user)
+
+    def set_projection(self, key: str):
+        if key in self.proj_actions:
+            self.proj_actions[key].setChecked(True)
 
     def set_doc(self, name: str, dirty: bool):
         dot = f" <span style='color:{theme.ACCENT}'>●</span>" if dirty else ""

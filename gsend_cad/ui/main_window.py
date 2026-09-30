@@ -90,6 +90,12 @@ class MainWindow(QMainWindow):
         self.topbar.save.connect(self.save)
         self.topbar.open.connect(self.open)
         self.topbar.undo.connect(self.undo)
+        self.topbar.projection.connect(self.set_projection)
+        from PySide6.QtCore import QSettings
+        self.prefs = QSettings("G-SEND", "CADCAM")            # remembered between runs
+        proj = str(self.prefs.value("view/projection", "ortho"))
+        self.viewport.set_projection(proj)
+        self.topbar.set_projection(self.viewport.projection)
         self.topbar.redo.connect(self.redo)
         self.viewport.cursor.connect(self.status.set_coord)
         self.viewport.key_cb = self.handle_key
@@ -462,6 +468,14 @@ class MainWindow(QMainWindow):
             self.viewport.show_toast("Finish the sketch first")
             return
         self.ribbon.show_tab(key)
+
+    def set_projection(self, mode: str):
+        """Settings → View projection."""
+        from .viewport import PROJECTIONS
+        self.viewport.set_projection(mode)
+        self.topbar.set_projection(mode)
+        self.prefs.setValue("view/projection", mode)
+        self.viewport.show_toast(f"View: {PROJECTIONS[mode]}")
 
     def set_mode(self, mode: str):
         """The CAD / CAM switch under the logo."""

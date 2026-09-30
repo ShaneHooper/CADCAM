@@ -2,6 +2,7 @@
 (HUD, view cube, nav bar, toast, sketch banner, live dimension tag)."""
 from __future__ import annotations
 
+import math
 from functools import partial
 
 import numpy as np
@@ -18,6 +19,9 @@ from . import icons, theme
 VIEWS = {"home": (6, -7, 5), "top": (0, 0, 10), "front": (0, -10, 0), "left": (-10, 0, 0), "right": (10, 0, 0),
          "iso-tl": (-6, -7, 5), "iso-tr": (6, -7, 5), "iso-bl": (-6, 7, 5), "iso-br": (6, 7, 5)}
 DISPLAY_MODES = ["SHADED + EDGES", "SHADED", "WIREFRAME"]
+# Settings → View projection (like Fusion's camera options)
+PROJECTIONS = {"ortho": "Orthographic", "persp": "Perspective", "persp-ortho-faces": "Perspective with ortho faces"}
+FACE_VIEWS = ("top", "front", "left", "right")
 
 
 def polyline_mesh(lines) -> pv.PolyData:
@@ -45,6 +49,9 @@ class Viewport(QWidget):
         self.key_cb = None                   # the main window's key handler
         self.frame = pl.xy(0.0)              # the sketch plane mouse rays are read on (core.plane)
         self.display_mode = 0
+        self.projection = "ortho"            # Settings → View projection
+        self._face_view = False              # looking straight at TOP / FRONT / LEFT / RIGHT
+        self._forced_parallel = False        # sketch mode always looks straight down
         self._groups: dict[str, list] = {}
         self._body_actors: list = []
         self._press = None
@@ -234,17 +241,35 @@ class Viewport(QWidget):
         up = (0, 1, 0) if key == "top" else (0, 0, 1)
         self.plotter.camera_position = [tuple(t + d for t, d in zip(target, v)), target, up]
         self.plotter.camera.view_angle = 35
+        self._face_view = key in FACE_VIEWS
+        self.apply_projection(render=False)
         self.plotter.renderer.ResetCameraClippingRange()   # tight near/far keeps depth precise
         self.hud_view.setText(key.upper().replace("-", " "))
         self.plotter.render()
 
-    def set_parallel(self, on: bool):
-        if on:
+    def set_projection(self, mode: str):
+        """Settings → View projection: 'ortho', 'persp' or 'persp-ortho-faces'."""
+        if mode in PROJECTIONS:
+            self.projection = mode
+            self.apply_projection()
+
+    def apply_projection(self, render=True):
+        cam = self.plotter.camera
+        want = (self._forced_parallel or self.projection == "ortho"
+                or (self.projection == "persp-ortho-faces" and self._face_view))
+        if want and not cam.parallel_projection:
+            # same framing as the perspective view: half-height = distance * tan(half the view angle)
+            cam.parallel_scale = cam.distance * math.tan(math.radians(cam.view_angle / 2))
             self.plotter.enable_parallel_projection()
-            self.plotter.camera.parallel_scale = 3.2
-        else:
+        elif not want and cam.parallel_projection:
             self.plotter.disable_parallel_projection()
-        self.plotter.render()
+        if render:
+            self.plotter.render()
+
+    def set_parallel(self, on: bool):
+        """Sketch mode forces a straight (orthographic) look; off hands back to the setting."""
+        self._forced_parallel = on
+        self.apply_projection()
 
     def cycle_display(self):
         self.display_mode = (self.display_mode + 1) % 3
@@ -301,6 +326,9 @@ class Viewport(QWidget):
             # a fast second click arrives as DblClick: it must count as a click, and VTK must
             # never see it (it starts an orbit whose release we swallow = stuck rotating)
             self._press = ev.position().toPoint()
+            if self._face_view and not (self.handler and self.handler.captures_left):
+                self._face_view = False              # orbiting off TOP / FRONT / ...: not a face view now
+                self.apply_projection(render=False)
             if self.handler and self.handler.captures_left:
                 w = self.world_at(self._press)
                 if w:
