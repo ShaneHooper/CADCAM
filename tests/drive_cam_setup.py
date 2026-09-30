@@ -60,6 +60,25 @@ check("Setup1 saved as milling with 0.25 side stock",
       len(d.setups) == 1 and d.setups[0]["type"] == "milling" and d.setups[0]["stock"]["side"] == 0.25)
 check("Setup1 listed in the Browser", "setup1" in win.browser.setup_ids)
 
+# Fixed size stock: switching fills in part + per-side stock, rounded up to 1/8
+win.run_tool("Setup")
+s = win.session
+s.panel.mode.setCurrentIndex(s.panel.mode.findData("size"))
+pump()
+check("Fixed size shows size fields, hides per-side ones",
+      s.panel.sx.isVisible() and not s.panel.side.isVisible() and s.panel.top.isVisible())
+check("sizes filled from the 4 x 3 x 1.25 part + stock, 1/8 up",
+      (s.panel.sx.value(), s.panel.sy.value(), s.panel.sz.value()) == (4.25, 3.25, 1.375))
+shot("cam_01b_fixed")
+s.panel.sx.setValue(3.9)
+key(Qt.Key_Return)
+check("stock smaller than the part is refused", win.session is s and len(win.doc.setups) == 1)
+s.panel.sx.setValue(4.5)
+key(Qt.Key_Return)
+check("fixed-size setup saved", len(win.doc.setups) == 2 and win.doc.setups[1]["stock"] ==
+      {"mode": "size", "x": 4.5, "y": 3.25, "z": 1.375, "top": 0.05})
+win.delete_node("setup2")
+
 # the Milling / Turning choice inside the panel
 win.run_tool("Setup")
 s = win.session
@@ -100,6 +119,13 @@ check("Setup from the Turning tab starts as Turning, axis guessed X",
 shot("cam_02_turning")
 key(Qt.Key_Return)
 t = win.doc.setups[-1]
+win.run_tool("Setup")
+s = win.session
+s.panel.mode.setCurrentIndex(s.panel.mode.findData("size"))
+pump()
+check("turning Fixed size: bar Ø and length filled (Ø1.6 -> 1.625)",
+      s.panel.dia.isVisible() and s.panel.dia.value() == 1.625 and not s.panel.od.isVisible())
+key(Qt.Key_Escape)
 check("turning setup saved", t["type"] == "turning" and t["axis"] == "x" and t["wcs"] == "stock-face")
 from gsend_cad.core import cam
 from gsend_cad.kernel import bodies_bbox, max_radius

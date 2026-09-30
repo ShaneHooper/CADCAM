@@ -1260,6 +1260,11 @@ class SetupPanel(Panel):
         for b in s.win.model.bodies:
             self.body.addItem(b.name, b.id)
         self.row("Part", self.body)
+        self.mode = QComboBox()
+        for k, label in cam.STOCK_MODES.items():
+            self.mode.addItem(label, k)
+        self.mode.setToolTip("Stock per side: extra material around the part. Fixed size: the blank's real size.")
+        self.row("Stock", self.mode)
 
         def box(v):
             nb = NumBox(v)
@@ -1271,6 +1276,7 @@ class SetupPanel(Panel):
             lay = QVBoxLayout(widget)
             lay.setContentsMargins(0, 0, 0, 0)
             lay.setSpacing(0)
+            out = {}
             for label, w in items:
                 r = QWidget()
                 r.setObjectName("panelRow")
@@ -1280,15 +1286,19 @@ class SetupPanel(Panel):
                 hl.addStretch()
                 hl.addWidget(w)
                 lay.addWidget(r)
+                out[label] = r
+            return out
 
         # milling fields
         self.mill = QWidget()
         self.side, self.top, self.bottom = box(0.1), box(0.05), box(0.0)
+        self.sx, self.sy, self.sz = box(4.25), box(3.25), box(1.0)
         self.mwcs = QComboBox()
         for k, label in cam.MILL_WCS.items():
             self.mwcs.addItem(label, k)
-        rows(self.mill, [("Stock: sides", self.side), ("Stock: top", self.top), ("Stock: bottom", self.bottom),
-                         ("WCS origin", self.mwcs)])
+        mr = rows(self.mill, [("Stock: sides", self.side), ("Stock width X", self.sx), ("Stock length Y", self.sy),
+                              ("Stock height Z", self.sz), ("Stock: top", self.top), ("Stock: bottom", self.bottom),
+                              ("WCS origin", self.mwcs)])
         self.v.addWidget(self.mill)
         # turning fields
         self.turn = QWidget()
@@ -1297,16 +1307,23 @@ class SetupPanel(Panel):
             self.axis.addItem(f"Model {k.upper()}", k)
         self.front = QComboBox()
         self.od, self.face, self.back = box(0.05), box(0.05), box(0.5)
+        self.dia, self.length = box(1.625), box(3.5)
         self.twcs = QComboBox()
         for k, label in cam.TURN_WCS.items():
             self.twcs.addItem(label, k)
-        rows(self.turn, [("Spindle axis", self.axis), ("Front (tool) end", self.front), ("Stock: OD (radial)", self.od),
-                         ("Stock: front face", self.face), ("Stock: chuck side", self.back), ("Z0 at", self.twcs)])
+        tr = rows(self.turn, [("Spindle axis", self.axis), ("Front (tool) end", self.front),
+                              ("Stock: OD (radial)", self.od), ("Bar diameter", self.dia), ("Bar length", self.length),
+                              ("Stock: front face", self.face), ("Stock: chuck side", self.back), ("Z0 at", self.twcs)])
+        # rows that only belong to one stock mode (the rest show in both)
+        self.offset_rows = [mr["Stock: sides"], mr["Stock: bottom"], tr["Stock: OD (radial)"], tr["Stock: chuck side"]]
+        self.size_rows = [mr["Stock width X"], mr["Stock length Y"], mr["Stock height Z"], tr["Bar diameter"],
+                          tr["Bar length"]]
         self.v.addWidget(self.turn)
         _dlg_footer(self, s)
         for w in (self.body, self.mwcs, self.front, self.twcs):
             w.currentIndexChanged.connect(s.preview)
         self.axis.currentIndexChanged.connect(s.axis_changed)
+        self.mode.currentIndexChanged.connect(s.mode_changed)
 
     def fit(self):
         self.layout().activate()
@@ -1333,16 +1350,18 @@ class SetupSession:
     def _fill(self, st):
         p = self.panel
         p.body.setCurrentIndex(max(0, p.body.findData(st.get("body", "all"))))
+        stock = st["stock"]
+        p.mode.setCurrentIndex(p.mode.findData(stock.get("mode", "offset")))
+        for w, k in ((p.side, "side"), (p.top, "top"), (p.bottom, "bottom"), (p.sx, "x"), (p.sy, "y"), (p.sz, "z"),
+                     (p.od, "od"), (p.face, "face"), (p.back, "back"), (p.dia, "dia"), (p.length, "length")):
+            if k in stock:
+                w.setValue(stock[k])
         if st["type"] == cam.MILLING:
-            for w, k in ((p.side, "side"), (p.top, "top"), (p.bottom, "bottom")):
-                w.setValue(st["stock"][k])
             p.mwcs.setCurrentIndex(p.mwcs.findData(st["wcs"]))
         else:
             p.axis.setCurrentIndex(p.axis.findData(st["axis"]))
             self.axis_changed()
             p.front.setCurrentIndex(0 if st["front"] == "+" else 1)
-            for w, k in ((p.od, "od"), (p.face, "face"), (p.back, "back")):
-                w.setValue(st["stock"][k])
             p.twcs.setCurrentIndex(p.twcs.findData(st["wcs"]))
 
     def set_type(self, kind: str, keep=False):
@@ -1359,6 +1378,35 @@ class SetupSession:
                 self._loading = False
         p.mill.setVisible(kind == cam.MILLING)
         p.turn.setVisible(kind == cam.TURNING)
+        self._show_mode_rows()
+        p.fit()
+        self.vp.set_side(p)
+        self.preview()
+
+    def _show_mode_rows(self):
+        sized = self.panel.mode.currentData() == "size"
+        for r in self.panel.offset_rows:
+            r.setVisible(not sized)
+        for r in self.panel.size_rows:
+            r.setVisible(sized)
+
+    def mode_changed(self, *_):
+        """Stock per side <-> Fixed size. Going to Fixed size fills in the part + the per-side
+        stock, rounded up to 1/8 in, so the numbers start sensible."""
+        p = self.panel
+        if p.mode.currentData() == "size" and not self._loading:
+            cur = self.setup("offset")          # from the per-side fields
+            bodies = setup_bodies(self.win, cur)
+            if bodies:
+                bbox = bodies_bbox(bodies)
+                r = turning_radius(self.win, cur, bodies) if self.kind == cam.TURNING else 0.0
+                size = cam.size_from_offsets(bbox, cur, r)
+                self._loading = True
+                for w, k in ((p.sx, "x"), (p.sy, "y"), (p.sz, "z"), (p.dia, "dia"), (p.length, "length")):
+                    if k in size:
+                        w.setValue(size[k])
+                self._loading = False
+        self._show_mode_rows()
         p.fit()
         self.vp.set_side(p)
         self.preview()
@@ -1375,16 +1423,31 @@ class SetupSession:
         p.front.blockSignals(False)
         self.preview()
 
-    def setup(self) -> dict:
+    def setup(self, mode: str | None = None) -> dict:
         p = self.panel
         s = {"type": self.kind, "body": p.body.currentData(), "name": p.name.text()}
+        mode = mode or p.mode.currentData() or "offset"
         if self.kind == cam.MILLING:
-            s.update(stock={"side": p.side.value(), "top": p.top.value(), "bottom": p.bottom.value()},
-                     wcs=p.mwcs.currentData())
+            stock = ({"mode": "size", "x": p.sx.value(), "y": p.sy.value(), "z": p.sz.value(), "top": p.top.value()}
+                     if mode == "size" else
+                     {"mode": "offset", "side": p.side.value(), "top": p.top.value(), "bottom": p.bottom.value()})
+            s.update(stock=stock, wcs=p.mwcs.currentData())
         else:
+            stock = ({"mode": "size", "dia": p.dia.value(), "length": p.length.value(), "face": p.face.value()}
+                     if mode == "size" else
+                     {"mode": "offset", "od": p.od.value(), "face": p.face.value(), "back": p.back.value()})
             s.update(axis=p.axis.currentData(), front=p.front.currentData() or "+", wcs=p.twcs.currentData(),
-                     stock={"od": p.od.value(), "face": p.face.value(), "back": p.back.value()})
+                     stock=stock)
         return s
+
+    def fit_problem(self):
+        """Fixed-size stock smaller than the part: the message, else None."""
+        st = self.setup()
+        bodies = setup_bodies(self.win, st)
+        if not bodies:
+            return None
+        r = turning_radius(self.win, st, bodies) if self.kind == cam.TURNING else 0.0
+        return cam.fits(bodies_bbox(bodies), st, r)
 
     def preview(self, *_):
         if self._loading:
@@ -1393,6 +1456,11 @@ class SetupSession:
         self.vp.clear("setup", render=False)
         ok = draw_setup(self.vp, self.win, self.setup(), "setup")
         word = "MILLING" if self.kind == cam.MILLING else "TURNING"
+        problem = self.fit_problem() if ok else None
+        if problem:
+            self.win.message(f"SETUP · {word}: {problem}")
+            self.vp.render()
+            return
         self.win.message(f"SETUP · {word}: yellow = stock, arrows = WCS (red X, green Y, blue Z) · "
                          "Enter / OK saves · Esc cancels" if ok else "SETUP: there is no solid to machine yet")
         self.vp.render()
@@ -1400,6 +1468,10 @@ class SetupSession:
     def commit(self):
         if not setup_bodies(self.win, self.setup()):
             self.vp.show_toast("No solid to machine · make a part in CAD first", bad=True)
+            return
+        problem = self.fit_problem()
+        if problem:
+            self.vp.show_toast(problem, bad=True)
             return
         self.win.commit_setup(self.setup(), self.edit_id)
 

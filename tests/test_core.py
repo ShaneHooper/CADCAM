@@ -276,3 +276,27 @@ def test_turning_stock_and_wcs():
     s["wcs"], s["front"] = "part-face", "-"
     w = cam.wcs(box, s, 1.0)
     assert w["origin"] == [0.0, 0.0, 0] and w["z"] == [0.0, 0.0, -1.0]
+
+
+def test_fixed_size_stock():
+    from gsend_cad.core import cam
+    box = ((0, 0, 0), (4, 3, 0.5))
+    s = cam.new_setup("milling")
+    s["stock"] = cam.size_from_offsets(box, s)                       # 4.2 x 3.2 x .55 -> 1/8 up
+    assert (s["stock"]["x"], s["stock"]["y"], s["stock"]["z"]) == (4.25, 3.25, 0.625)
+    lo, hi = cam.stock_box(box, s)
+    assert lo == pytest.approx((-0.125, -0.125, -0.075)) and hi == pytest.approx((4.125, 3.125, 0.55))
+    assert cam.fits(box, s) is None
+    s["stock"]["x"] = 3.9
+    assert "X" in cam.fits(box, s)
+    t = cam.new_setup("turning")
+    tb = ((-1, -1, 0), (1, 1, 3))
+    t["stock"] = cam.size_from_offsets(tb, t, 1.0)                   # Ø2.1 x 3.55 -> 2.125 x 3.625
+    assert (t["stock"]["dia"], t["stock"]["length"]) == (2.125, 3.625)
+    c = cam.stock_cylinder(tb, 1.0, t)
+    assert c["r"] == 1.0625 and c["front"][2] == pytest.approx(3.05) and c["center"][2] == pytest.approx(-0.575)
+    assert cam.fits(tb, t, 1.0) is None
+    t["stock"]["dia"] = 1.9
+    assert "Ø" in cam.fits(tb, t, 1.0)
+    old = {"type": "milling", "body": "all", "stock": {"side": 0.1, "top": 0.05, "bottom": 0}, "wcs": "model"}
+    assert cam.validate(old)["stock"]["mode"] == "offset"            # setups saved before modes still load

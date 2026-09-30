@@ -247,6 +247,7 @@ where the work zero (WCS) is. Toolpaths will belong to a setup.</p>
 <li>Flip the switch under the logo to <b>CAM</b>. Click <b>Setup</b> (Milling or Turning tab).</li>
 <li>At the top of the panel pick <b>MILLING</b> or <b>TURNING</b> (it starts on the tab you came from).</li>
 <li><b>Part</b>: all bodies, or one body.</li>
+<li><b>Stock</b>: <b>Stock per side</b> (extra material around the part) or <b>Fixed size</b> (the real blank: width / length / height, or bar diameter / length). Switching to Fixed size fills in the part plus the per-side stock, rounded up to 1/8"; stock smaller than the part is refused.</li>
 <li><b>Milling</b>: stock added on the <b>sides</b>, <b>top</b> and <b>bottom</b> of the part's box, and the
 <b>WCS origin</b>: stock top center, stock top front-left corner, or the model origin. Z points up.</li>
 <li><b>Turning</b>: the <b>spindle axis</b> (it guesses the axis the part is round about), which end is the
