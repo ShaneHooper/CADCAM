@@ -94,7 +94,7 @@ the exact number, press <b>Enter</b> (<b>Tab</b> goes to the next one). The shap
 <li>Or <b>right-click a dimension in the view</b> (its number, or its line): a box opens on it with
 the value selected. Type the new one, <b>Enter</b>. <b>Esc</b> closes it unchanged.</li>
 <li><b>Rectangle:</b> X / Y of its lower-left corner (Center Rect: of its center), Width, Height,
-Corner R. <b>Circle:</b> center X / Y, Diameter. <b>Line:</b> start X / Y, end X / Y, Length,
+Corner R. <b>Circle:</b> center X / Y, Diameter. <b>Line:</b> X / Y (moves the whole line, it stays at its angle), End X / Y (moves the end only), Length,
 Angle (Length and Angle keep the start where it is). <b>Polygon:</b> center X / Y, Radius, Sides,
 Angle. <b>Point:</b> X / Y.</li>
 <li>To change a shape later: press <b>Esc</b> until the banner says <b>SELECT</b> (or click

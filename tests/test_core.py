@@ -541,3 +541,11 @@ def test_tool_library_load_save_and_choices(tmp_path):
         tools.validate({"number": 1, "kind": "drill", "machine": "milling", "dia": 0})
     with pytest.raises(ValueError):
         tools.validate({"number": 1, "kind": "od turn", "machine": "milling"})
+
+
+def test_line_position_moves_the_whole_line():
+    """Right-click the Y (or X) of a line: it moves up / over and stays level; End X / Y move one end."""
+    e = sk.line((-4, 1), (0, 1))
+    assert sk.set_param(e, "y", 1.5)["pts"] == [[-4, 1.5], [0, 1.5]]
+    assert sk.set_param(e, "x", -3)["pts"] == [[-3, 1], [1, 1]]
+    assert sk.set_param(e, "y2", 2)["pts"] == [[-4, 1], [0, 2]]

@@ -254,6 +254,9 @@ def _set_param(e, key, value):
     if t == "point":
         return point((v["x"], v["y"]))
     if t == "line":
+        if key in ("x", "y"):                       # its position: the whole line moves, angle kept
+            d = v[key] - params(e)[key]
+            v[key + "2"] += d
         if key in ("len", "ang"):
             a = math.radians(v["ang"])
             v["x2"], v["y2"] = v["x"] + v["len"] * math.cos(a), v["y"] + v["len"] * math.sin(a)
