@@ -572,6 +572,28 @@ class SketchSession:
         self.hist.append((list(self.ents), list(self.origin)))
         self.redo_stack.clear()
 
+    def right_menu(self, gpos):
+        """Right-click (no drag) while sketching: Done puts the drawing tool down (back to Select);
+        with no tool, the view's usual menu (Direct View / Rotate View)."""
+        if not self.tool:
+            self.vp.context_menu(gpos)
+            return
+        m = QMenu(self.vp)
+        done = m.addAction("Done")
+        cancel = m.addAction("Cancel this shape") if self.pts else None
+        m.addSeparator()
+        finish = m.addAction("Finish Sketch")
+        a = m.exec(gpos)
+        if a is done:
+            self.set_tool(None)              # ends a line chain and the tool, like Esc twice
+            self.redraw()
+        elif cancel is not None and a is cancel:
+            self.pts = []
+            self.vp.clear("preview")
+            self.vp.dim.hide()
+        elif a is finish:
+            self.win.finish_sketch()
+
     def box_ok(self) -> bool:
         """Left drag boxes shapes in Select and in Rotate / Mirror / Pattern (not while drawing)."""
         return (self.tool is None or self.tool in XFORM_TOOLS) and not self.xpick
@@ -3003,6 +3025,7 @@ class PostDialog(QDialog):
         v.addWidget(self.text, 1)
         self.status = QLabel("")
         self.status.setStyleSheet(f"color:{theme.FG2};")
+        self.status.setWordWrap(True)                   # a left-out op's reason can be long
         foot = QHBoxLayout()
         foot.addWidget(self.status, 1)
         close, save = QPushButton("CLOSE"), QPushButton("SAVE .NC…")
@@ -3043,11 +3066,30 @@ class PostDialog(QDialog):
                 "offset": self.offset.currentText(), "coolant": self.coolant.isChecked()}
 
     def gcode(self) -> str:
+        """The setup's program. An op that can't make a toolpath (a Groove with no groove on
+        the part, a Drill with no hole...) is left out and named in self.skipped, instead of
+        blanking the whole program (Shane 10/1/26)."""
         st = self.current()
-        ops = [(o, op_moves(self.win, st, o)[0]) for o in st.get("ops", [])]
+        ops, self.skipped, self.minutes = [], [], 0.0
+        for o in st.get("ops", []):
+            try:
+                mv = op_moves(self.win, st, o)[0]
+            except ValueError as exc:
+                self.skipped.append(f"{o.get('name', 'op')}: {exc}")
+                continue
+            ops.append((o, mv))
+            self.minutes += cam.cycle_time(mv, st, o)
+        if not ops:
+            raise ValueError("Nothing to post · " + (" · ".join(self.skipped) if self.skipped else
+                                                     "this setup has no toolpaths yet"))
         ps = self.settings()
-        return post.post_setup(st, ops, ps["controller"], ps["program"], ps["offset"], ps["coolant"],
-                               self.win.doc.name)
+        g = post.post_setup(st, ops, ps["controller"], ps["program"], ps["offset"], ps["coolant"],
+                            self.win.doc.name)
+        if self.skipped:                              # say so at the top of the program too
+            lines = g.splitlines()
+            note = [post._comment("NOT POSTED - " + s) for s in self.skipped]
+            g = "\n".join(lines[:2] + note + lines[2:]) + ("\n" if g.endswith("\n") else "")
+        return g
 
     def refresh(self, *_):
         try:
@@ -3058,9 +3100,9 @@ class PostDialog(QDialog):
             return
         self.text.setPlainText(g)
         n = len(g.splitlines())
-        st = self.current()
-        t = sum(cam.cycle_time(op_moves(self.win, st, o)[0], st, o) for o in st.get("ops", []))
-        self.status.setText(f"{n} lines · about {t:.1f} min cutting")
+        skipped = f" · LEFT OUT: {' · '.join(self.skipped)}" if self.skipped else ""
+        self.status.setText(f"{n} lines · about {self.minutes:.1f} min cutting{skipped}")
+        self.status.setStyleSheet(f"color:{theme.WARN if self.skipped else theme.FG2};")
 
     def save(self):
         try:

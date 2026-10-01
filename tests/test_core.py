@@ -621,3 +621,18 @@ def test_rotate_mirror_pattern():
     assert len(grid) == 5 and grid[-1]["p"] == [1, 1]
     with pytest.raises(ValueError):
         sk.circular_pattern([ln], (0, 0), 1)
+
+
+def test_trim_groove_drawn_on_the_od_line():
+    """Shane 10/1/26: a groove rectangle drawn on the profile's top line. One click between its
+    sides takes that stretch out of the line AND the rectangle's top (they lie on each other),
+    cut exactly at the corners (no 1.000000002 ends)."""
+    for ents in ([sk.line((-3, 1), (3, 1)), sk.rect((0, 0.5), (1, 1))],
+                 [sk.rect((0, 0.5), (1, 1)), sk.line((3, 1), (-3, 1))]):
+        e, o = sk.trim(ents, list(range(len(ents))), (0.5, 1.0), 0.05)
+        segs = sorted(sorted(x["pts"]) for x in e)
+        assert [[-3, 1], [0, 1]] in segs and [[1, 1], [3, 1]] in segs and len(segs) == 5
+        assert not any(min(p[0] for p in s) >= 0 and max(p[0] for p in s) <= 1 and s[0][1] == s[1][1] == 1
+                       for s in segs)                                    # nothing left across the groove
+    e, _ = sk.trim([sk.line((0, 0), (6, 0)), sk.line((1, -1), (1, 1))], [0, 1], (3, 0), 0.05)
+    assert e[-1]["pts"] == [[0, 0], [1, 0]]

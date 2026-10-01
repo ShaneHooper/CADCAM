@@ -444,9 +444,12 @@ class Viewport(QWidget):
             return True                      # VTK saw no press, so it must not see the release
         if t == QEvent.MouseButtonRelease and ev.button() == Qt.RightButton and self._rpress is not None:
             p0, self._rpress = self._rpress, None
-            if (ev.position().toPoint() - p0).manhattanLength() <= 4 and \
-                    not (self.handler and getattr(self.handler, "captures_left", False)):
-                QTimer.singleShot(0, lambda g=ev.globalPosition().toPoint(): self.context_menu(g))
+            if (ev.position().toPoint() - p0).manhattanLength() <= 4:
+                g = ev.globalPosition().toPoint()
+                if self.handler and hasattr(self.handler, "right_menu"):
+                    QTimer.singleShot(0, lambda: self.handler and self.handler.right_menu(g))   # e.g. sketch: Done
+                elif not (self.handler and getattr(self.handler, "captures_left", False)):
+                    QTimer.singleShot(0, lambda: self.context_menu(g))
             return False
         if t in (QEvent.MouseButtonPress, QEvent.MouseButtonDblClick) and ev.button() == Qt.LeftButton:
             # a fast second click arrives as DblClick: it must count as a click, and VTK must

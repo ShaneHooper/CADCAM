@@ -712,8 +712,12 @@ def _hits(q1, q2):
         (ax, ay), (bx, by), (cx, cy), (dx, dy) = q1[1], q1[2], q2[1], q2[2]
         rx, ry, sx, sy = bx - ax, by - ay, dx - cx, dy - cy
         den = rx * sy - ry * sx
-        if abs(den) < 1e-12:
-            return []                                 # parallel / in line: no single crossing
+        if abs(den) < 1e-12:                          # parallel: lying on top of each other, the
+            if abs((cx - ax) * ry - (cy - ay) * rx) > 1e-9 * max(1.0, math.hypot(rx, ry)):   # other's
+                return []                             # ends that fall inside this one cut it there
+            L2 = rx * rx + ry * ry
+            return [list(q) for q in (q2[1], q2[2])
+                    if L2 and -eps <= ((q[0] - ax) * rx + (q[1] - ay) * ry) / L2 <= 1 + eps]
         t = ((cx - ax) * sy - (cy - ay) * sx) / den
         u = ((cx - ax) * ry - (cy - ay) * rx) / den
         if -eps <= t <= 1 + eps and -eps <= u <= 1 + eps:
@@ -778,9 +782,9 @@ def _trim_span(ents, i, p):
                 for h in _hits(q1, q2):
                     t = _param(e, h)
                     if e["type"] == "circle" or 1e-7 < t < end - 1e-7:
-                        cuts.add(round(t, 9))
+                        cuts.add(t)
     t = _param(e, p)
-    cuts = sorted(cuts)
+    cuts = [c for k, c in enumerate(sorted(cuts)) if not k or c - sorted(cuts)[k - 1] > 1e-9]   # exact, no repeats
     if e["type"] == "circle":
         if len(cuts) < 2:
             return None, None, end                    # nothing (or one thing) crossing: all of it
@@ -835,11 +839,59 @@ def trim(ents, origin, p, tol: float):
                 keep = ([_piece(e, 0.0, lo)] if lo > 1e-9 else []) + \
                        ([_piece(e, hi, end)] if hi < end - 1e-9 else [])
     o = origin[i]
+    gone = _piece(e, lo, hi) if e["type"] == "line" and lo is not None else (e if e["type"] == "line" else None)
     del ents[i], origin[i]
     for k in keep:
         ents.append(k)
         origin.append(o)
+    if gone is not None:                              # a line lying right on top of the cut-away piece
+        ents, origin = _cut_overlaps(ents, origin, gone["pts"])   # (a groove drawn on the OD line) goes too
     return ents, origin
+
+
+def _cut_overlaps(ents, origin, seg):
+    """Take the stretch `seg` out of every line (or rect / polygon side) lying along it."""
+    (ax, ay), (bx, by) = seg
+    dx, dy = bx - ax, by - ay
+    L2 = dx * dx + dy * dy
+    if L2 < 1e-18:
+        return ents, origin
+
+    def along(q):
+        return ((q[0] - ax) * dx + (q[1] - ay) * dy) / L2
+
+    def on_line(q):
+        return abs((q[0] - ax) * dy - (q[1] - ay) * dx) <= 1e-9 * math.sqrt(L2)
+
+    def overlaps(ln):
+        p, q = ln["pts"]
+        if not (on_line(p) and on_line(q)):
+            return False
+        lo, hi = sorted((along(p), along(q)))
+        return min(hi, 1.0) - max(lo, 0.0) > 1e-9
+    out, out_o = [], []
+    for e, o in zip(ents, origin):
+        if e["type"] in ("rect", "polygon") and any(overlaps(s) for s in explode(e) if s["type"] == "line"):
+            parts = explode(e)
+        elif e["type"] == "line" and overlaps(e):
+            parts = [e]
+        else:
+            out.append(e)
+            out_o.append(o)
+            continue
+        for s in parts:
+            if s["type"] != "line" or not overlaps(s):
+                out.append(s)
+                out_o.append(o)
+                continue
+            p, q = s["pts"]
+            tp, tq = along(p), along(q)
+            for t0, t1 in ((tp, min(max(tp, tq), 0.0) if tp < tq else max(min(tp, tq), 1.0)),
+                           (max(min(tp, tq), 1.0) if tp < tq else min(max(tp, tq), 0.0), tq)):
+                if abs(t1 - t0) > 1e-9 and not (0.0 - 1e-9 <= min(t0, t1) and max(t0, t1) <= 1.0 + 1e-9):
+                    out.append(_clean(line([ax + t0 * dx, ay + t0 * dy], [ax + t1 * dx, ay + t1 * dy])))
+                    out_o.append(o)
+    return out, out_o
 
 
 
