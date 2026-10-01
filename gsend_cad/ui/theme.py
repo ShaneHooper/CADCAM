@@ -25,7 +25,8 @@ BODY = "#b4b9c0"
 FONT_DIR = Path(__file__).with_name("fonts")
 ASSETS = Path(__file__).with_name("assets")
 LOGO_PNG = ASSETS / "g00code_logo.png"      # the G00 logo from the G-SEND.IO repo
-LOGO_ICO = ASSETS / "g00code_logo.ico"
+LOGO_ICO = ASSETS / "g00code_logo.ico"      # app / taskbar icon: square G00 in a blue border (so the CAD/CAM
+ICON_PNG = ASSETS / "g00code_icon.png"      # one isn't mistaken for G-SEND.IO's); Windows ignores non-square icons
 # First family that is installed wins. Drop the Google Fonts TTFs (Rajdhani, Share Tech Mono,
 # Squada One, Anton; all OFL) into ui/fonts/ to get the exact prototype look.
 HEAD = ["Rajdhani", "Bahnschrift", "DejaVu Sans Condensed", "DejaVu Sans"]
@@ -53,7 +54,7 @@ def logo_pixmap(height: int, dpr: float = 2.0):
 def app_icon():
     from PySide6.QtGui import QIcon
     ic = QIcon(str(LOGO_ICO)) if LOGO_ICO.exists() else QIcon()
-    ic.addFile(str(LOGO_PNG))
+    ic.addFile(str(ICON_PNG))
     return ic
 
 

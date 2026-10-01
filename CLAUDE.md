@@ -9,7 +9,7 @@ small and cheap.** Read only the file(s) the task needs, change only what he ask
 | App name | `gsend_cad/__init__.py` → `APP_NAME` |
 | Colours (accent blue, panels, lines) | `gsend_cad/ui/theme.py` → tokens at the top (`ACCENT`, `PANEL`, ...) |
 | Fonts | files in `gsend_cad/ui/fonts/` + family lists `HEAD` / `MONO` / `BRAND_*` in `theme.py` |
-| Logo / app icon | `gsend_cad/ui/assets/g00code_logo.png` / `.ico` (same file names) |
+| Logo / app icon | `gsend_cad/ui/assets/g00code_logo.png` (top bar, splash) · `g00code_logo.ico` + `g00code_icon.png` (window / taskbar / exe: square, blue border) (same file names) |
 | Widget styling (QSS) | `theme.py` → `qss()` |
 | Ribbon tabs / tools | `gsend_cad/ui/panels.py` → `RIBBON` dict at the top |
 | CAD/CAM switch, CAM tabs (`CAM_TABS`), G-SEND wordmark (`Wordmark`, text/colour in `theme.BRAND_TEXT` / `BRAND_INK`) | `gsend_cad/ui/panels.py` |
