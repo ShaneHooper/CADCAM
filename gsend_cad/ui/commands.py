@@ -579,20 +579,21 @@ class SketchSession:
             self.vp.context_menu(gpos)
             return
         m = QMenu(self.vp)
-        done = m.addAction("Done")
-        cancel = m.addAction("Cancel this shape") if self.pts else None
+        m.addAction("Done", self._done_tool)    # ends a line chain and the tool, like Esc twice
+        if self.pts:
+            m.addAction("Cancel this shape", self._drop_shape)
         m.addSeparator()
-        finish = m.addAction("Finish Sketch")
-        a = m.exec(gpos)
-        if a is done:
-            self.set_tool(None)              # ends a line chain and the tool, like Esc twice
-            self.redraw()
-        elif cancel is not None and a is cancel:
-            self.pts = []
-            self.vp.clear("preview")
-            self.vp.dim.hide()
-        elif a is finish:
-            self.win.finish_sketch()
+        m.addAction("Finish Sketch", self.win.finish_sketch)
+        m.exec(gpos)
+
+    def _done_tool(self):
+        self.set_tool(None)
+        self.redraw()
+
+    def _drop_shape(self):
+        self.pts = []
+        self.vp.clear("preview")
+        self.vp.dim.hide()
 
     def box_ok(self) -> bool:
         """Left drag boxes shapes in Select and in Rotate / Mirror / Pattern (not while drawing)."""

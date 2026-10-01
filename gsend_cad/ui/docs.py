@@ -120,6 +120,8 @@ and its size. Tick <b>Dimensions: All</b> to see every shape's dimensions at onc
 <li>Click <b>×</b> next to any shape in the palette list to delete that one.</li>
 <li><b>Clear</b> removes everything; <b>Cancel</b> leaves without keeping the sketch.</li>
 <li><b>Esc</b> drops a half-drawn shape; press it again to put the tool down.</li>
+<li><b>Right-click</b> (without dragging) while drawing: <b>Done</b> puts the tool down (ends a line chain),
+<b>Cancel this shape</b> drops the half-drawn one, <b>Finish Sketch</b>. Right drag still pans.</li>
 </ul>
 <h3>Round or bevel a corner (Fillet / Chamfer in the sketch)</h3>
 <ul>
