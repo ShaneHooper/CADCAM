@@ -320,11 +320,16 @@ F2 to rename. Clicking an operation shows its path bright; the setup's other pat
 <li>Each operation has a <b>Tool number</b> (T1, T0101 on a lathe) used by the post.</li>
 </ul>
 """),
-    ("rough", "CAM: OD Rough (turning)", """
-<h1>OD Rough</h1>
-<p>Roughs the outside of a turned part down to its shape plus stock to leave. Needs a Turning setup.</p>
+    ("rough", "CAM: Roughing (turning, OD or ID)", """
+<h1>Roughing</h1>
+<p>Roughs a turned part down to its shape plus stock to leave: the outside (OD), or with
+<b>Internal (ID)</b> ticked the inside (boring the ID). Needs a Turning setup.</p>
 <ol>
-<li>CAM → Turning tab → <b>OD Rough</b>.</li>
+<li>CAM → Turning tab → <b>Roughing</b>.</li>
+<li><b>Internal (ID)</b>: off = OD. On = bore: passes go into the hole at growing diameters, starting from the
+<b>Drilled hole Ø</b> (0 = auto: the smallest bore along the path is taken as already drilled) and stopping
+where the bore gets smaller than that. Pull-offs go toward the center; a bigger bore behind a smaller one
+(an undercut) is skipped. G71 output puts the ID stock in a negative U. Same box on turning <b>Contour</b>.</li>
 <li><b>Depth of cut (side)</b> per pass (radius), <b>Stock to leave X</b> (per side) and <b>Z</b> (on shoulders),
 <b>Pull-off</b> (the 45° lift at the end of each
 pass), surface speed SFM, feed in/rev, max RPM.</li>
@@ -341,16 +346,15 @@ finished contour in N-blocks (Haas: one line with D; Fanuc: two G71 lines). U / 
 """),
     ("finish", "CAM: Contour (turning finish)", """
 <h1>Contour (turning)</h1>
-<p>One pass along the part's outside from the front to the back, usually the finish pass after
-OD Rough. Needs a Turning setup.</p>
+<p>One pass along the part's outside (or, with <b>Internal (ID)</b> ticked, along the bore) from the front
+to the back, usually the finish pass after Roughing. Needs a Turning setup.</p>
 <ol>
 <li>CAM → Turning tab → <b>Contour</b>. Set the tool, <b>Stock to leave X / Z</b> (0 = finished size; set
 some to use it as a semi-finish), <b>Start</b> / <b>End</b> (arrow button, pick on the part) each with an <b>Extend</b>,
 pull-off, SFM, feed in/rev and max RPM.</li>
-<li><b>Use G70 cycle</b> ticked: the post writes <b>G70 P Q</b> over the contour blocks of an OD Rough with
-G71 output earlier in the same setup (the usual rough-then-finish program, with its own tool
-change). The rough and the Contour must cover the same profile (same Start / End / Extend). With no such
-rough, Post Process says so.</li>
+<li><b>Use G70 cycle</b> ticked: the post writes <b>G70 P Q</b> over the contour blocks of the last Roughing
+with G71 output in the same setup (the usual rough-then-finish program, with its own tool change). With
+no such rough, the Contour is posted line by line with a note saying so.</li>
 <li>Unticked: every move is written line by line (G01).</li>
 </ol>
 """),

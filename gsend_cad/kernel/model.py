@@ -410,6 +410,63 @@ def turn_profile(bodies, point, direction) -> list[tuple]:
     return clean
 
 
+def turn_bore(bodies, point, direction) -> list[tuple]:
+    """The parts' ID (bore) silhouette about an axis: [(t, r)] like turn_profile, but r = the
+    smallest radius of material at each station (0 where the axis runs through solid). Steps
+    show as two points at the same t. Same light mesh as turn_profile."""
+    p, d = np.asarray(point, float), np.asarray(direction, float)
+    d = d / np.linalg.norm(d)
+    segs, solids = [], []
+    for b in bodies:
+        v, f = triangles(b.shape, 0.002, 0.1)
+        if not len(v):
+            continue
+        solids.append(b.shape)
+        w = v - p
+        t = w @ d
+        r = np.sqrt(np.maximum(((w - np.outer(t, d)) ** 2).sum(1), 0.0))
+        f = np.asarray(f).reshape(-1, 3)
+        e = np.concatenate([f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]])
+        e = np.unique(np.sort(e, 1), axis=0)
+        segs.append(np.column_stack([t[e[:, 0]], r[e[:, 0]], t[e[:, 1]], r[e[:, 1]]]))
+    if not segs:
+        return []
+    S = np.concatenate(segs)
+    S = np.where((S[:, 0] > S[:, 2])[:, None], S[:, [2, 3, 0, 1]], S)   # t0 <= t1
+    S[:, [0, 2]] = np.round(S[:, [0, 2]], 6)
+    S = S[S[:, 2] - S[:, 0] > 0]                     # faces square to the axis show as steps
+    ts = np.unique(np.concatenate([S[:, 0], S[:, 2]]))
+
+    def lim(c, b):
+        return float((c[:, 1] + (c[:, 3] - c[:, 1]) * (b - c[:, 0]) / (c[:, 2] - c[:, 0])).min())
+
+    def solid_at(t):
+        q = Vector(*(p + t * d))
+        return any(s.is_inside(q) for s in solids)
+    out = []
+    for a, b in zip(ts, ts[1:]):
+        span = S[(S[:, 0] <= a) & (S[:, 2] >= b)]
+        if not len(span):
+            continue                                 # a gap between parts
+        if solid_at((a + b) / 2):
+            seg = [(a, 0.0), (b, 0.0)]
+        else:
+            seg = [(a, lim(span, a)), (b, lim(span, b))]
+        for q in seg:
+            if not out or abs(out[-1][1] - q[1]) > 1e-6 or abs(out[-1][0] - q[0]) > 1e-9:
+                out.append((float(q[0]), float(q[1])))
+    clean = []                                     # drop points in the middle of a straight run
+    for q in out:
+        while len(clean) >= 2:
+            (x0, y0), (x1, y1) = clean[-2], clean[-1]
+            if abs((x1 - x0) * (q[1] - y0) - (y1 - y0) * (q[0] - x0)) < 1e-9 and x0 <= x1 <= q[0]:
+                clean.pop()
+            else:
+                break
+        clean.append(q)
+    return clean
+
+
 def _np(v):
     return np.array([v.X, v.Y, v.Z], float)
 

@@ -239,11 +239,11 @@ CONTOUR_MILL = {"type": "contour", "tool": 2, "tool_dia": 0.5, "stepdown": 0.25,
                 "lead": 0.1, "clearance": 0.5}
 ROUGH_TURN = {"type": "rough", "tool": 2, "stepdown": 0.05, "leave_x": 0.01, "leave_z": 0.005, "retract": 0.02,
               "past_back": 0.0, "sfm": 600.0, "ipr": 0.01, "max_rpm": 3000.0, "clearance": 0.1, "output": "lines",
-              "start_at": None, "end_at": None, "start_ext": 0.0}
+              "start_at": None, "end_at": None, "start_ext": 0.0, "internal": False, "bore_dia": 0.0}
 ROUGH_OUTPUT = {"lines": "Single lines (G01)", "cycle": "Canned cycle (G71)"}
 FINISH_TURN = {"type": "finish", "tool": 3, "leave_x": 0.0, "leave_z": 0.0, "retract": 0.02, "past_back": 0.0,
                "sfm": 800.0, "ipr": 0.005, "max_rpm": 3000.0, "clearance": 0.1, "output": "lines",
-               "start_at": None, "end_at": None, "start_ext": 0.0}
+               "start_at": None, "end_at": None, "start_ext": 0.0, "internal": False, "bore_dia": 0.0}
 DRILL_MILL = {"type": "drill", "tool": 4, "tool_dia": 0.25, "cycle": "peck", "peck": 0.1, "breakthrough": 0.05,
               "retract": 0.1, "clearance": 0.5, "rpm": 2500.0, "feed": 10.0, "hole_dia": 0.0, "depth": 0.0}
 DRILL_TURN = {"type": "drill", "tool": 5, "tool_dia": 0.25, "cycle": "peck", "peck": 0.1, "breakthrough": 0.05,
@@ -253,11 +253,11 @@ DRILL_CYCLES = {"drill": "Drill (G81)", "peck": "Peck (G83)", "chip": "Chip brea
 TURN_DRILL_CYCLES = ("drill", "peck")          # G73 is a pattern cycle on a lathe, not chip breaking
 DRILL_TIP = 0.5 / math.tan(math.radians(59))   # 118° point: tip length = 0.3004 x drill Ø
 PECK_GAP = 0.02                                # rapid back down to this far above the last peck
-OP_TYPES = {"face": "Face", "contour": "Contour", "rough": "OD Rough", "finish": "Contour", "drill": "Drill"}
+OP_TYPES = {"face": "Face", "contour": "Contour", "rough": "Roughing", "finish": "Contour", "drill": "Drill"}
 
 
 def next_name(base: str, taken) -> str:
-    """The first one is just its name (Setup, Face, OD Rough); a second gets a 2 (Face2), ..."""
+    """The first one is just its name (Setup, Face, Roughing); a second gets a 2 (Face2), ..."""
     if base not in taken:
         return base
     k = 2
@@ -275,7 +275,7 @@ def new_op(setup: dict, kind: str = "face") -> dict:
         return copy.deepcopy(CONTOUR_MILL)
     if kind == "rough":
         if setup["type"] != TURNING:
-            raise ValueError("OD Rough needs a Turning setup")
+            raise ValueError("Roughing needs a Turning setup")
         return copy.deepcopy(ROUGH_TURN)
     if kind == "drill":
         return copy.deepcopy(DRILL_MILL if setup["type"] == MILLING else DRILL_TURN)
@@ -313,7 +313,7 @@ def validate_op(setup: dict, op: dict) -> dict:
         if op["cycle"] != "drill" and op["peck"] <= 0:
             raise ValueError("peck must be greater than 0")
     for k in ("leave", "past_center", "clearance", "lead", "leave_x", "leave_z", "past_back", "breakthrough",
-              "hole_dia", "start_ext", "depth"):
+              "hole_dia", "start_ext", "depth", "bore_dia"):
         if k in op and op[k] < 0:
             raise ValueError(f"{k.replace('_', ' ')} can't be negative")
     return op
@@ -535,23 +535,14 @@ def rough_toolpath(bbox, setup: dict, op: dict, profile, radius: float = 0.0) ->
     profile at the stock to leave to take off the steps. X is radius, like the face path."""
     op = validate_op(setup, op)
     if setup["type"] != TURNING:
-        raise ValueError("OD Rough needs a Turning setup")
-    c = stock_cylinder(bbox, radius, setup)
-    w = wcs(bbox, setup, radius)
-    i = AXES[setup["axis"]]
-    sign = 1.0 if setup["front"] == "+" else -1.0
-    z_stock = (c["front"][i] - w["origin"][i]) * sign
-    z_start = z_stock + op["clearance"]
-    x_out = c["r"] + op["clearance"]
-    lx, lz, rt = op["leave_x"], op["leave_z"], op["retract"]
-    prof = [(z + lz, r + lx) for z, r in rough_contour(bbox, setup, op, profile, radius)]
-    if op.get("start_at") is not None:                       # a picked Start: come in just ahead of it
-        z_start = prof[0][0] + op["clearance"]
-    z_front = prof[0][0]
+        raise ValueError("Roughing needs a Turning setup")
+    prof, top, x_out, z_start, flip = _turn_side(bbox, setup, op, profile, radius)
+    rt = op["retract"]
     r_min = prof[0][1]
     moves = [("rapid", (x_out, 0.0, z_start))]
-    if r_min >= c["r"] - 1e-9:
-        raise ValueError("nothing to rough: the part is as big as the stock")
+    if r_min >= top - 1e-9:
+        raise ValueError("nothing to bore: the bore is no bigger than the pre-drilled hole" if flip else
+                         "nothing to rough: the part is as big as the stock")
 
     def z_hit(r):
         """Where the profile first reaches radius r, walking back from the front."""
@@ -561,13 +552,59 @@ def rough_toolpath(bbox, setup: dict, op: dict, profile, radius: float = 0.0) ->
             if r1 >= r - 1e-12:
                 return z0 + (r - r0) * (z1 - z0) / (r1 - r0)
         return prof[-1][0]
-    for r in _levels(c["r"], r_min, op["stepdown"]):
+    for r in _levels(top, r_min, op["stepdown"]):
         ze = z_hit(r)
         if r <= r_min + 1e-9:
             continue                                         # the front diameter itself: profile pass does it
         moves += [("rapid", (r, 0.0, z_start)), ("feed", (r, 0.0, ze)),
                   ("feed", (r + rt, 0.0, ze + rt)), ("rapid", (r + rt, 0.0, z_start))]
-    return moves + _profile_pass(prof, rt, x_out, z_start)  # profile pass at the stock to leave
+    return _unflip(moves + _profile_pass(prof, rt, x_out, z_start), flip)  # profile pass at the stock to leave
+
+
+def _turn_side(bbox, setup, op, profile, radius):
+    """What Roughing / Contour work on, OD or ID (op["internal"]): (profile front-first with the
+    stock to leave, top = the radius the cuts start from, x_out, z_start, flip). An ID is worked
+    as a mirror image (radius negated), so the same OD rules apply - an ID bar can't reach into a
+    bigger bore behind a smaller one, just as an OD tool can't reach a groove; `flip` says to turn
+    the moves back. ID `profile` = kernel.turn_bore; the cuts start from the pre-drilled hole
+    (bore_dia, 0 = the smallest bore the path runs along) and stop where the bore gets smaller."""
+    c = stock_cylinder(bbox, radius, setup)
+    w = wcs(bbox, setup, radius)
+    i = AXES[setup["axis"]]
+    sign = 1.0 if setup["front"] == "+" else -1.0
+    z_start = (c["front"][i] - w["origin"][i]) * sign + op["clearance"]
+    flip = bool(op.get("internal"))
+    if not flip:
+        env = rough_contour(bbox, setup, op, profile, radius)
+        top, x_out = c["r"], c["r"] + op["clearance"]
+    else:
+        env = rough_contour(bbox, setup, op, [(t, -r) for t, r in profile], radius)
+        if env[0][1] > -1e-6:
+            raise ValueError("no bore at the front of the part to cut")
+        r0 = op.get("bore_dia", 0.0) / 2 or min(-r for _z, r in env if -r > 1e-6)
+        env = _stop_below(env, -r0)                          # not past where the hole is smaller
+        top, x_out = -r0, -max(r0 - op["clearance"], 0.0)
+    prof = [(z + op["leave_z"], r + op["leave_x"]) for z, r in env]
+    if op.get("start_at") is not None:                       # a picked Start: come in just ahead of it
+        z_start = prof[0][0] + op["clearance"]
+    return prof, top, x_out, z_start, flip
+
+
+def _stop_below(env, top):
+    """A front-first (z, r) polyline up to where r first rises above `top` (mirrored ID: the
+    bore gets smaller than the pre-drilled hole)."""
+    out = [env[0]]
+    for (z0, r0), (z1, r1) in zip(env, env[1:]):
+        if r1 > top + 1e-9:
+            if r0 < top - 1e-9:
+                out.append((z0 + (top - r0) * (z1 - z0) / (r1 - r0), top))
+            break
+        out.append((z1, r1))
+    return out
+
+
+def _unflip(moves, flip):
+    return [(k, (-x, y, z)) for k, (x, y, z) in moves] if flip else moves
 
 
 def _profile_pass(prof, rt, x_out, z_start):
@@ -580,20 +617,12 @@ def _profile_pass(prof, rt, x_out, z_start):
 
 def finish_toolpath(bbox, setup: dict, op: dict, profile, radius: float = 0.0) -> list[tuple]:
     """Turning Contour (finish): one pass along the part's OD from the front to the back limit,
-    at the stock to leave (0 = finished size). Same reach rules as OD Rough (no grooves)."""
+    at the stock to leave (0 = finished size). Same reach rules as Roughing (no grooves)."""
     op = validate_op(setup, op)
     if setup["type"] != TURNING:
         raise ValueError("turning Contour needs a Turning setup")
-    c = stock_cylinder(bbox, radius, setup)
-    w = wcs(bbox, setup, radius)
-    i = AXES[setup["axis"]]
-    sign = 1.0 if setup["front"] == "+" else -1.0
-    z_start = (c["front"][i] - w["origin"][i]) * sign + op["clearance"]
-    x_out = c["r"] + op["clearance"]
-    prof = [(z + op["leave_z"], r + op["leave_x"]) for z, r in rough_contour(bbox, setup, op, profile, radius)]
-    if op.get("start_at") is not None:
-        z_start = prof[0][0] + op["clearance"]
-    return [("rapid", (x_out, 0.0, z_start))] + _profile_pass(prof, op["retract"], x_out, z_start)
+    prof, _top, x_out, z_start, flip = _turn_side(bbox, setup, op, profile, radius)
+    return _unflip([("rapid", (x_out, 0.0, z_start))] + _profile_pass(prof, op["retract"], x_out, z_start), flip)
 
 
 def drill_targets(bbox, setup: dict, op: dict, holes, radius: float = 0.0) -> list[tuple]:
@@ -778,10 +807,10 @@ def describe_op(setup: dict, op: dict) -> str:
         size = f"Ø{op['hole_dia']:.4f} holes" if op.get("hole_dia") else "all holes"
         return f"Drill · Ø{op['tool_dia']:.4f} · {DRILL_CYCLES[op['cycle']]} · {size}"
     if op.get("type") == "finish":
-        return (f"Contour · leave X {op['leave_x']:.3f} Z {op['leave_z']:.3f} · {op['sfm']:.0f} SFM · "
+        return (("ID " if op.get("internal") else "") + f"Contour · leave X {op['leave_x']:.3f} Z {op['leave_z']:.3f} · {op['sfm']:.0f} SFM · "
                 f"{op['ipr']:.4f} IPR" + (" · G70 cycle" if op.get("output") == "cycle" else ""))
     if op.get("type") == "rough":
-        return (f"OD Rough · {op['stepdown']:.3f} DOC · leave X {op['leave_x']:.3f} Z {op['leave_z']:.3f} · "
+        return (("ID " if op.get("internal") else "") + f"Roughing · {op['stepdown']:.3f} DOC · leave X {op['leave_x']:.3f} Z {op['leave_z']:.3f} · "
                 f"{op['sfm']:.0f} SFM · {op['ipr']:.4f} IPR" + (" · G71 cycle" if op.get("output") == "cycle" else ""))
     if op.get("type") == "contour":
         return (f"2D Contour · Ø{op['tool_dia']:.3f} tool · {op['direction']} · {op['stepdown']:.3f} DOC · "

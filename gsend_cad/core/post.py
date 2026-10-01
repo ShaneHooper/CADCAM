@@ -115,7 +115,8 @@ def _lathe_op(setup, op, moves, offset, coolant, controller="haas", n=100, g71=N
     kind = op.get("type", "face")
     if kind == "drill":
         return _lathe_drill(op, moves, offset, coolant, controller)
-    what = {"rough": "OD ROUGH", "finish": "CONTOUR", "face": "FACE"}[kind] + \
+    what = {"rough": "ID ROUGH" if op.get("internal") else "OD ROUGH",
+            "finish": "ID CONTOUR" if op.get("internal") else "CONTOUR", "face": "FACE"}[kind] + \
         ({"rough": " G71 CYCLE", "finish": " G70 CYCLE", "face": " G72 CYCLE"}[kind] if cycle else "")
     note = None
     if kind == "finish" and cycle:                    # G70 finishes the last G71 rough's contour (P..Q)
@@ -177,7 +178,7 @@ def _g71(moves, op, m, controller, n):
     _k, (xs, _y, zs) = moves[0]
     prof = _contour(moves, op)
     p, q = n, n + 1
-    u, w = num(2 * op["leave_x"]), num(op["leave_z"])
+    u, w = num(2 * op["leave_x"] * (-1 if op.get("internal") else 1)), num(op["leave_z"])   # ID: U-
     L = [m.block([("G", "G00"), ("X", num(xs * 2)), ("Z", num(zs))])]
     if controller == "haas":
         L.append(f"G71 P{p} Q{q} U{u} W{w} D{num(op['stepdown'])} F{num(op['ipr'])}")
@@ -202,7 +203,7 @@ def _contour(moves, op):
     a = end
     while moves[a - 1][0] == "feed":
         a -= 1
-    lx, lz = op["leave_x"], op["leave_z"]
+    lx, lz = op["leave_x"] * (-1 if op.get("internal") else 1), op["leave_z"]   # ID: the stock is inside
     return [(x - lx, z - lz) for _k, (x, _y, z) in moves[a:end]]
 
 

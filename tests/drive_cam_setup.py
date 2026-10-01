@@ -206,11 +206,11 @@ check("Face1 saved in the turning setup, listed in the Browser",
       [x["name"] for x in st.get("ops", [])] == ["Face"] and st["ops"][0]["id"] in win.browser.setup_ids)
 check("Face1 keeps the canned cycle output", st["ops"][0]["output"] == "cycle")
 
-# ---- OD Rough on the turning setup (Ø1.5 x 2 then Ø1 x 1, front at +X)
+# ---- Roughing on the turning setup (Ø1.5 x 2 then Ø1 x 1, front at +X)
 win.select_tab("turning")
-win.run_tool("OD Rough")
+win.run_tool("Roughing")
 o = win.session
-check("OD Rough opens on the turning setup", o.__class__.__name__ == "OpSession" and o.kind == "rough"
+check("Roughing opens on the turning setup", o.__class__.__name__ == "OpSession" and o.kind == "rough"
       and o.current_setup()["type"] == "turning")
 mv, _w = op_moves(win, o.current_setup(), o.op())
 feeds = [p for k, p in mv if k == "feed"]
@@ -222,6 +222,16 @@ check("rough panel: Tool from the library first, Start / End cursor buttons with
       o.panel.tools["turning"].currentText().startswith("T2 · CNMG Rough") and o.panel.ends["start"][1].isVisible()
       and not o.panel.setup.isVisible() and not o.panel.name.isVisible()
       and o.panel.boxes[("turning", "past_back")].isVisible())
+bore_row = o.panel.boxes[("turning", "bore_dia")].parentWidget()
+check("Roughing panel: Internal (ID) box, Drilled hole Ø row hidden while OD",
+      o.panel.internal.isVisible() and not o.panel.internal.isChecked() and not bore_row.isVisible()
+      and o.panel.title.text() == "ROUGHING")
+o.panel.internal.setChecked(True)
+pump()
+check("Internal shows Drilled hole Ø; this bar has no bore, the panel says so",
+      bore_row.isVisible() and o.op()["internal"] and "no bore" in o.panel.info.text())
+o.panel.internal.setChecked(False)
+pump()
 o.panel.ends["end"][1].setChecked(True)
 pump()
 q = vp.project([(2.0, 0.0, 0.75)])[0]                  # the shoulder edge (Ø1.5 at x = 2)
@@ -246,7 +256,7 @@ o.panel.output.setCurrentIndex(o.panel.output.findData("cycle"))
 shot("cam_04b_rough")
 key(Qt.Key_Return)
 st = win.doc.setups[-1]
-check("OD Rough1 saved after Face1", [x["name"] for x in st["ops"]] == ["Face", "OD Rough"])
+check("Roughing saved after Face", [x["name"] for x in st["ops"]] == ["Face", "Roughing"])
 win.run_tool("Contour")
 o = win.session
 check("turning Contour opens with the G70 box", o.kind == "finish" and o.panel.g70.isVisible()
@@ -254,7 +264,7 @@ check("turning Contour opens with the G70 box", o.kind == "finish" and o.panel.g
 o.panel.g70.setChecked(True)
 shot("cam_04c_contour")
 key(Qt.Key_Return)
-check("Contour1 saved after the rough", [x["name"] for x in st["ops"]] == ["Face", "OD Rough", "Contour"])
+check("Contour1 saved after the rough", [x["name"] for x in st["ops"]] == ["Face", "Roughing", "Contour"])
 from gsend_cad.core import post
 g = post.post_setup(st, [(cam.validate_op(st, x), op_moves(win, st, x)[0]) for x in st["ops"]], "haas", 1)
 check("post writes G72 face + G71 rough with its contour", "G72 P100 Q101" in g and "G71 P200 Q201" in g and "N200 G00 X1.\n" in g and "X1.5\n" in g

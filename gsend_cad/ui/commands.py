@@ -20,7 +20,7 @@ from ..core import cam, post, tools
 from ..core import plane as pl
 from ..core import sketch as sk
 from ..core.profiles import region_at, sketch_regions
-from ..kernel import (bodies_bbox, edge_list, max_radius, model_snap_points, outline_loops, turn_profile, find_holes, extrude_tool, face_outline, planar_face_at, plane_edges, region_face, revolve_axis,
+from ..kernel import (bodies_bbox, edge_list, max_radius, model_snap_points, outline_loops, turn_profile, turn_bore, find_holes, extrude_tool, face_outline, planar_face_at, plane_edges, region_face, revolve_axis,
                       revolve_tool, triangles)
 from . import icons, theme
 
@@ -1735,12 +1735,13 @@ def op_moves(win, setup, op):
             cache[key] = outline_loops(bodies, grow)
         loops = cache[key]
     profile = None
-    if op.get("type") in ("rough", "finish"):   # the part's OD silhouette about the spindle axis
+    if op.get("type") in ("rough", "finish"):   # the part's OD (or ID: bore) silhouette about the spindle axis
         i, center, _ = cam.turning_frame(bbox, setup)
-        key = ("profile", id(win.model), tuple(b.id for b in bodies), setup["axis"])
+        inner = bool(op.get("internal"))
+        key = ("bore" if inner else "profile", id(win.model), tuple(b.id for b in bodies), setup["axis"])
         cache = win.__dict__.setdefault("_radius_cache", {})
         if key not in cache:
-            cache[key] = turn_profile(bodies, center, cam._unit(i))
+            cache[key] = (turn_bore if inner else turn_profile)(bodies, center, cam._unit(i))
         profile = cache[key]
     holes = setup_holes(win, setup) if op.get("type") == "drill" else None
     moves = cam.toolpath(bbox, setup, op, r, loops, profile, holes)
@@ -1772,11 +1773,12 @@ class OpPanel(Panel):
                                         ("plunge", "Plunge (in/min)", 2)]},
               "rough": {cam.TURNING: [("stepdown", "Depth of cut (side)", 4),
                                       ("leave_x", "Stock to leave X", 4), ("leave_z", "Stock to leave Z", 4),
-                                      ("retract", "Pull-off", 4),
+                                      ("retract", "Pull-off", 4), ("bore_dia", "Drilled hole Ø (0 = auto)", 4),
                                       ("sfm", "Surface speed SFM", 0), ("ipr", "Feed (in/rev)", 4),
                                       ("max_rpm", "Max RPM", 0)]},
               "finish": {cam.TURNING: [("leave_x", "Stock to leave X", 4), ("leave_z", "Stock to leave Z", 4),
-                                       ("retract", "Pull-off", 4), ("sfm", "Surface speed SFM", 0),
+                                       ("retract", "Pull-off", 4), ("bore_dia", "Drilled hole Ø (0 = auto)", 4),
+                                       ("sfm", "Surface speed SFM", 0),
                                        ("ipr", "Feed (in/rev)", 4), ("max_rpm", "Max RPM", 0)]},
               "drill": {cam.MILLING: [("depth", "Depth (0 = hole)", 4), ("peck", "Peck (Q)", 4), ("breakthrough", "Breakthrough", 4),
                                       ("retract", "R plane above hole", 4), ("rpm", "Spindle RPM", 0),
@@ -1789,7 +1791,7 @@ class OpPanel(Panel):
     NEW_TOOL = "__new__"
 
     def __init__(self, session: "OpSession", kind: str):
-        super().__init__({"face": "Face", "contour": "2D Contour", "rough": "OD Rough", "finish": "Contour",
+        super().__init__({"face": "Face", "contour": "2D Contour", "rough": "Roughing", "finish": "Contour",
                           "drill": "Drill"}[kind], 300)
         s = session
         # the setup and the name aren't shown: the op goes in the setup it was started from, and is
@@ -1812,9 +1814,12 @@ class OpPanel(Panel):
             self.output.addItem(label, key)
         self.output.currentIndexChanged.connect(s.preview)
         self.g70 = QCheckBox("")                 # turning Contour: G70 (on the rough's G71 blocks) or lines
-        self.g70.setToolTip("On: G70 P Q over the contour of an OD Rough (G71) earlier in this setup.\n"
+        self.g70.setToolTip("On: G70 P Q over the contour of a Roughing (G71) earlier in this setup.\n"
                             "Off: every move line by line (G01).")
         self.g70.toggled.connect(s.preview)
+        self.internal = QCheckBox("")            # turning Roughing / Contour: OD (off) or ID / bore (on)
+        self.internal.setToolTip("Off: the outside (OD).\nOn: the inside - bore the ID from the drilled hole out.")
+        self.internal.toggled.connect(s.internal_changed)
         self.cycles = {}                         # Drill: G81 / G83 (/ G73 on a mill), one box per setup type
         for stype, keys in ((cam.MILLING, list(cam.DRILL_CYCLES)), (cam.TURNING, list(cam.TURN_DRILL_CYCLES))):
             cb = QComboBox()
@@ -1880,6 +1885,8 @@ class OpPanel(Panel):
                 items.append(("Use G70 cycle", self.g70))
             if kind in ("rough", "finish") or (kind == "drill" and stype == cam.TURNING):
                 items[0:0] = [("Start", self.ends["start"][0]), ("End", self.ends["end"][0])]
+            if kind in ("rough", "finish"):
+                items.insert(0, ("Internal (ID)", self.internal))
             items.insert(0, ("Tool", self.tools[stype]))
             for label, w in items:
                 r = QWidget()
@@ -1955,6 +1962,9 @@ class OpSession:
         if "output" in op:
             p.output.setCurrentIndex(max(0, p.output.findData(op["output"])))
             p.g70.setChecked(op["output"] == "cycle")
+        if self.kind in ("rough", "finish"):
+            p.internal.setChecked(bool(op.get("internal")))
+            self.show_bore_row()
         p.name.setText(op.get("name", cam.next_name(cam.OP_TYPES[self.kind], {o["name"] for o in st.get("ops", [])})))
         self._loading = False
         for stype, g in p.groups.items():
@@ -2003,6 +2013,17 @@ class OpSession:
                    if t["id"] == getattr(self.win, "last_new_tool", None)]
             if new:
                 cb.setCurrentIndex(cb.findData(new[0]["id"]))
+        self.preview()
+
+    def show_bore_row(self):
+        """The drilled hole Ø only matters for an ID."""
+        box = self.panel.boxes.get((cam.TURNING, "bore_dia"))
+        if box is not None:
+            box.parentWidget().setVisible(self.panel.internal.isChecked())
+            self.panel.fit()
+
+    def internal_changed(self, *_):
+        self.show_bore_row()
         self.preview()
 
     def tool_menu(self, stype, pos):
@@ -2058,6 +2079,8 @@ class OpSession:
             o["output"] = "cycle" if p.g70.isChecked() else "lines"
         if self.kind in ("rough", "finish") or (self.kind == "drill" and st["type"] == cam.TURNING):
             o["start_at"], o["end_at"] = self.start_at, self.end_at
+        if self.kind in ("rough", "finish"):
+            o["internal"] = p.internal.isChecked()
         if self.kind == "drill":
             o["cycle"] = p.cycles[st["type"]].currentData()
             o["hole_dia"] = (p.holes.currentData() or 0.0) if st["type"] == cam.MILLING else 0.0

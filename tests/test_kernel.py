@@ -308,3 +308,37 @@ def test_drill_mill_and_lathe_from_model_holes():
     assert face[3] == pytest.approx(face[2] - 1.0)
     with pytest.raises(ValueError):
         cam.toolpath(bb2, ts, lop, r, holes=[])               # nothing modelled, no depth: nothing to drill
+
+
+def test_internal_rough_and_contour_bore_the_id():
+    """Roughing / Contour with Internal ticked: same op, worked on the bore (kernel.turn_bore)."""
+    from gsend_cad.core import cam, post
+    from gsend_cad.kernel import bodies_bbox, max_radius, turn_bore
+    d = Document()        # Ø1 x 2 bar along X; bore Ø0.6 x 0.4 deep at the front, then Ø0.4 to 0.9 deep
+    s = d.add_sketch([sk.rect((0, 0), (1.1, 0.5)), sk.rect((1.1, 0.2), (1.6, 0.5)), sk.rect((1.6, 0.3), (2, 0.5))])
+    d.add_revolve([r.to_data() for r in sketch_regions(s["id"], s["ents"])], {"sketch": s["id"], "kind": "x"})
+    m = Kernel().build(d)
+    assert not m.errors
+    bore = turn_bore(m.bodies, (1, 0, 0), (1, 0, 0))          # t from the bar's middle
+    assert [(round(t, 3), round(r, 3)) for t, r in bore] == [(-1, 0), (0.1, 0), (0.1, 0.2), (0.6, 0.2),
+                                                              (0.6, 0.3), (1, 0.3)]
+    bb = bodies_bbox(m.bodies)
+    ts = {**cam.validate({**cam.new_setup("turning"), "axis": "x"}), "name": "T"}
+    rad = max_radius(m.bodies, (1, 0, 0), (1, 0, 0))
+    op = cam.validate_op(ts, {**cam.new_op(ts, "rough"), "name": "Roughing", "internal": True, "bore_dia": 0.25,
+                              "leave_x": 0.0, "leave_z": 0.0})
+    assert cam.OP_TYPES["rough"] == "Roughing"
+    mv = cam.toolpath(bb, ts, op, rad, profile=bore)
+    xs = [p[0] for k, p in mv if k == "feed"]
+    assert max(xs) == pytest.approx(0.3) and min(xs) >= 0.125 - 0.02 - 1e-9   # in the bore, not inside the drill (but the pull-off)
+    deepest = min(p[2] for k, p in mv if k == "feed")
+    assert deepest == pytest.approx(-0.05 - 0.9, abs=1e-6)                 # to the bottom of the Ø0.4 (face 0.05)
+    g = post.post_setup(ts, [(cam.validate_op(ts, {**op, "output": "cycle", "leave_x": 0.01}),
+                              cam.toolpath(bb, ts, {**op, "output": "cycle", "leave_x": 0.01}, rad, profile=bore))],
+                        "fanuc", 1)
+    assert "ID ROUGH" in g and "U-0.02" in g and "X0.6" in g
+    fin = cam.validate_op(ts, {**cam.new_op(ts, "finish"), "name": "Contour", "internal": True})
+    fm = cam.toolpath(bb, ts, fin, rad, profile=bore)
+    assert max(p[0] for k, p in fm if k == "feed") == pytest.approx(0.3)
+    with pytest.raises(ValueError):                            # a bar with no bore: nothing to bore
+        cam.toolpath(bb, ts, op, rad, profile=[(-1, 0.0), (1, 0.0)])

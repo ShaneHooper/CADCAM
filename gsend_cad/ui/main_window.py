@@ -177,7 +177,7 @@ class MainWindow(QMainWindow):
         if not self.doc.setup(sid) or (need and self.doc.setup(sid)["type"] != need):
             sid = next((x["id"] for x in reversed(self.doc.setups) if x["type"] == want), None)
             if sid is None and need and not edit_id:
-                name = {"contour": "2D Contour", "rough": "OD Rough", "finish": "Contour"}[kind]
+                name = {"contour": "2D Contour", "rough": "Roughing", "finish": "Contour"}[kind]
                 self.viewport.show_toast(f"{name} needs a {need.capitalize()} setup · CAM → Setup → {need.upper()}",
                                          bad=True)
                 return
@@ -185,7 +185,7 @@ class MainWindow(QMainWindow):
         self.viewport.clear("cam")
         self.session = OpSession(self, sid, kind, edit_id)
         self.viewport.handler = self.session
-        self.ribbon.set_active({"face": "Face", "contour": "2D Contour", "rough": "OD Rough",
+        self.ribbon.set_active({"face": "Face", "contour": "2D Contour", "rough": "Roughing",
                                 "finish": "Contour", "drill": "Drill"}.get(self.session.kind))
 
     def simulate(self, nid: str | None = None):
@@ -538,7 +538,7 @@ class MainWindow(QMainWindow):
             self.start_op("drill")
         elif label == "Contour" and self.ribbon.switch.mode == "cam":
             self.start_op("finish")
-        elif label == "OD Rough" and self.ribbon.switch.mode == "cam":
+        elif label == "Roughing" and self.ribbon.switch.mode == "cam":
             self.start_op("rough")
         elif label == "Simulate" and self.ribbon.switch.mode == "cam":
             self.simulate()
