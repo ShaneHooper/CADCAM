@@ -172,12 +172,12 @@ class MainWindow(QMainWindow):
             return
         self.cancel_command()
         sid = getattr(self, "cam_setup", None)
-        need = {"contour": "milling", "rough": "turning", "finish": "turning"}.get(kind)
+        need = {"contour": "milling", "rough": "turning", "finish": "turning", "groove": "turning"}.get(kind)
         want = need or self.ribbon.current
         if not self.doc.setup(sid) or (need and self.doc.setup(sid)["type"] != need):
             sid = next((x["id"] for x in reversed(self.doc.setups) if x["type"] == want), None)
             if sid is None and need and not edit_id:
-                name = {"contour": "2D Contour", "rough": "Roughing", "finish": "Contour"}[kind]
+                name = {"contour": "2D Contour", "rough": "Roughing", "finish": "Contour", "groove": "Groove"}[kind]
                 self.viewport.show_toast(f"{name} needs a {need.capitalize()} setup · CAM → Setup → {need.upper()}",
                                          bad=True)
                 return
@@ -186,7 +186,7 @@ class MainWindow(QMainWindow):
         self.session = OpSession(self, sid, kind, edit_id)
         self.viewport.handler = self.session
         self.ribbon.set_active({"face": "Face", "contour": "2D Contour", "rough": "Roughing",
-                                "finish": "Contour", "drill": "Drill"}.get(self.session.kind))
+                                "finish": "Contour", "drill": "Drill", "groove": "Groove"}.get(self.session.kind))
 
     def simulate(self, nid: str | None = None):
         """Right-click → Simulate on a setup (all its ops) or one op; ribbon Simulate = the picked one."""
@@ -540,6 +540,8 @@ class MainWindow(QMainWindow):
             self.start_op("finish")
         elif label == "Roughing" and self.ribbon.switch.mode == "cam":
             self.start_op("rough")
+        elif label == "Groove" and self.ribbon.switch.mode == "cam":
+            self.start_op("groove")
         elif label == "Simulate" and self.ribbon.switch.mode == "cam":
             self.simulate()
         elif label == "Export":

@@ -358,6 +358,23 @@ no such rough, the Contour is posted line by line with a note saying so.</li>
 <li>Unticked: every move is written line by line (G01).</li>
 </ol>
 """),
+    ("groove", "CAM: Groove (turning: OD, ID or face)", """
+<h1>Groove</h1>
+<p>Plunge-grooves the grooves in a turned part. Needs a Turning setup and a grooving insert in the
+Tool Library (type <b>Grooving</b>; its <b>Width</b> is the insert width).</p>
+<ol>
+<li>CAM → Turning tab → <b>Groove</b>. <b>Groove</b>: <b>External (OD)</b>, <b>Internal (ID)</b> (in the bore) or
+<b>Face</b> (a ring cut into the front face).</li>
+<li>Grooves are found in the model: any dip with metal on both sides. A step open to one end isn't a
+groove (that's Roughing's job). OD / ID: <b>Start</b> / <b>End</b> limit which grooves along Z (pick on the part).</li>
+<li>Plunges side by side, <b>Stepover % of width</b> apart, from one wall to the other. Each plunge stops on
+the highest metal under the insert plus <b>Stock to leave</b>, so a shaped groove comes out stepped,
+never gouged. <b>Peck</b> &gt; 0 pecks with a short pull back to break the chip.</li>
+<li>The programmed point is the insert's front corner (OD / ID) or its outer corner (Face): touch it
+off that way. ID grooves go in and out through the bore below its smallest Ø.</li>
+<li>Posted line by line (G01).</li>
+</ol>
+"""),
     ("drill", "CAM: Drill (mill and lathe)", """
 <h1>Drill</h1>
 <p>Drills the round holes in your model. Model the hole in CAD (a circle cut through or partway),

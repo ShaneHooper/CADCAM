@@ -6,7 +6,7 @@
     tools.save(path, lib)
 
 A tool: {"id", "number" (T number on the machine), "name", "kind", "machine" ("milling" |
-"turning"), "dia" (cutting diameter; 0 for a turning insert), "nose_r" (insert nose radius)}.
+"turning"), "dia" (cutting diameter; a grooving insert's width; 0 for a turning insert), "nose_r" (insert nose radius)}.
 An operation copies what it needs (op["tool"] = number, op["tool_dia"], op["tool_name"]), so a
 saved part still posts the same after the library changes.
 """
@@ -17,12 +17,13 @@ import json
 import os
 
 KINDS = {"face mill": "Face mill", "end mill": "End mill", "drill": "Drill",
-         "od turn": "OD turning", "drill-t": "Drill"}
-MACHINE_KINDS = {"milling": ["face mill", "end mill", "drill"], "turning": ["od turn", "drill-t"]}
+         "od turn": "OD turning", "drill-t": "Drill", "groove": "Grooving"}
+MACHINE_KINDS = {"milling": ["face mill", "end mill", "drill"], "turning": ["od turn", "drill-t", "groove"]}
 # which tool kinds an operation can use, per machine
 FITS = {("milling", "face"): ("face mill", "end mill"), ("milling", "contour"): ("end mill",),
         ("milling", "drill"): ("drill",), ("turning", "face"): ("od turn",), ("turning", "rough"): ("od turn",),
-        ("turning", "finish"): ("od turn",), ("turning", "drill"): ("drill-t",)}
+        ("turning", "finish"): ("od turn",), ("turning", "drill"): ("drill-t",),
+        ("turning", "groove"): ("groove",)}
 
 DEFAULT = [
     {"id": "m1", "number": 1, "name": "2.0 Face mill", "kind": "face mill", "machine": "milling", "dia": 2.0, "nose_r": 0.0},
@@ -35,6 +36,7 @@ DEFAULT = [
     {"id": "t3", "number": 3, "name": "VNMG Finish", "kind": "od turn", "machine": "turning", "dia": 0.0,
      "nose_r": 0.016},
     {"id": "t5", "number": 5, "name": "1/4 Drill", "kind": "drill-t", "machine": "turning", "dia": 0.25, "nose_r": 0.0},
+    {"id": "t6", "number": 6, "name": "Groove", "kind": "groove", "machine": "turning", "dia": 0.125, "nose_r": 0.0},
 ]
 
 
@@ -59,7 +61,8 @@ def validate(t: dict) -> dict:
 
 def describe(t: dict) -> str:
     """'T2 · 1/2 End mill · Ø0.5000' - what a tool box shows."""
-    size = f"Ø{t['dia']:.4f}" if t.get("dia") else f"R{t.get('nose_r', 0):.4f}"
+    size = (f"W{t['dia']:.4f}" if t.get("kind") == "groove" else f"Ø{t['dia']:.4f}") if t.get("dia") else \
+        f"R{t.get('nose_r', 0):.4f}"
     return f"T{t['number']} · {t.get('name') or KINDS.get(t['kind'], t['kind'])} · {size}"
 
 
@@ -98,7 +101,11 @@ def load(path: str) -> list:
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-        return [validate(t) for t in data.get("tools", [])]
+        lib = [validate(t) for t in data.get("tools", [])]
+        if data.get("version", 1) < 2 and not any(t["kind"] == "groove" for t in lib):
+            lib += [copy.deepcopy(t) for t in DEFAULT if t["kind"] == "groove"   # grooving came in v2
+                    and t["id"] not in {x["id"] for x in lib}]
+        return lib
     except (OSError, ValueError, TypeError, AttributeError):
         return copy.deepcopy(DEFAULT)
 
@@ -107,5 +114,5 @@ def save(path: str, lib: list):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"version": 1, "tools": [validate(t) for t in lib]}, f, indent=1)
+        json.dump({"version": 2, "tools": [validate(t) for t in lib]}, f, indent=1)
     os.replace(tmp, path)

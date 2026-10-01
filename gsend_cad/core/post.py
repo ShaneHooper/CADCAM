@@ -116,7 +116,8 @@ def _lathe_op(setup, op, moves, offset, coolant, controller="haas", n=100, g71=N
     if kind == "drill":
         return _lathe_drill(op, moves, offset, coolant, controller)
     what = {"rough": "ID ROUGH" if op.get("internal") else "OD ROUGH",
-            "finish": "ID CONTOUR" if op.get("internal") else "CONTOUR", "face": "FACE"}[kind] + \
+            "finish": "ID CONTOUR" if op.get("internal") else "CONTOUR", "face": "FACE",
+            "groove": {"od": "OD", "id": "ID", "face": "FACE"}.get(op.get("side"), "OD") + " GROOVE"}[kind] + \
         ({"rough": " G71 CYCLE", "finish": " G70 CYCLE", "face": " G72 CYCLE"}[kind] if cycle else "")
     note = None
     if kind == "finish" and cycle:                    # G70 finishes the last G71 rough's contour (P..Q)

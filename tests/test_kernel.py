@@ -342,3 +342,38 @@ def test_internal_rough_and_contour_bore_the_id():
     assert max(p[0] for k, p in fm if k == "feed") == pytest.approx(0.3)
     with pytest.raises(ValueError):                            # a bar with no bore: nothing to bore
         cam.toolpath(bb, ts, op, rad, profile=[(-1, 0.0), (1, 0.0)])
+
+
+def test_groove_od_id_and_face():
+    """Groove finds the grooves in the part cut through its axis and plunges them full depth."""
+    from gsend_cad.core import cam, post
+    from gsend_cad.kernel import bodies_bbox, max_radius, turn_section
+    d = Document()      # Ø1.5 x 2 along X: OD groove x0.8-1.0 to Ø1.2; Ø0.6 bore 0.5 deep with an ID groove
+    ents = [sk.rect((0, 0), (0.8, 0.75)), sk.rect((0.8, 0), (1.0, 0.6)), sk.rect((1.0, 0), (1.5, 0.75)),  # Ø0.8
+            sk.rect((1.5, 0.3), (1.7, 0.75)), sk.rect((1.7, 0.4), (1.8, 0.75)), sk.rect((1.8, 0.3), (1.9, 0.75)),
+            sk.rect((1.9, 0.3), (2.0, 0.45)), sk.rect((1.9, 0.55), (2.0, 0.75))]  # face groove r.45-.55, .1 deep
+    s = d.add_sketch(ents)
+    d.add_revolve([r.to_data() for r in sketch_regions(s["id"], s["ents"])], {"sketch": s["id"], "kind": "x"})
+    m = Kernel().build(d)
+    assert not m.errors
+    bb = bodies_bbox(m.bodies)
+    ts = {**cam.validate({**cam.new_setup("turning"), "axis": "x"}), "name": "T"}
+    rad = max_radius(m.bodies, (1, 0, 0), (1, 0, 0))
+    i, center, _ = cam.turning_frame(bb, ts)
+    sec = turn_section(m.bodies, center, cam._unit(i))
+    got = {}
+    for side in ("od", "id", "face"):
+        op = cam.validate_op(ts, {**cam.new_op(ts, "groove"), "name": "Groove", "side": side, "tool_dia": 0.08})
+        mv = cam.toolpath(bb, ts, op, rad, profile=sec)
+        f = [p for k, p in mv if k == "feed"]
+        got[side] = (min(p[0] for p in f), max(p[0] for p in f), min(p[2] for p in f), max(p[2] for p in f))
+    assert got["od"] == pytest.approx((0.6, 0.6, -1.17, -1.05))       # front corner from wall to wall
+    assert got["id"] == pytest.approx((0.4, 0.4, -0.27, -0.25))
+    assert got["face"] == pytest.approx((0.53, 0.55, -0.15, -0.15))    # 0.1 below the face (at Z-0.05)
+    wide = cam.validate_op(ts, {**cam.new_op(ts, "groove"), "name": "Groove", "side": "id", "tool_dia": 0.125})
+    with pytest.raises(ValueError):                                     # Ø0.1 wide ID groove, 0.125 insert
+        cam.toolpath(bb, ts, wide, rad, profile=sec)
+    op = cam.validate_op(ts, {**cam.new_op(ts, "groove"), "name": "Groove", "tool_dia": 0.08, "peck": 0.05})
+    mv = cam.toolpath(bb, ts, op, rad, profile=sec)
+    g = post.post_setup(ts, [(op, mv)], "haas", 1)
+    assert "OD GROOVE" in g and "X1.2" in g and "T0606" in g

@@ -20,7 +20,7 @@ from ..core import cam, post, tools
 from ..core import plane as pl
 from ..core import sketch as sk
 from ..core.profiles import region_at, sketch_regions
-from ..kernel import (bodies_bbox, edge_list, max_radius, model_snap_points, outline_loops, turn_profile, turn_bore, find_holes, extrude_tool, face_outline, planar_face_at, plane_edges, region_face, revolve_axis,
+from ..kernel import (bodies_bbox, edge_list, max_radius, model_snap_points, outline_loops, turn_profile, turn_bore, turn_section, find_holes, extrude_tool, face_outline, planar_face_at, plane_edges, region_face, revolve_axis,
                       revolve_tool, triangles)
 from . import icons, theme
 
@@ -1743,6 +1743,13 @@ def op_moves(win, setup, op):
         if key not in cache:
             cache[key] = (turn_bore if inner else turn_profile)(bodies, center, cam._unit(i))
         profile = cache[key]
+    if op.get("type") == "groove":              # the part cut through the axis: grooves on OD / ID / face
+        i, center, _ = cam.turning_frame(bbox, setup)
+        key = ("section", id(win.model), tuple(b.id for b in bodies), setup["axis"])
+        cache = win.__dict__.setdefault("_radius_cache", {})
+        if key not in cache:
+            cache[key] = turn_section(bodies, center, cam._unit(i))
+        profile = cache[key]
     holes = setup_holes(win, setup) if op.get("type") == "drill" else None
     moves = cam.toolpath(bbox, setup, op, r, loops, profile, holes)
     return moves, cam.toolpath_world(bbox, setup, moves, r)
@@ -1780,6 +1787,9 @@ class OpPanel(Panel):
                                        ("retract", "Pull-off", 4), ("bore_dia", "Drilled hole Ø (0 = auto)", 4),
                                        ("sfm", "Surface speed SFM", 0),
                                        ("ipr", "Feed (in/rev)", 4), ("max_rpm", "Max RPM", 0)]},
+              "groove": {cam.TURNING: [("stepover", "Stepover % of width", 0), ("peck", "Peck (0 = none)", 4),
+                                       ("leave", "Stock to leave", 4), ("sfm", "Surface speed SFM", 0),
+                                       ("ipr", "Feed (in/rev)", 4), ("max_rpm", "Max RPM", 0)]},
               "drill": {cam.MILLING: [("depth", "Depth (0 = hole)", 4), ("peck", "Peck (Q)", 4), ("breakthrough", "Breakthrough", 4),
                                       ("retract", "R plane above hole", 4), ("rpm", "Spindle RPM", 0),
                                       ("feed", "Feed (in/min)", 2)],
@@ -1792,7 +1802,7 @@ class OpPanel(Panel):
 
     def __init__(self, session: "OpSession", kind: str):
         super().__init__({"face": "Face", "contour": "2D Contour", "rough": "Roughing", "finish": "Contour",
-                          "drill": "Drill"}[kind], 300)
+                          "drill": "Drill", "groove": "Groove"}[kind], 300)
         s = session
         # the setup and the name aren't shown: the op goes in the setup it was started from, and is
         # named Face1, Contour2, ... (rename it in the Browser)
@@ -1820,6 +1830,10 @@ class OpPanel(Panel):
         self.internal = QCheckBox("")            # turning Roughing / Contour: OD (off) or ID / bore (on)
         self.internal.setToolTip("Off: the outside (OD).\nOn: the inside - bore the ID from the drilled hole out.")
         self.internal.toggled.connect(s.internal_changed)
+        self.side = QComboBox()                  # Groove: on the OD, in the bore or in the front face
+        for k, label in cam.GROOVE_SIDES.items():
+            self.side.addItem(label, k)
+        self.side.currentIndexChanged.connect(s.side_changed)
         self.cycles = {}                         # Drill: G81 / G83 (/ G73 on a mill), one box per setup type
         for stype, keys in ((cam.MILLING, list(cam.DRILL_CYCLES)), (cam.TURNING, list(cam.TURN_DRILL_CYCLES))):
             cb = QComboBox()
@@ -1835,7 +1849,7 @@ class OpPanel(Panel):
             cb._right = _RightClick(cb.view().viewport(), partial(s.tool_menu, stype))   # right-click: Edit
             self.tools[stype] = cb
         self.ends = {}                           # turning rough / contour: Start / End (cursor) + Extend
-        for which, key in (("start", "start_ext"), ("end", "past_back")) if kind in ("rough", "finish", "drill") else ():
+        for which, key in (("start", "start_ext"), ("end", "past_back")) if kind in ("rough", "finish", "drill", "groove") else ():
             w = QWidget()
             hl = QHBoxLayout(w)
             hl.setContentsMargins(0, 0, 0, 0)
@@ -1883,8 +1897,10 @@ class OpPanel(Panel):
                 items.append(("Output", self.output))
             elif kind == "finish":
                 items.append(("Use G70 cycle", self.g70))
-            if kind in ("rough", "finish") or (kind == "drill" and stype == cam.TURNING):
+            if kind in ("rough", "finish", "groove") or (kind == "drill" and stype == cam.TURNING):
                 items[0:0] = [("Start", self.ends["start"][0]), ("End", self.ends["end"][0])]
+            if kind == "groove":
+                items.insert(0, ("Groove", self.side))
             if kind in ("rough", "finish"):
                 items.insert(0, ("Internal (ID)", self.internal))
             items.insert(0, ("Tool", self.tools[stype]))
@@ -1944,8 +1960,11 @@ class OpSession:
         if "direction" in op:
             p.direction.setCurrentIndex(max(0, p.direction.findData(op["direction"])))
         self.start_at, self.end_at = op.get("start_at"), op.get("end_at")
-        if self.kind in ("rough", "finish") or (self.kind == "drill" and st["type"] == cam.TURNING):
+        if self.kind in ("rough", "finish", "groove") or (self.kind == "drill" and st["type"] == cam.TURNING):
             self.show_ends()
+        if self.kind == "groove":
+            p.side.setCurrentIndex(max(0, p.side.findData(op.get("side", "od"))))
+            self.show_end_rows()
         if self.kind == "drill":
             cb = p.cycles[st["type"]]
             cb.setCurrentIndex(max(0, cb.findData(op["cycle"])))
@@ -2022,6 +2041,17 @@ class OpSession:
             box.parentWidget().setVisible(self.panel.internal.isChecked())
             self.panel.fit()
 
+    def show_end_rows(self):
+        """Groove: Start / End limit OD and ID grooves along Z; a face groove has none."""
+        on = self.panel.side.currentData() != "face"
+        for which in ("start", "end"):
+            self.panel.ends[which][0].parentWidget().setVisible(on)
+        self.panel.fit()
+
+    def side_changed(self, *_):
+        self.show_end_rows()
+        self.preview()
+
     def internal_changed(self, *_):
         self.show_bore_row()
         self.preview()
@@ -2077,8 +2107,10 @@ class OpSession:
             o["output"] = p.output.currentData()
         elif self.kind == "finish":
             o["output"] = "cycle" if p.g70.isChecked() else "lines"
-        if self.kind in ("rough", "finish") or (self.kind == "drill" and st["type"] == cam.TURNING):
+        if self.kind in ("rough", "finish", "groove") or (self.kind == "drill" and st["type"] == cam.TURNING):
             o["start_at"], o["end_at"] = self.start_at, self.end_at
+        if self.kind == "groove":
+            o["side"] = p.side.currentData()
         if self.kind in ("rough", "finish"):
             o["internal"] = p.internal.isChecked()
         if self.kind == "drill":
@@ -2120,6 +2152,10 @@ class OpSession:
         if self.kind == "drill":
             n = len({p[:2] for k, p in moves if k == "feed"}) if st["type"] == cam.MILLING else 1
             self.panel.info.setText(f"{n} hole{'s' if n != 1 else ''} · about {t:.1f} min cutting")
+        elif self.kind == "groove":
+            n = sum(1 for i, (k, _p) in enumerate(moves) if k == "feed" and moves[i - 1][0] == "rapid"
+                    and (i < 2 or moves[i - 2][0] != "feed"))
+            self.panel.info.setText(f"{n} plunge{'s' if n != 1 else ''} · about {t:.1f} min cutting")
         elif self.kind == "finish":
             self.panel.info.setText(f"1 finish pass along the profile · about {t:.1f} min cutting")
         elif self.kind == "rough":
@@ -2557,6 +2593,7 @@ class ToolLibraryDialog(QDialog):
             w.setVisible(show)
             for lb in self._labels.get(id(w), []):
                 lb.setVisible(show)
+        self._labels[id(self.dia)][0].setText("Width" if self.kind.currentData() == "groove" else "Diameter")
 
     def new_tool(self, kind: str | None = None):
         m = self.machine.currentData()
@@ -2564,7 +2601,8 @@ class ToolLibraryDialog(QDialog):
         used = {t["number"] for t in self.tools_here()}
         n = next(k for k in range(1, 100) if k not in used) if len(used) < 99 else 1
         t = tools.validate({"id": tools.new_id(self.win.tool_lib), "number": n, "name": f"New {tools.KINDS[kind]}",
-                            "kind": kind, "machine": m, "dia": 0.0 if kind == "od turn" else 0.25,
+                            "kind": kind, "machine": m,
+                            "dia": {"od turn": 0.0, "groove": 0.125}.get(kind, 0.25),
                             "nose_r": 0.031 if kind == "od turn" else 0.0})
         self.win.tool_lib.append(t)
         self.win.last_new_tool = t["id"]

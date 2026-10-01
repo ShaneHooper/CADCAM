@@ -257,6 +257,17 @@ shot("cam_04b_rough")
 key(Qt.Key_Return)
 st = win.doc.setups[-1]
 check("Roughing saved after Face", [x["name"] for x in st["ops"]] == ["Face", "Roughing"])
+win.run_tool("Groove")
+o = win.session
+check("Groove opens: OD / ID / Face box, Start / End shown for OD", o.kind == "groove"
+      and o.panel.title.text() == "GROOVE" and o.panel.side.isVisible() and o.panel.ends["start"][1].isVisible()
+      and o.panel.tools["turning"].currentText().startswith("T6 · Groove"))
+check("this bar has no groove: the panel says so", "no external groove" in o.panel.info.text())
+o.panel.side.setCurrentIndex(o.panel.side.findData("face"))
+pump()
+check("Face groove hides Start / End", not o.panel.ends["start"][1].isVisible() and "no face groove" in o.panel.info.text())
+key(Qt.Key_Escape)
+pump()
 win.run_tool("Contour")
 o = win.session
 check("turning Contour opens with the G70 box", o.kind == "finish" and o.panel.g70.isVisible()

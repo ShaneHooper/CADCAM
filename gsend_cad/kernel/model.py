@@ -467,6 +467,34 @@ def turn_bore(bodies, point, direction) -> list[tuple]:
     return clean
 
 
+def turn_section(bodies, point, direction) -> list[tuple]:
+    """The parts cut through the spindle axis (one half): [(t0, r0, t1, r1)] boundary segments,
+    t = distance along `direction` from `point`, r = distance from the axis (>= 0). Exact for
+    turned (round) parts; what Groove finds its OD / ID / face grooves in. Curves come as short
+    straight pieces (about 0.005 in)."""
+    p, d = np.asarray(point, float), np.asarray(direction, float)
+    d = d / np.linalg.norm(d)
+    n = np.cross(d, [0.0, 0.0, 1.0])
+    if np.linalg.norm(n) < 1e-6:
+        n = np.cross(d, [0.0, 1.0, 0.0])
+    n = n / np.linalg.norm(n)                       # the cut plane holds d; its normal is n
+    y = np.cross(n, d)                              # the r direction in the cut plane
+    L = 1000.0
+    half = Face.make_rect(2 * L, L, Plane(origin=Vector(*(p + y * L / 2)), x_dir=Vector(*d), z_dir=Vector(*n)))
+    out = []
+    for b in bodies:
+        try:
+            sec = b.shape & half
+        except Exception:
+            continue
+        for e in sec.edges():
+            k = 1 if e.geom_type == GeomType.LINE else max(4, int(e.length / 0.005))
+            pts = [_np(e.position_at(j / k)) - p for j in range(k + 1)]
+            tr = [(float(q @ d), float(np.linalg.norm(q - (q @ d) * d))) for q in pts]
+            out += [(a[0], a[1], c[0], c[1]) for a, c in zip(tr, tr[1:])]
+    return out
+
+
 def _np(v):
     return np.array([v.X, v.Y, v.Z], float)
 

@@ -1,3 +1,4 @@
+import json
 import math
 
 import pytest
@@ -572,3 +573,15 @@ def test_sketch_trim():
     assert len(e) == 5 and e[-1]["pts"] == [[0, 0], [1, 0]] and o == [1, 0, 0, 0, 0]
     with pytest.raises(ValueError):
         sk.trim(ents, [0, 1], (9, 9), 0.1)
+
+
+def test_old_tool_library_gets_a_groove_insert(tmp_path):
+    from gsend_cad.core import tools
+    path = tmp_path / "lib.json"
+    old = [t for t in tools.DEFAULT if t["kind"] != "groove"]
+    path.write_text(json.dumps({"version": 1, "tools": old}))
+    lib = tools.load(str(path))
+    assert [t["name"] for t in lib if t["kind"] == "groove"] == ["Groove"]
+    assert tools.describe(lib[-1]) == "T6 · Groove · W0.1250"
+    tools.save(str(path), [t for t in lib if t["kind"] != "groove"])     # deleted it: stays deleted
+    assert not any(t["kind"] == "groove" for t in tools.load(str(path)))

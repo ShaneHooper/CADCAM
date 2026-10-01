@@ -233,6 +233,10 @@ FACE_MILL = {"type": "face", "tool": 1, "tool_dia": 2.0, "stepover": 70.0, "step
 FACE_TURN = {"type": "face", "tool": 1, "stepdown": 0.02, "leave": 0.0, "past_center": 0.02, "sfm": 600.0,
              "ipr": 0.008, "max_rpm": 3000.0, "clearance": 0.1, "output": "lines"}
 TURN_OUTPUT = {"lines": "Single lines (G01)", "cycle": "Canned cycle (G72)"}
+GROOVE_TURN = {"type": "groove", "tool": 6, "tool_dia": 0.125, "side": "od", "stepover": 80.0, "peck": 0.0,
+               "leave": 0.0, "sfm": 400.0, "ipr": 0.003, "max_rpm": 2500.0, "clearance": 0.1,
+               "start_at": None, "end_at": None, "start_ext": 0.0, "past_back": 0.0}
+GROOVE_SIDES = {"od": "External (OD)", "id": "Internal (ID)", "face": "Face"}
 FACE_PULL = 0.02            # G72 pull-off (45°) after each facing pass
 CONTOUR_MILL = {"type": "contour", "tool": 2, "tool_dia": 0.5, "stepdown": 0.25, "leave": 0.0,
                 "bottom_offset": 0.0, "direction": "climb", "rpm": 5000.0, "feed": 30.0, "plunge": 10.0,
@@ -253,7 +257,8 @@ DRILL_CYCLES = {"drill": "Drill (G81)", "peck": "Peck (G83)", "chip": "Chip brea
 TURN_DRILL_CYCLES = ("drill", "peck")          # G73 is a pattern cycle on a lathe, not chip breaking
 DRILL_TIP = 0.5 / math.tan(math.radians(59))   # 118° point: tip length = 0.3004 x drill Ø
 PECK_GAP = 0.02                                # rapid back down to this far above the last peck
-OP_TYPES = {"face": "Face", "contour": "Contour", "rough": "Roughing", "finish": "Contour", "drill": "Drill"}
+OP_TYPES = {"face": "Face", "contour": "Contour", "rough": "Roughing", "finish": "Contour", "drill": "Drill",
+            "groove": "Groove"}
 
 
 def next_name(base: str, taken) -> str:
@@ -279,6 +284,10 @@ def new_op(setup: dict, kind: str = "face") -> dict:
         return copy.deepcopy(ROUGH_TURN)
     if kind == "drill":
         return copy.deepcopy(DRILL_MILL if setup["type"] == MILLING else DRILL_TURN)
+    if kind == "groove":
+        if setup["type"] != TURNING:
+            raise ValueError("Groove needs a Turning setup")
+        return copy.deepcopy(GROOVE_TURN)
     if kind == "finish":
         if setup["type"] != TURNING:
             raise ValueError("turning Contour needs a Turning setup")
@@ -306,6 +315,13 @@ def validate_op(setup: dict, op: dict) -> dict:
         raise ValueError("output must be lines or cycle")
     if op["type"] == "contour" and op["direction"] not in ("climb", "conventional"):
         raise ValueError("direction must be climb or conventional")
+    if op["type"] == "groove":
+        if op["side"] not in GROOVE_SIDES:
+            raise ValueError("groove must be od, id or face")
+        if not 1 <= op["stepover"] <= 100:
+            raise ValueError("stepover must be 1 to 100 % of the groove width")
+        if op["peck"] < 0:
+            raise ValueError("peck can't be negative")
     if op["type"] == "drill":
         if op["cycle"] not in (DRILL_CYCLES if setup["type"] == MILLING else TURN_DRILL_CYCLES):
             raise ValueError("drill cycle must be " + " / ".join(DRILL_CYCLES if setup["type"] == MILLING
@@ -625,6 +641,134 @@ def finish_toolpath(bbox, setup: dict, op: dict, profile, radius: float = 0.0) -
     return _unflip([("rapid", (x_out, 0.0, z_start))] + _profile_pass(prof, op["retract"], x_out, z_start), flip)
 
 
+def _strips(segs):
+    """[(u0, u1, h)]: the (u, v) segments cut at every end point into strips along u, h = the
+    highest v over the strip (where an OD / ID / face tool coming down in v first meets metal)."""
+    segs = [(u0, v0, u1, v1) if u0 <= u1 else (u1, v1, u0, v0) for u0, v0, u1, v1 in segs]
+    us = sorted({round(v, 9) for q in segs for v in (q[0], q[2])})
+    out = []
+    for a, b in zip(us, us[1:]):
+        hs = [max(v0 + (v1 - v0) * (x - u0) / (u1 - u0) for x in (a, b))
+              for u0, v0, u1, v1 in segs if u0 <= a + 1e-9 and u1 >= b - 1e-9 and u1 - u0 > 1e-12]
+        if hs:
+            out.append((a, b, max(hs)))
+    return out
+
+
+def _groove_regions(strips):
+    """[(u_lo, u_hi, rim)]: dips with metal on BOTH sides (a groove; a step open to one end is
+    not one). rim = the lower wall's height."""
+    n = len(strips)
+    pre, suf, m = [0.0] * n, [0.0] * n, -math.inf
+    for k, (a, b, h) in enumerate(strips):
+        if k and abs(strips[k - 1][1] - a) > 1e-9:
+            m = -math.inf                                    # a gap: open there
+        m = max(m, h)
+        pre[k] = m
+    m = -math.inf
+    for k in range(n - 1, -1, -1):
+        if k < n - 1 and abs(strips[k + 1][0] - strips[k][1]) > 1e-9:
+            m = -math.inf
+        m = max(m, strips[k][2])
+        suf[k] = m
+    out = []
+    for k, (a, b, h) in enumerate(strips):
+        level = min(pre[k], suf[k])
+        if h < level - 1e-6:
+            if out and abs(out[-1][1] - a) < 1e-9:
+                out[-1] = (out[-1][0], b, max(out[-1][2], level))
+            else:
+                out.append((a, b, level))
+    return out
+
+
+def groove_toolpath(bbox, setup: dict, op: dict, section, radius: float = 0.0) -> list[tuple]:
+    """Groove: straight plunges side by side (stepover % of the insert width) into every groove
+    of the part - on the OD, in the bore (ID) or in the front face. `section` =
+    kernel.turn_section about the setup axis. The insert's programmed point is its front corner
+    (OD / ID) or its outer corner (face); each plunge stops on the highest metal under the insert
+    (+ stock to leave), so it never cuts the part. Peck > 0: pecks with a short pull back."""
+    op = validate_op(setup, op)
+    if setup["type"] != TURNING:
+        raise ValueError("Groove needs a Turning setup")
+    c = stock_cylinder(bbox, radius, setup)
+    w = wcs(bbox, setup, radius)
+    i, center, _ = turning_frame(bbox, setup)
+    sign = 1.0 if setup["front"] == "+" else -1.0
+    z_stock = (c["front"][i] - w["origin"][i]) * sign
+    z_start, x_out = z_stock + op["clearance"], c["r"] + op["clearance"]
+
+    def z_of(t):
+        return (center[i] + t - w["origin"][i]) * sign
+    side, W, cl = op["side"], op["tool_dia"], op["clearance"]
+    zr = [(z_of(t0), r0, z_of(t1), r1) for t0, r0, t1, r1 in section]
+    uv = {"od": [(z0, r0, z1, r1) for z0, r0, z1, r1 in zr],
+          "id": [(z0, -r0, z1, -r1) for z0, r0, z1, r1 in zr],
+          "face": [(r0, z0, r1, z1) for z0, r0, z1, r1 in zr]}[side]
+
+    def xz(u, v):
+        return {"od": (v, 0.0, u), "id": (-v, 0.0, u), "face": (u, 0.0, v)}[side]
+    strips = _strips(uv)
+    regions = _groove_regions(strips)
+    if side != "face":
+        z_lo, z_hi = toolpath_limits(bbox, setup, op, radius)
+        regions = [(max(a, z_lo), min(b, z_hi), rim) for a, b, rim in regions if b > z_lo and a < z_hi]
+    if not regions:
+        raise ValueError("no " + GROOVE_SIDES[side].split(" (")[0].lower() + " groove found on the part" +
+                         (" between Start and End" if side != "face" else ""))
+    fits = [g for g in regions if g[1] - g[0] >= W - 1e-9]
+    if not fits:
+        raise ValueError(f"every groove is narrower than the insert (Ø{W:.4f} wide)")
+
+    def top(u0, u1):
+        return max((h for a, b, h in strips if b > u0 + 1e-9 and a < u1 - 1e-9), default=-math.inf)
+    step = W * op["stepover"] / 100
+    home = ("rapid", (x_out, 0.0, z_start))
+    moves = [home]
+    for lo, hi, rim in fits:
+        us, u = [], hi
+        while u > lo + W + 1e-9:
+            us.append(u)
+            u -= step
+        us.append(lo + W)
+        v_app = rim + cl
+        if side == "od":
+            v_safe = x_out
+        elif side == "id":                                   # in through the bore: below its smallest Ø
+            v_safe = max(v_app, top(hi, math.inf) + cl)
+        else:
+            v_safe = z_start
+        first = True
+        for u in us:
+            bottom = top(u - W, u) + op["leave"]
+            if bottom >= v_app - cl - 1e-9:
+                continue                                     # metal up to the rim here: nothing to cut
+            if first:
+                if side == "face":
+                    moves.append(("rapid", xz(u, v_safe)))
+                else:
+                    x_safe = xz(u, v_safe)[0]                # to the travel Ø in front of the part, then in
+                    moves += [("rapid", (x_safe, 0.0, z_start)), ("rapid", xz(u, v_safe))]
+                first = False
+            moves.append(("rapid", xz(u, v_app)))
+            q = op["peck"] if op["peck"] > 0 else v_app - bottom
+            v = v_app
+            while v > bottom + 1e-9:
+                v = max(v - q, bottom)
+                moves.append(("feed", xz(u, v)))
+                if v > bottom + 1e-9:
+                    moves.append(("rapid", xz(u, v + PECK_GAP)))
+            moves.append(("rapid", xz(u, v_app)))
+        if not first:
+            last = moves[-1][1]
+            moves.append(("rapid", xz(last[0] if side == "face" else last[2], v_safe)))   # back up
+            if side != "face":
+                moves.append(("rapid", (moves[-1][1][0], 0.0, z_start)))
+    if len(moves) == 1:
+        raise ValueError("the grooves are already cut to size")
+    return moves + [home]
+
+
 def drill_targets(bbox, setup: dict, op: dict, holes, radius: float = 0.0) -> list[tuple]:
     """(x, y, top, bottom) in WCS for each hole the Drill op will make (kernel.find_holes gives
     `holes`). Milling: holes opening upward (+Z), Ø = op hole_dia (0 = every size), nearest first.
@@ -743,6 +887,8 @@ def toolpath(bbox, setup: dict, op: dict, radius: float = 0.0, loops=None, profi
             cx, cy = X_DIRS[setup["x_dir"]][1]
             moves = [(k, (x * cx + y * cy, -x * cy + y * cx, z)) for k, (x, y, z) in moves]
         return moves
+    if op.get("type") == "groove":
+        return groove_toolpath(bbox, setup, op, profile or [], radius)
     if op.get("type") == "rough":
         return rough_toolpath(bbox, setup, op, profile or [], radius)
     if op.get("type") == "finish":
@@ -806,6 +952,9 @@ def describe_op(setup: dict, op: dict) -> str:
     if op.get("type") == "drill":
         size = f"Ø{op['hole_dia']:.4f} holes" if op.get("hole_dia") else "all holes"
         return f"Drill · Ø{op['tool_dia']:.4f} · {DRILL_CYCLES[op['cycle']]} · {size}"
+    if op.get("type") == "groove":
+        return (f"{GROOVE_SIDES[op['side']]} Groove · {op['tool_dia']:.4f} wide · {op['stepover']:.0f}% step · "
+                f"{op['sfm']:.0f} SFM · {op['ipr']:.4f} IPR")
     if op.get("type") == "finish":
         return (("ID " if op.get("internal") else "") + f"Contour · leave X {op['leave_x']:.3f} Z {op['leave_z']:.3f} · {op['sfm']:.0f} SFM · "
                 f"{op['ipr']:.4f} IPR" + (" · G70 cycle" if op.get("output") == "cycle" else ""))
