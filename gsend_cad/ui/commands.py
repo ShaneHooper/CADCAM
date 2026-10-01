@@ -13,7 +13,7 @@ from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
 from functools import partial
 
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout,
-                               QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit,
+                               QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QPlainTextEdit,
                                QPushButton, QScrollArea, QSlider, QSpinBox, QToolButton, QVBoxLayout, QWidget)
 
 from ..core import cam, post, tools
@@ -1778,6 +1778,8 @@ class OpPanel(Panel):
             cb = QComboBox()
             cb.setMinimumWidth(200)
             cb.currentIndexChanged.connect(partial(s.tool_changed, stype))
+            cb.view().setContextMenuPolicy(Qt.CustomContextMenu)      # right-click a tool in the list: Edit
+            cb.view().customContextMenuRequested.connect(partial(s.tool_menu, stype))
             self.tools[stype] = cb
         self.ends = {}                           # turning rough / contour: Start / End (cursor) + Extend
         for which, key in (("start", "start_ext"), ("end", "past_back")) if kind in ("rough", "finish") else ():
@@ -1953,6 +1955,34 @@ class OpSession:
                    if t["id"] == getattr(self.win, "last_new_tool", None)]
             if new:
                 cb.setCurrentIndex(cb.findData(new[0]["id"]))
+        self.preview()
+
+    def tool_menu(self, stype, pos):
+        """Right-click a tool in the open Tool list: Edit tool… opens it in the Tool Library."""
+        cb = self.panel.tools[stype]
+        idx = cb.view().indexAt(pos)
+        tid = idx.data(Qt.UserRole) if idx.isValid() else None
+        t = next((t for t in self.win.tool_lib if t["id"] == tid), None)
+        if t is None:
+            return
+        m = QMenu(cb.view())
+        act = m.addAction(f"Edit {tools.describe(t)}…")
+        if m.exec(cb.view().viewport().mapToGlobal(pos)) is not act:
+            return
+        cb.hidePopup()
+        self.edit_tool(stype, t["id"])
+
+    def edit_tool(self, stype, tid):
+        st = self.current_setup()
+        keep = self.op()
+        self.win.open_tool_library(st["type"], select=tid)
+        t = next((t for t in self.win.tool_lib if t["id"] == tid), None)
+        if t is not None:
+            keep = tools.apply(keep, t)            # the op picks up the edited number / size
+        self.fill_tools(st, keep)
+        cb = self.panel.tools[stype]
+        if cb.findData(tid) >= 0:
+            cb.setCurrentIndex(cb.findData(tid))   # the edited tool, with its new sizes
         self.preview()
 
     def _drill_for(self, st, op, dia):
@@ -2319,7 +2349,7 @@ class ToolLibraryDialog(QDialog):
     """CAM → Tool Library: the tools operations pick from (one list per machine). Every change
     is saved to the library file right away; operations copy the tool they use."""
 
-    def __init__(self, win, machine: str = cam.MILLING, new_kind: str | None = None):
+    def __init__(self, win, machine: str = cam.MILLING, new_kind: str | None = None, select: str | None = None):
         super().__init__(win)
         self.win = win
         self.setWindowTitle("Tool Library")
@@ -2381,7 +2411,7 @@ class ToolLibraryDialog(QDialog):
         self.delete.clicked.connect(self.remove)
         done.clicked.connect(self.accept)
         self._busy = False
-        self.fill()
+        self.fill(select=select)
         if new_kind:
             self.new_tool(new_kind)
 

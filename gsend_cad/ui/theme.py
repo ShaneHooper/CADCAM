@@ -182,6 +182,16 @@ QScrollArea {{ border: 0; background: transparent; }}
 QComboBox, QDoubleSpinBox {{ background: {PANEL2}; border: 1px solid {LINE2}; padding: 1px 4px; min-width: 84px; }}
 QComboBox:focus, QDoubleSpinBox:focus {{ border-color: {ACCENT}; }}
 QDoubleSpinBox {{ color: {ACCENT}; }}
+/* Text boxes (tool names, T numbers, rename, post output): the Windows 11 native style drew them
+   white with light-grey text (10/1/26, unreadable). Dark like the rest; typed text and the blinking
+   cursor (Qt draws it in the text colour) in accent blue. */
+QLineEdit, QSpinBox {{ background: {PANEL2}; border: 1px solid {LINE2}; color: {ACCENT}; padding: 2px 4px;
+                      selection-background-color: {ACCENT_DIM}; selection-color: {FG}; }}
+QLineEdit:focus, QSpinBox:focus {{ border-color: {ACCENT}; }}
+QAbstractSpinBox QLineEdit {{ background: transparent; border: 0; padding: 0; }}  /* a number box's own edit */
+QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {{ color: {FG3}; border-color: {LINE}; }}
+QPlainTextEdit, QTextEdit {{ background: {PANEL2}; border: 1px solid {LINE2}; color: {FG};
+                            selection-background-color: {ACCENT_DIM}; }}
 QComboBox QAbstractItemView {{ background: {PANEL2}; border: 1px solid {LINE2}; selection-background-color: {ACCENT_DIM}; }}
 QCheckBox::indicator {{ width: 12px; height: 12px; border: 1px solid {LINE2}; background: {PANEL2}; }}
 QCheckBox::indicator:checked {{ background: {ACCENT}; border-color: {ACCENT}; }}

@@ -549,9 +549,9 @@ class MainWindow(QMainWindow):
         else:
             self.not_built(label)
 
-    def open_tool_library(self, machine: str = "milling", new_kind: str | None = None):
-        """CAM → Tool Library (also "New tool…" in an operation's Tool box)."""
-        ToolLibraryDialog(self, machine, new_kind).exec()
+    def open_tool_library(self, machine: str = "milling", new_kind: str | None = None, select: str | None = None):
+        """CAM → Tool Library (also "New tool…" / right-click Edit in an operation's Tool box)."""
+        ToolLibraryDialog(self, machine, new_kind, select).exec()
 
     def save_tool_lib(self):
         try:
