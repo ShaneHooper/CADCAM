@@ -34,6 +34,7 @@ HINTS = {"line": "Click start, click end. Keep clicking to chain. Esc ends the c
          "fillet": "Click a sharp corner to round it (radius: Fillet R in the palette).",
          "chamfer": "Click a sharp corner to bevel it (Chamfer H × V in the palette)."}
 SNAP_PX = 8         # how close (screen px) the cursor must come to an end / mid / center to snap
+ORTHO_DEG = 10      # a line within this many degrees of level / plumb is held straight (Ctrl: free)
 SELECT_HINT = ("Click a line or shape (or its row in the palette) to type exact values; right-click a "
                "dimension to change it. Delete removes it. L line · R rectangle · C circle · P polygon · "
                "Enter finishes")
@@ -515,7 +516,25 @@ class SketchSession:
 
     def _snap(self, w, ev):
         """Where a click lands: a snap point (end / mid / center of the sketch or of the part's
-        edges on this plane) within SNAP_PX of the cursor beats the grid."""
+        edges on this plane) within SNAP_PX of the cursor beats the grid. The end of a line close
+        to level / plumb is then held exactly straight from its start (Ctrl draws at any angle)."""
+        p = self._snap_point(w, ev)
+        self.ortho = None
+        if self.tool == "line" and self.pts and not (ev is not None and ev.modifiers() & Qt.ControlModifier):
+            s0 = self.pts[0]
+            dx, dy = w[0] - s0[0], w[1] - s0[1]
+            if math.hypot(dx, dy) > 1e-9:
+                ang = abs(math.degrees(math.atan2(dy, dx))) % 180
+                if min(ang, 180 - ang) <= ORTHO_DEG:
+                    p, self.ortho = [p[0], s0[1]], "horizontal"
+                elif abs(ang - 90) <= ORTHO_DEG:
+                    p, self.ortho = [s0[0], p[1]], "vertical"
+                if self.ortho and self.snap_hit and (abs(self.snap_hit[0] - p[0]) > 1e-9 or
+                                                     abs(self.snap_hit[1] - p[1]) > 1e-9):
+                    self.snap_hit = None          # held straight: lined up with the point, not on it
+        return p
+
+    def _snap_point(self, w, ev):
         if ev is not None:
             tol = SNAP_PX * self.vp.pixel_size(ev.position().toPoint())
             hit = sk.nearest_snap(self.sketch_snaps + self.model_snaps, w, tol)
@@ -600,6 +619,8 @@ class SketchSession:
         p = self._snap(w, ev)
         self._mark_snap(p, pos)
         tag = f"  · {self.snap_hit[2].upper()}" if self.snap_hit else ""
+        if getattr(self, "ortho", None):
+            tag += f"  · {self.ortho.upper()}"
         if not self.pts or self.tool == "point":
             self.vp.show_dim(f"X {sk.fmt(p[0])}  Y {sk.fmt(p[1])}{tag}", pos)
             self.vp.render()

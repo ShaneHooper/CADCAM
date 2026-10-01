@@ -39,12 +39,12 @@ RIBBON = {
 }
 # CAM mode (the CAD/CAM switch). Tools are placeholders until the toolpath side is built.
 RIBBON.update({
-    "milling": [("Setup / Operation", [("setup", "Setup"), ("tools", "Tool Library")]),
+    "milling": [("Setup", [("setup", "Setup"), ("tools", "Tool Library")]),
                 ("2D", [("face", "Face"), ("adaptive", "2D Adaptive"), ("pocket", "2D Pocket"),
                         ("contour", "2D Contour")]),
                 ("Drilling", [("drill", "Drill")]),
                 ("Actions", [("sim", "Simulate"), ("post", "Post Process")])],
-    "turning": [("Setup / Operation", [("setup", "Setup"), ("tools", "Tool Library")]),
+    "turning": [("Setup", [("setup", "Setup"), ("tools", "Tool Library")]),
                 ("Turning", [("face", "Face"), ("rough", "OD Rough"), ("finish", "Contour"), ("drill", "Drill"),
                              ("groove", "Groove"), ("thread", "Thread"), ("partoff", "Part Off")]),
                 ("Actions", [("sim", "Simulate"), ("post", "Post Process")])],
@@ -613,7 +613,7 @@ class Browser(QFrame):
         if editing and not editing[2]:
             node(sf, editing[0] + " (editing)", "sketch", True, "skedit", f"{editing[1]} ENT")
         if setups:
-            cf = node(root, "CAM Setups", "folder", True, "setups")
+            cf = node(root, "Setup/Operation", "folder", True, "setups")
             for sid, name, kind, ops in setups:
                 it = node(cf, name, "setup", True, sid, kind.upper())
                 it.setToolTip(0, "Double-click to edit · Delete removes it")

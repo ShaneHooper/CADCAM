@@ -201,5 +201,32 @@ check("Redo brings a line back", len(s.ents) == 1)
 key(Qt.Key_Escape)
 key(Qt.Key_Escape)
 win.run_tool("Cancel")
+pump()
+
+# ---- a line started off the grid (on another line's end) stays level / plumb when drawn near it
+start_xy_sketch()
+s = win.session
+s.ents.append(sk.line((0, 0), (0, 1.13)))            # a vertical line ending at y 1.13 (not on the grid)
+s.origin.append(None)
+s.redraw()
+win.run_tool("Line")
+click(0, 1.13)                                        # snaps to that end
+click(2.0, 1.25)                                      # ~3.4° up: near level, and y 1.25 IS a grid point
+e = s.ents[-1]
+check("a nearly level line is held level from an off-grid start", e["type"] == "line"
+      and abs(e["pts"][1][1] - 1.13) < 1e-9 and abs(e["pts"][1][0] - 2.0) < 1e-9)
+click(2.12, 0.0)                                      # ~5.4° off plumb from (2, 1.13): held plumb
+e = s.ents[-1]
+check("a nearly plumb line is held plumb", abs(e["pts"][1][0] - 2.0) < 1e-9 and abs(e["pts"][1][1]) < 1e-9)
+p = screen(3.0, 0.25)
+QTest.mouseMove(vp.plotter, p, )
+pump(30)
+QTest.mouseClick(vp.plotter, Qt.LeftButton, Qt.ControlModifier, p)
+pump(60)
+e = s.ents[-1]
+check("Ctrl draws at any angle", abs(e["pts"][1][1] - 0.25) < 1e-9)
+key(Qt.Key_Escape)
+key(Qt.Key_Escape)
+win.run_tool("Cancel")
 print("FAILURES:", failures or "none")
 sys.exit(1 if failures else 0)

@@ -75,7 +75,7 @@ set <b>Plane</b> to the Z height. Example: the demo plate is 0.5 thick, so <b>Pl
 draws on its top face. Leave it at 0 to draw on the bottom (XY) plane.</li>
 <li>Pick a tool and click in the view:
 <table>
-<tr><td class="k">Line &nbsp;<b>L</b></td><td>Click start, click end. Keep clicking to chain lines. <b>Esc</b> ends the chain.</td></tr>
+<tr><td class="k">Line &nbsp;<b>L</b></td><td>Click start, click end. Keep clicking to chain lines. <b>Esc</b> ends the chain. Within 10° of level or plumb the line is held dead straight (the cursor tag says HORIZONTAL / VERTICAL); hold <b>Ctrl</b> to draw at any angle.</td></tr>
 <tr><td class="k">Rectangle &nbsp;<b>R</b></td><td>Click one corner, then the opposite corner.</td></tr>
 <tr><td class="k">Center Rect</td><td>Click the center, then a corner (ribbon button).</td></tr>
 <tr><td class="k">Circle &nbsp;<b>C</b></td><td>Click the center, then a point on the circle.</td></tr>
@@ -281,7 +281,7 @@ real machine coordinate system: −X also flips Y (a 180° turn), ±Y turns it 9
 <li>The yellow outline is the stock; the arrows are the WCS (red X, green Y, blue Z). <b>OK</b> or Enter.</li>
 </ol>
 <ul>
-<li>Setups are listed under <b>CAM Setups</b> in the Browser. Double-click one to change it; Delete
+<li>Setups are listed under <b>Setup/Operation</b> in the Browser. Double-click one to change it; Delete
 removes it (Ctrl+Z brings it back); F2 renames it. Click one to show its stock.</li>
 <li>Setups are saved in the .gcad file. They don't change the design timeline.</li>
 </ul>
@@ -367,7 +367,7 @@ written out as G01 / G00 (lathe drilling cycles differ between Fanuc controls).<
 <h1>Tool Library</h1>
 <p>Your cutting tools, saved on this computer and shared by every part. Operations pick their tool here.</p>
 <ol>
-<li>CAM → <b>Tool Library</b> (Setup / Operation group), or <b>New tool…</b> at the bottom of an operation's
+<li>CAM → <b>Tool Library</b> (Setup group), or <b>New tool…</b> at the bottom of an operation's
 Tool list.</li>
 <li><b>Machine</b>: Milling or Turning, each with its own list (in T-number order).</li>
 <li><b>NEW TOOL</b> adds one; set its <b>Number</b> (the T number on the machine), <b>Name</b>, <b>Type</b> (face mill,
