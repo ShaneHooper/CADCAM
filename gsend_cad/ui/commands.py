@@ -1758,7 +1758,7 @@ class OpPanel(Panel):
         for label, key in self.DIRECTIONS.get(kind, []):
             self.direction.addItem(label, key)
         self.direction.currentIndexChanged.connect(s.preview)
-        self.output = QComboBox()                # turning: G01 lines or a canned cycle (G94 / G71)
+        self.output = QComboBox()                # turning: G01 lines or a canned cycle (G72 / G71)
         for key, label in (cam.ROUGH_OUTPUT if kind == "rough" else cam.TURN_OUTPUT).items():
             self.output.addItem(label, key)
         self.output.currentIndexChanged.connect(s.preview)

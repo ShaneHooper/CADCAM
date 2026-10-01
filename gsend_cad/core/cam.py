@@ -232,7 +232,8 @@ FACE_MILL = {"type": "face", "tool": 1, "tool_dia": 2.0, "stepover": 70.0, "step
              "direction": "x", "rpm": 3000.0, "feed": 60.0, "clearance": 0.5}
 FACE_TURN = {"type": "face", "tool": 1, "stepdown": 0.02, "leave": 0.0, "past_center": 0.02, "sfm": 600.0,
              "ipr": 0.008, "max_rpm": 3000.0, "clearance": 0.1, "output": "lines"}
-TURN_OUTPUT = {"lines": "Single lines (G01)", "cycle": "Canned cycle (G94)"}
+TURN_OUTPUT = {"lines": "Single lines (G01)", "cycle": "Canned cycle (G72)"}
+FACE_PULL = 0.02            # G72 pull-off (45°) after each facing pass
 CONTOUR_MILL = {"type": "contour", "tool": 2, "tool_dia": 0.5, "stepdown": 0.25, "leave": 0.0,
                 "bottom_offset": 0.0, "direction": "climb", "rpm": 5000.0, "feed": 30.0, "plunge": 10.0,
                 "lead": 0.1, "clearance": 0.5}
@@ -383,11 +384,11 @@ def face_toolpath(bbox, setup: dict, op: dict, radius: float = 0.0) -> list[tupl
     levels = _levels(z_stock, z_part + op["leave"], op["stepdown"])
     z_start = z_stock + op["clearance"]
     moves.append(("rapid", (x_out, 0.0, z_start)))
-    if op.get("output") == "cycle":               # G94: Z in rapid, face in X, feed back out in Z
+    if op.get("output") == "cycle":               # G72: Z in rapid, face in X, 45° pull-off, rapid back out
         for z in levels:
-            moves += [("rapid", (x_out, 0.0, z)), ("feed", (x_end, 0.0, z)), ("feed", (x_end, 0.0, z_start)),
-                      ("rapid", (x_out, 0.0, z_start))]
-        return moves
+            moves += [("rapid", (x_out, 0.0, z)), ("feed", (x_end, 0.0, z)),
+                      ("rapid", (x_end + FACE_PULL, 0.0, z + FACE_PULL)), ("rapid", (x_out, 0.0, z + FACE_PULL))]
+        return moves + [("rapid", (x_out, 0.0, z_start))]
     for z in levels:
         moves.append(("rapid", (x_out, 0.0, z)))
         moves.append(("feed", (x_end, 0.0, z)))
@@ -765,7 +766,7 @@ def describe_op(setup: dict, op: dict) -> str:
     if setup["type"] == MILLING:
         return f"Face · Ø{op['tool_dia']:.3f} tool · {op['stepover']:.0f}% stepover · {op['stepdown']:.3f} DOC"
     return (f"Face · {op['stepdown']:.3f} per pass · {op['sfm']:.0f} SFM · {op['ipr']:.4f} IPR"
-            + (" · G94 cycle" if op.get("output") == "cycle" else ""))
+            + (" · G72 cycle" if op.get("output") == "cycle" else ""))
 
 
 def stock_snap_points(bbox, setup: dict) -> list[tuple]:

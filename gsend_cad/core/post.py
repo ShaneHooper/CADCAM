@@ -10,6 +10,7 @@ post writes it as a diameter). Inch, absolute, one tool change per operation. Co
 from __future__ import annotations
 
 from . import cam
+from .cam import FACE_PULL
 
 CONTROLLERS = {"haas": "Haas", "fanuc": "Fanuc (generic)"}
 OFFSETS = ["G54", "G55", "G56", "G57", "G58", "G59"]
@@ -115,7 +116,7 @@ def _lathe_op(setup, op, moves, offset, coolant, controller="haas", n=100, g71=N
     if kind == "drill":
         return _lathe_drill(op, moves, offset, coolant, controller)
     what = {"rough": "OD ROUGH", "finish": "CONTOUR", "face": "FACE"}[kind] + \
-        ({"rough": " G71 CYCLE", "finish": " G70 CYCLE", "face": " G94 CYCLE"}[kind] if cycle else "")
+        ({"rough": " G71 CYCLE", "finish": " G70 CYCLE", "face": " G72 CYCLE"}[kind] if cycle else "")
     if kind == "finish" and cycle:
         prof = _contour(moves, op)
         ref = next(((p, q) for c, p, q in reversed(g71 or []) if len(c) == len(prof) and
@@ -134,7 +135,7 @@ def _lathe_op(setup, op, moves, offset, coolant, controller="haas", n=100, g71=N
                 (["M09"] if coolant else []) + ["M05"]
         if rough and g71 is not None:
             g71.append((_contour(moves, op), n, n + 1))
-        return L + (_g71(moves, op, m, controller, n) if rough else _g94(moves, op, m)) + (["M09"] if coolant else []) + ["M05"]
+        return L + (_g71(moves, op, m, controller, n) if rough else _g72(moves, op, m, controller, n)) + (["M09"] if coolant else []) + ["M05"]
     for kind, (x, _y, z) in moves:                    # X radius -> diameter
         words = [("G", "G00" if kind == "rapid" else "G01"), ("X", num(x * 2)), ("Z", num(z))]
         if kind == "feed":
@@ -146,15 +147,23 @@ def _lathe_op(setup, op, moves, offset, coolant, controller="haas", n=100, g71=N
     return [x for x in L if x is not None]
 
 
-def _g94(moves, op, m):
-    """Facing as a G94 canned cycle: one line per depth, after that only the new Z. The cycle
-    starts and ends at the start point (the first move: clear of the stock in X and Z)."""
+def _g72(moves, op, m, controller, n):
+    """Facing as a G72 stock-removal cycle. The finished face is the contour N n .. N n+1: Z down to
+    the part face first (G72 wants Z alone in the first block), then X past center. The face's
+    stock to leave goes in W. Haas takes the depth per pass as D on one line; Fanuc wants two
+    G72 blocks (W depth R retract, then P Q U W F)."""
     _k, (xs, _y, zs) = moves[0]
+    feeds = [p for k, p in moves if k == "feed"]
+    x_end = min(p[0] for p in feeds)
+    zf = min(p[2] for p in feeds) - op["leave"]
+    p, q = n, n + 1
     L = [m.block([("G", "G00"), ("X", num(xs * 2)), ("Z", num(zs))])]
-    cuts = [p for k, p in moves if k == "feed" and abs(p[2] - zs) > 1e-9]
-    for i, (x, _y, z) in enumerate(cuts):
-        L.append(f"G94 X{num(x * 2)} Z{num(z)} F{num(op['ipr'])}" if i == 0 else f"Z{num(z)}")
-    L.append(f"G00 X{num(xs * 2)} Z{num(zs)}")         # G00 ends the modal cycle
+    if controller == "haas":
+        L.append(f"G72 P{p} Q{q} U0. W{num(op['leave'])} D{num(op['stepdown'])} F{num(op['ipr'])}")
+    else:
+        L += [f"G72 W{num(op['stepdown'])} R{num(FACE_PULL)}",
+              f"G72 P{p} Q{q} U0. W{num(op['leave'])} F{num(op['ipr'])}"]
+    L += [f"N{p} G00 Z{num(zf)}", f"N{q} G01 X{num(x_end * 2)}", f"G00 X{num(xs * 2)} Z{num(zs)}"]
     return L
 
 

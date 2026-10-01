@@ -376,9 +376,12 @@ def test_post_mill_and_lathe():
     o3 = cam.validate_op(t, {**o2, "output": "cycle"})
     g = post.post_setup(t, [(o3, cam.face_toolpath(((-1, -1, 0), (1, 1, 3)), t, o3, 1.0))], "haas", 1001)
     lines = g.splitlines()
-    i = lines.index("G94 X-0.04 Z-0.0167 F0.008")               # canned facing cycle, then new Z only
-    assert lines[i - 1] == "G00 X2.3 Z0.1" and lines[i + 1:i + 4] == ["Z-0.0333", "Z-0.05", "G00 X2.3 Z0.1"]
-    assert "G01" not in g
+    i = lines.index("G72 P100 Q101 U0. W0. D0.02 F0.008")        # G72 facing cycle over the finished face
+    assert lines[i - 1] == "G00 X2.3 Z0.1"
+    assert lines[i + 1:i + 4] == ["N100 G00 Z-0.05", "N101 G01 X-0.04", "G00 X2.3 Z0.1"]
+    assert "G94" not in g
+    g = post.post_setup(t, [(o3, cam.face_toolpath(((-1, -1, 0), (1, 1, 3)), t, o3, 1.0))], "fanuc", 1001)
+    assert "G72 W0.02 R0.02\nG72 P100 Q101 U0. W0. F0.008\nN100 G00 Z-0.05" in g
     with pytest.raises(ValueError):
         post.post_setup(t, [], "haas", 1001)
 

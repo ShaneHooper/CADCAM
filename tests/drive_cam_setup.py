@@ -197,7 +197,7 @@ check("Face opens on the turning setup with turning fields",
       and o.panel.groups["turning"].isVisible() and not o.panel.groups["milling"].isVisible())
 o.panel.boxes[("turning", "stepdown")].setValue(0.02)
 o.panel.output.setCurrentIndex(o.panel.output.findData("cycle"))
-check("turning Face has the Output choice (G94 cycle)", o.panel.output.isVisible() and o.op()["output"] == "cycle")
+check("turning Face has the Output choice (G72 cycle)", o.panel.output.isVisible() and o.op()["output"] == "cycle")
 check("preview says 3 passes (0.05 face stock / 0.02)", o.panel.info.text().startswith("3 depth passes"))
 shot("cam_04_face_turning")
 key(Qt.Key_Return)
@@ -257,7 +257,7 @@ key(Qt.Key_Return)
 check("Contour1 saved after the rough", [x["name"] for x in st["ops"]] == ["Face", "OD Rough", "Contour"])
 from gsend_cad.core import post
 g = post.post_setup(st, [(cam.validate_op(st, x), op_moves(win, st, x)[0]) for x in st["ops"]], "haas", 1)
-check("post writes G94 face + G71 rough with its contour", "G94 " in g and "G71 P200 Q201" in g and "N200 G00 X1.\n" in g and "X1.5\n" in g
+check("post writes G72 face + G71 rough with its contour", "G72 P100 Q101" in g and "G71 P200 Q201" in g and "N200 G00 X1.\n" in g and "X1.5\n" in g
       and "G70 P200 Q201" in g)
 
 win.select_tab("milling")
