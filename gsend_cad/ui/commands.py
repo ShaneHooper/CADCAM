@@ -557,6 +557,7 @@ class SketchSession:
         self.sel: int | None = None          # entity whose exact values are in the palette
         self.gen = 0                         # bumps when the palette's fields are rebuilt
         self.palette = SketchPalette(self)
+        self.multi: list = []                # shapes picked with a selection box (Delete, Rotate / Mirror / Pattern)
         self.xpanel = None                   # Rotate / Mirror / Pattern panel while that tool is on
         self.picked: list = []               # entities those tools work on
         self.xpick = None                    # "center" / "line": the next click picks that
@@ -571,7 +572,29 @@ class SketchSession:
         self.hist.append((list(self.ents), list(self.origin)))
         self.redo_stack.clear()
 
+    def box_ok(self) -> bool:
+        """Left drag boxes shapes in Select and in Rotate / Mirror / Pattern (not while drawing)."""
+        return (self.tool is None or self.tool in XFORM_TOOLS) and not self.xpick
+
+    def on_box(self, rect, crossing: bool):
+        """A selection box: left to right = shapes wholly inside, right to left = any it touches."""
+        hits = [i for i, e in enumerate(self.ents)
+                if self.vp.box_hit([[pl.to_world(self.frame, q, 0.0) for q in sk.entity_points(e)]], rect, crossing)]
+        if self.tool in XFORM_TOOLS:
+            self.picked += [i for i in hits if i not in self.picked]
+            self.xform_preview()
+            return
+        if len(hits) == 1:
+            self.select(hits[0])
+            return
+        self.select(None)
+        self.multi = hits
+        self.redraw()
+        if hits:
+            self.win.message(f"{len(hits)} shapes selected · Delete removes them · Rotate / Mirror / Pattern use them")
+
     def select(self, i: int | None):
+        self.multi = []
         i = i if i is not None and 0 <= i < len(self.ents) else None
         self.sel = i
         self.gen += 1
@@ -701,10 +724,13 @@ class SketchSession:
         if self.model_edges:
             self.vp.add_lines("plane_edges", [[pl.to_world(self.frame, q, 0.003) for q in e["pts"]]
                                               for e in self.model_edges], color=theme.FG3, width=1.0)
-        others = [e for i, e in enumerate(self.ents) if i != self.sel]
+        others = [e for i, e in enumerate(self.ents) if i != self.sel and i not in self.multi]
         self.vp.add_lines("sketch", self._lines(others))
         if self.sel is not None:
             self.vp.add_lines("sel", self._lines([self.ents[self.sel]], 0.005), color=theme.FG, width=2.6)
+        self.multi = [i for i in self.multi if 0 <= i < len(self.ents)]
+        if self.multi:
+            self.vp.add_lines("sel", self._lines([self.ents[i] for i in self.multi], 0.005), color=theme.FG, width=2.6)
         self.palette.update_list(self.ents)
         self.draw_dims(render=False)
         self.win.refresh_tree()
@@ -929,6 +955,14 @@ class SketchSession:
             self.undo()
         elif k == Qt.Key_Y and ev.modifiers() & Qt.ControlModifier:
             self.redo()
+        elif k in (Qt.Key_Delete, Qt.Key_Backspace) and self.multi:
+            self._push()
+            gone = set(self.multi)
+            self.ents = [e for i, e in enumerate(self.ents) if i not in gone]
+            self.origin = [o for i, o in enumerate(self.origin) if i not in gone]
+            self.select(None)
+            self.redraw()
+            self.vp.show_toast(f"{len(gone)} shapes deleted · Ctrl+Z brings them back")
         elif k in (Qt.Key_Delete, Qt.Key_Backspace) and self.sel is not None:
             self.delete_ent(self.sel)
         elif k == Qt.Key_L:
@@ -970,7 +1004,7 @@ class SketchSession:
 
     # ---- Rotate / Mirror / Pattern: pick shapes, set values, OK
     def _start_xform(self):
-        self.picked = [self.sel] if self.sel is not None else []
+        self.picked = list(self.multi) or ([self.sel] if self.sel is not None else [])
         self.xpick, self.mirror_line = None, None
         self.xpanel = XformPanel(self, self.tool)
         self.vp.set_side(self.xpanel)

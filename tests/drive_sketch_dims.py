@@ -293,5 +293,57 @@ check("rotate turns the hex 30° in place", abs(sk.params(s.ents[0])["ang"] - (s
 shot("sketch_xform")
 key(Qt.Key_Escape)
 win.run_tool("Cancel")
+
+# ---- selection box: left drag in the view picks bodies; in a sketch it picks shapes
+def drag(p0, p1, mod=Qt.NoModifier):
+    QTest.mousePress(vp.plotter, Qt.LeftButton, mod, p0)
+    pump(30)
+    for k in range(1, 6):
+        q = p0 + (p1 - p0) * k / 5
+        QTest.mouseMove(vp.plotter, q)
+        pump(20)
+    QTest.mouseRelease(vp.plotter, Qt.LeftButton, mod, p1)
+    pump(120)
+
+
+W, H = vp.plotter.width(), vp.plotter.height()
+drag(QPoint(5, 5), QPoint(W - 5, H - 5))
+check("box around the whole view picks every body", win.paint_sel and set(win.sel_bodies or [win.selected])
+      == {b.id for b in win.model.bodies})
+QTest.mouseClick(vp.plotter, Qt.LeftButton, Qt.NoModifier, QPoint(8, H - 8))
+pump(120)
+check("a click on empty space clears it", not win.paint_sel)
+start_xy_sketch()
+s = win.session
+key(Qt.Key_Escape)                                   # a new sketch starts in Line: Esc = Select
+s.ents += [sk.circle((-3, 0), 0.25), sk.circle((-2, 0), 0.25)]
+s.origin += [None, None]
+s.redraw()
+a, b = screen(-3.4, 0.4), screen(-2.6, -0.4)
+drag(a, b)                                           # left to right around the first circle only
+check("sketch: box left to right picks the circle inside it", s.sel == len(s.ents) - 2)
+a, b = screen(-1.9, 0.4), screen(-3.1, -0.4)
+drag(a, b)                                           # right to left, touching both
+check("sketch: box right to left picks both it touches", sorted(s.multi) == [len(s.ents) - 2, len(s.ents) - 1])
+win.run_tool("Mirror")
+check("Mirror starts with the boxed shapes", sorted(s.picked) == [len(s.ents) - 2, len(s.ents) - 1])
+key(Qt.Key_Escape)
+s.multi = [len(s.ents) - 2, len(s.ents) - 1]
+key(Qt.Key_Delete)
+check("Delete removes every boxed shape", not any(e["type"] == "circle" and e["c"][0] < -1.5 for e in s.ents))
+key(Qt.Key_Escape)
+win.run_tool("Cancel")
+pump()
+cam_ = vp.plotter.camera
+d0 = cam_.parallel_scale if cam_.parallel_projection else cam_.distance
+QTest.mouseMove(vp.plotter, QPoint(W // 2, H // 2))
+from PySide6.QtGui import QWheelEvent
+from PySide6.QtCore import QPointF
+ev = QWheelEvent(QPointF(W / 2, H / 2), QPointF(vp.plotter.mapToGlobal(QPoint(W // 2, H // 2))), QPoint(0, 0),
+                 QPoint(0, -120), Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False)
+QApplication.sendEvent(vp.plotter, ev)
+pump(120)
+d1 = cam_.parallel_scale if cam_.parallel_projection else cam_.distance
+check("wheel toward you zooms in", d1 < d0)
 print("FAILURES:", failures or "none")
 sys.exit(1 if failures else 0)

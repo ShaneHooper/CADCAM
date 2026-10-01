@@ -26,11 +26,16 @@ bottom, so you can go back and change it.</p>
 </table>
 <h3>Moving the view</h3>
 <table>
-<tr><td class="k">Left drag</td><td>Orbit (spin the part)</td></tr>
+<tr><td class="k">Left drag</td><td>Selection box. Left to right picks what's wholly inside (solid box); right
+to left picks anything it touches (dashed green box). Bodies in the view; sketch shapes while sketching (Select,
+Rotate, Mirror, Pattern). Ctrl adds to what's picked. Delete removes them all. While a command like Extrude or a
+toolpath is open, left drag orbits as before.</td></tr>
+<tr><td class="k">Left click</td><td>Picks the body under it (Ctrl: add / drop); empty space clears.</td></tr>
+<tr><td class="k">Shift + left drag</td><td>Orbit (spin the part)</td></tr>
 <tr><td class="k">Shift + wheel-button drag</td><td>Orbit freely in any direction. Works while sketching too (left click draws there).</td></tr>
 <tr><td class="k">Right drag</td><td>Pan</td></tr>
 <tr><td class="k">Wheel-button drag</td><td>Pan</td></tr>
-<tr><td class="k">Mouse wheel</td><td>Zoom</td></tr>
+<tr><td class="k">Mouse wheel</td><td>Zoom (toward you zooms in)</td></tr>
 <tr><td class="k">Home key</td><td>Back to the home view</td></tr>
 </table>
 <h3>Right-click in the view: Direct View / Rotate View</h3>

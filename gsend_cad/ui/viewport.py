@@ -8,8 +8,8 @@ from functools import partial
 import numpy as np
 import pyvista as pv
 from pyvistaqt import QtInteractor
-from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
-from PySide6.QtWidgets import (QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QToolButton, QVBoxLayout,
+from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QTimer, Signal
+from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QToolButton, QVBoxLayout,
                                QWidget)
 from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
 from vtkmodules.vtkRenderingCore import vtkBillboardTextActor3D, vtkCellPicker, vtkMapper, vtkRenderer
@@ -61,6 +61,9 @@ class Viewport(QWidget):
         self._press = None
         self._right_taken = False            # a right-click a session handled: swallow its release too
         self._rpress = None                  # right press spot: a release there (no pan) = context menu
+        self._box0 = None                    # left press spot of a selection box (None = not boxing)
+        self.box_cb = None                   # no command running: box / click selects bodies (main window)
+        self.click_cb = None
 
         lay = QGridLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -83,8 +86,11 @@ class Viewport(QWidget):
         self.top.SetActiveCamera(p.renderer.GetActiveCamera())
         self.top.InteractiveOff()
         rw.AddRenderer(self.top)
-        # left drag orbit, right drag pan, wheel zoom (the prototype's controls)
+        # left drag: selection box (Shift + left drag orbits), right drag pan, wheel zoom
         style = vtkInteractorStyleTrackballCamera()
+        # wheel turned the other way round from VTK's (Shane, 10/1/26): toward you zooms in
+        style.AddObserver("MouseWheelForwardEvent", lambda o, e: o.OnMouseWheelBackward())
+        style.AddObserver("MouseWheelBackwardEvent", lambda o, e: o.OnMouseWheelForward())
         style.AddObserver("RightButtonPressEvent", lambda o, e: o.StartPan())
         style.AddObserver("RightButtonReleaseEvent", lambda o, e: o.EndPan())
         # wheel button: drag pans; Shift + wheel button drag rotates freely (trackball, any direction)
@@ -119,6 +125,15 @@ class Viewport(QWidget):
         self.plotter.camera.view_angle = 35
         self.plotter.renderer.ResetCameraClippingRange()
         self.plotter.render()
+
+    def body_at(self, pos: QPoint):
+        """Index (in show_bodies order) of the body under the mouse, or None."""
+        picker = vtkCellPicker()
+        picker.SetTolerance(0.0005)
+        r = self.plotter.devicePixelRatioF()
+        picker.Pick(pos.x() * r, (self.plotter.height() - pos.y()) * r, 0, self.plotter.renderer)
+        a = picker.GetActor()
+        return self._actor_body.get(id(a)) if a is not None else None
 
     def pick_world(self, pos: QPoint):
         """World point on a body under the mouse, or None (the grid is not pickable)."""
@@ -157,18 +172,21 @@ class Viewport(QWidget):
         for a in self._body_actors:
             self.plotter.remove_actor(a, render=False)
         self._body_actors = []
+        self._actor_body = {}
         wire = self.display_mode == 2
+        selected = selected if isinstance(selected, (set, list, tuple)) else {selected}
         for b in bodies:
             v, t = b.triangles()
             if not len(t):
                 continue
             mesh = pv.PolyData(v, np.hstack([np.full((len(t), 1), 3), t]).ravel())
-            sel = b.id == selected
+            sel = b.id in selected
             a = self.plotter.add_mesh(mesh, color=theme.ACCENT if sel else theme.BODY, smooth_shading=True,
                                       split_sharp_edges=True, feature_angle=30,
                                       style="wireframe" if wire else "surface", specular=0.3, specular_power=24,
                                       ambient=0.1 if not sel else 0.3, diffuse=0.6, render=False)
             self._body_actors.append(a)
+            self._actor_body[id(a)] = b.id
             if self.display_mode != 1:
                 e = self.plotter.add_mesh(polyline_mesh(b.edge_polylines()), color="#0a0a0a" if not wire else theme.BODY,
                                           line_width=1.2, lighting=False, render=False)
@@ -221,6 +239,59 @@ class Viewport(QWidget):
         q = np.c_[pts, np.ones(len(pts))] @ M.T
         q = q[:, :3] / q[:, 3:4]
         return np.c_[(q[:, 0] + 1) / 2 * w, (1 - q[:, 1]) / 2 * h, (q[:, 2] + 1) / 2]
+
+    # ---------- selection box (left drag) ----------
+    def _box_ok(self) -> bool:
+        """Left drag draws a selection box: with no command running (bodies), or in a sketch
+        session that wants one (Select, Rotate / Mirror / Pattern). Everything else orbits."""
+        if self.handler is None:
+            return True
+        ok = getattr(self.handler, "box_ok", None)
+        return bool(ok and ok())
+
+    def _show_box(self, p0, p1):
+        if not hasattr(self, "band"):
+            self.band = QFrame(self)
+            self.band.setAttribute(Qt.WA_TransparentForMouseEvents)
+        crossing = p1.x() < p0.x()           # right to left: anything it touches (dashed, green)
+        self.band.setStyleSheet(f"background: rgba(47,155,255,40); border: 1px {'dashed' if crossing else 'solid'} "
+                                f"{theme.OK if crossing else theme.ACCENT};")
+        r = QRect(self.plotter.mapTo(self, p0), self.plotter.mapTo(self, p1)).normalized()
+        self.band.setGeometry(r)
+        self.band.show()
+        self.band.raise_()
+
+    def box_hit(self, polylines, rect: QRect, crossing: bool) -> bool:
+        """Does a shape (world polylines) fall in a screen box? Window (left to right): all of it
+        inside. Crossing (right to left): any part inside or crossing the box's edge."""
+        x0, y0, x1, y1 = rect.left(), rect.top(), rect.right(), rect.bottom()
+        segs = [self.project(np.asarray(pl_, float))[:, :2] for pl_ in polylines if len(pl_)]
+        if not segs:
+            return False
+        pts = np.vstack(segs)
+        inside = (pts[:, 0] >= x0) & (pts[:, 0] <= x1) & (pts[:, 1] >= y0) & (pts[:, 1] <= y1)
+        if not crossing:
+            return bool(inside.all())
+        if inside.any():
+            return True
+        for s in segs:                       # an edge passing through the box with no point in it
+            for (ax, ay), (bx, by) in zip(s, s[1:]):
+                t0, t1 = 0.0, 1.0
+                dx, dy = bx - ax, by - ay
+                for p, q in ((-dx, ax - x0), (dx, x1 - ax), (-dy, ay - y0), (dy, y1 - ay)):
+                    if abs(p) < 1e-12:
+                        if q < 0:
+                            break
+                        continue
+                    t = q / p
+                    if p < 0:
+                        t0 = max(t0, t)
+                    else:
+                        t1 = min(t1, t)
+                else:
+                    if t0 <= t1:
+                        return True
+        return False
 
     def pixel_size(self, pos: QPoint) -> float:
         """World inches covered by one screen pixel on the active plane near `pos` (for picking)."""
@@ -346,6 +417,12 @@ class Viewport(QWidget):
     # ---------- mouse routing ----------
     def eventFilter(self, obj, ev):
         t = ev.type()
+        if t == QEvent.MouseMove and self._box0 is not None and ev.buttons() & Qt.LeftButton:
+            p = ev.position().toPoint()
+            if (p - self._box0).manhattanLength() > 4:
+                self._show_box(self._box0, p)
+            if self.handler is None:
+                return True                      # (no orbit while boxing)
         if t == QEvent.MouseMove:
             w = self.world_at(ev.position().toPoint())
             if w:
@@ -375,6 +452,10 @@ class Viewport(QWidget):
             # a fast second click arrives as DblClick: it must count as a click, and VTK must
             # never see it (it starts an orbit whose release we swallow = stuck rotating)
             self._press = ev.position().toPoint()
+            boxing = self._box_ok() and not (ev.modifiers() & Qt.ShiftModifier)   # Shift+drag orbits
+            self._box0 = self._press if boxing else None
+            if boxing and self.handler is None:
+                return True                          # VTK must not start an orbit
             if self._face_view and not (self.handler and self.handler.captures_left):
                 self._face_view = False              # orbiting off TOP / FRONT / ...: not a face view now
                 self.apply_projection(render=False)
@@ -384,6 +465,23 @@ class Viewport(QWidget):
                     self.handler.on_click(w, ev)
                 return True          # no orbit while sketching
             return False
+        if t == QEvent.MouseButtonRelease and ev.button() == Qt.LeftButton and self._box0 is not None:
+            p0, self._box0, self._press = self._box0, None, None
+            p1 = ev.position().toPoint()
+            if hasattr(self, "band"):
+                self.band.hide()
+            dragged = (p1 - p0).manhattanLength() > 4
+            rect, crossing = QRect(p0, p1).normalized(), p1.x() < p0.x()
+            if self.handler is None:
+                if dragged and self.box_cb:
+                    self.box_cb(rect, crossing, bool(ev.modifiers() & Qt.ControlModifier))
+                elif not dragged and self.click_cb:
+                    self.click_cb(p1, bool(ev.modifiers() & Qt.ControlModifier))
+                return True
+            self.plotter.iren.interactor.GetInteractorStyle().OnLeftButtonUp()
+            if dragged:
+                self.handler.on_box(rect, crossing)
+            return True
         if t == QEvent.MouseButtonRelease and ev.button() == Qt.LeftButton:
             p0, self._press = self._press, None
             if self.handler and self.handler.captures_left:

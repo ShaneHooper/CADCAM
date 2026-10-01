@@ -19,7 +19,8 @@ from .commands import (EdgeSession, ExtrudeSession, OpSession, PlanePickSession,
 from .panels import Browser, Ribbon, StatusBar, Timeline, TopBar
 
 FILE_FILTER = f"{APP_NAME} (*.gcad);;All files (*)"
-DEFAULT_MSG = "Left drag: orbit · Shift + wheel-button drag: orbit (works while sketching) · Right drag: pan · Wheel: zoom · Click a feature in the timeline to roll back"
+DEFAULT_MSG = ("Left drag: selection box · Shift + left drag: orbit (Shift + wheel-button drag works while sketching) · "
+               "Right drag: pan · Wheel: zoom · Click a feature in the timeline to roll back")
 
 
 class MainWindow(QMainWindow):
@@ -38,6 +39,7 @@ class MainWindow(QMainWindow):
         self.selected = "body1"
         self.sel_node = None             # last sketch / body picked in the Browser (for Delete)
         self.paint_sel = False           # like the prototype: highlight only after a click
+        self.sel_bodies: list = []       # bodies picked in the view (a box can pick several)
         self.session = None
         fonts = fonts or {"g": "DejaVu Sans", "wm": "DejaVu Sans"}
 
@@ -109,18 +111,22 @@ class MainWindow(QMainWindow):
         self.topbar.redo.connect(self.redo)
         self.viewport.cursor.connect(self.status.set_coord)
         self.viewport.key_cb = self.handle_key
+        self.viewport.box_cb = self.box_select           # left drag / click in the view picks bodies
+        self.viewport.click_cb = self.click_select
         nb = self.viewport.nav_buttons
         nb["fit"].clicked.connect(lambda: self.viewport.set_view("home"))
         nb["disp"].clicked.connect(self.cycle_display)
         for k in ("orbit", "view", "pan", "zoom"):
-            nb[k].clicked.connect(lambda _=False, k=k: self.message(f"{k.upper()}: left drag orbits, right drag pans, wheel zooms"))
+            nb[k].clicked.connect(lambda _=False, k=k: self.message(
+                f"{k.upper()}: Shift + left drag (or Shift + wheel drag) orbits, right drag pans, wheel zooms · "
+                "left drag boxes a selection"))
         self.message(DEFAULT_MSG)
         self.rebuild()
 
     # ---------------------------------------------------------- model / view sync
     def rebuild(self, fit=False):
         self.model = self.kernel.build(self.doc)
-        sel = self.selected if self.paint_sel else None
+        sel = self._shown_sel()
         self.viewport.show_bodies(self.model.bodies, sel)
         self.draw_sketches()
         self.refresh_tree()
@@ -787,13 +793,48 @@ class MainWindow(QMainWindow):
         if nid.startswith("body"):
             self.selected = nid
             self.paint_sel = True
+            self.sel_bodies = [nid]
             self.viewport.show_bodies(self.model.bodies, nid)
             self.refresh_props()
         self.status.sel.setText("SEL: " + (nid.upper() if nid else "—"))
 
+    def _shown_sel(self):
+        return set(self.sel_bodies or [self.selected]) if self.paint_sel else None
+
+    def box_select(self, rect, crossing: bool, add: bool = False):
+        """Left drag in the view (no command running): bodies in the box. Left to right = wholly
+        inside, right to left = any it touches; Ctrl adds to what's picked."""
+        hits = [b.id for b in self.model.bodies if self.viewport.box_hit(b.edge_polylines(), rect, crossing)]
+        if add and self.paint_sel:
+            hits = list(dict.fromkeys(self.sel_bodies + hits))
+        self._pick_bodies(hits)
+
+    def click_select(self, pos, add: bool = False):
+        """A click in the view: the body under it (Ctrl: add / drop it); empty space clears."""
+        bid = self.viewport.body_at(pos)
+        if add and bid and self.paint_sel:
+            hits = [b for b in self.sel_bodies if b != bid] + ([] if bid in self.sel_bodies else [bid])
+        else:
+            hits = [bid] if bid else []
+        self._pick_bodies(hits)
+
+    def _pick_bodies(self, hits):
+        if len(hits) == 1:
+            self.select_node(hits[0])
+            return
+        self.sel_bodies = hits
+        self.paint_sel = bool(hits)
+        self.sel_node = hits[0] if hits else None
+        if hits:
+            self.selected = hits[0]
+        self.viewport.show_bodies(self.model.bodies, self._shown_sel())
+        self.status.sel.setText(f"SEL: {len(hits)} BODIES" if hits else "SEL: —")
+        if hits:
+            self.message(f"{len(hits)} bodies selected · Delete removes them")
+
     def cycle_display(self):
         self.viewport.cycle_display()
-        self.viewport.show_bodies(self.model.bodies, self.selected if self.paint_sel else None)
+        self.viewport.show_bodies(self.model.bodies, self._shown_sel())
 
     def export(self, kind: str):
         if not self.model.bodies:
@@ -903,6 +944,10 @@ class MainWindow(QMainWindow):
             self.redo()
         elif k == Qt.Key_F1:
             self.show_docs()
+        elif k == Qt.Key_Delete and self.session is None and self.paint_sel and len(self.sel_bodies) > 1:
+            for bid in list(self.sel_bodies):            # every body the box picked (each its own Ctrl+Z)
+                self.delete_node(bid)
+            self.sel_bodies = []
         elif k == Qt.Key_Delete and self.session is None and self.sel_node:
             self.delete_node(self.sel_node)
         elif self.session is not None:
