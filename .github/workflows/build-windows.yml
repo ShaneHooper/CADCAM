@@ -32,6 +32,8 @@ jobs:
     environment: production-signing     # scopes the AZURE_* secrets; the OIDC subject Azure trusts
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # full history: Help → About's version counts the commits
 
       # Signing is on only when this repo's production-signing environment has the secrets.
       # Checked in a step (where environment secrets are always visible); sets env.CAN_SIGN for

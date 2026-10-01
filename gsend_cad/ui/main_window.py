@@ -767,10 +767,13 @@ class MainWindow(QMainWindow):
         self.docs.activateWindow()
 
     def show_about(self):
-        from .. import __version__
+        from ..buildinfo import info, pretty_date
+        b = info()
+        when = f"<br>Updated {pretty_date(b['date'])}" if b.get("date") else ""
+        commit = f" <span style='color:{theme.FG3}'>({b['commit']})</span>" if b.get("commit") else ""
         QMessageBox.about(self, f"About {APP_NAME}",
-                          f"<b>{APP_NAME}</b> {__version__}<br>Test build (Rev 1).<br><br>"
-                          "Sketch, extrude and export parts for G-SEND.IO.<br>Help → Documentation (F1) explains how.")
+                          f"<b>About {APP_NAME}</b><br><br>Version {b['version']}{commit}{when}<br><br>"
+                          "CAD/CAM for G-SEND.IO.<br>Help → Documentation (F1) explains how.")
 
     # ---------------------------------------------------------- misc actions
     def select_node(self, nid: str):

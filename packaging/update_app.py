@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SKIP = shutil.ignore_patterns("__pycache__", "*.pyc", "screenshots", "README.md")
+SKIP = shutil.ignore_patterns("__pycache__", "*.pyc", "screenshots", "README.md", "build.json")
 
 
 def app_version() -> str:
@@ -43,7 +43,22 @@ def copy_app(folder) -> Path:
         shutil.rmtree(dest)
     shutil.copytree(ROOT / "gsend_cad", dest, ignore=SKIP)
     (folder / "app" / "APP_VERSION.txt").write_text(app_version() + "\n", encoding="utf-8")
+    stamp_build(dest)
     return dest
+
+
+def stamp_build(dest: Path):
+    """build.json for Help → About: version (goes up every commit), commit, today's date."""
+    sys.path.insert(0, str(ROOT))
+    import json
+    from gsend_cad import buildinfo
+    try:
+        info = buildinfo.from_git()
+    except Exception:
+        import datetime
+        from gsend_cad import __version__
+        info = {"version": __version__, "commit": app_version(), "date": datetime.date.today().isoformat()}
+    (dest / "build.json").write_text(json.dumps(info) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
