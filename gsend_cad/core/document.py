@@ -251,11 +251,7 @@ class Document:
         while any(x["id"] == f"setup{n}" for x in self.setups):
             n += 1
         s["id"] = f"setup{n}"
-        taken = {x["name"] for x in self.setups}
-        k = len(self.setups) + 1
-        while f"Setup{k}" in taken:
-            k += 1
-        s.setdefault("name", f"Setup{k}")
+        s.setdefault("name", cam.next_name("Setup", {x["name"] for x in self.setups}))
         self.setups.append(s)
         self._changed("setups")
         return s
@@ -282,12 +278,7 @@ class Document:
         while f"op{n}" in ids:
             n += 1
         o["id"] = f"op{n}"
-        base = cam.OP_TYPES[o["type"]]
-        names = {x["name"] for x in st.get("ops", [])}
-        k = 1
-        while f"{base}{k}" in names:
-            k += 1
-        o.setdefault("name", f"{base}{k}")
+        o.setdefault("name", cam.next_name(cam.OP_TYPES[o["type"]], {x["name"] for x in st.get("ops", [])}))
         st.setdefault("ops", []).append(o)
         self._changed("setups")
         return o

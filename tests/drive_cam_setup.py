@@ -203,7 +203,7 @@ shot("cam_04_face_turning")
 key(Qt.Key_Return)
 st = win.doc.setups[-1]
 check("Face1 saved in the turning setup, listed in the Browser",
-      [x["name"] for x in st.get("ops", [])] == ["Face1"] and st["ops"][0]["id"] in win.browser.setup_ids)
+      [x["name"] for x in st.get("ops", [])] == ["Face"] and st["ops"][0]["id"] in win.browser.setup_ids)
 check("Face1 keeps the canned cycle output", st["ops"][0]["output"] == "cycle")
 
 # ---- OD Rough on the turning setup (Ø1.5 x 2 then Ø1 x 1, front at +X)
@@ -246,7 +246,7 @@ o.panel.output.setCurrentIndex(o.panel.output.findData("cycle"))
 shot("cam_04b_rough")
 key(Qt.Key_Return)
 st = win.doc.setups[-1]
-check("OD Rough1 saved after Face1", [x["name"] for x in st["ops"]] == ["Face1", "OD Rough1"])
+check("OD Rough1 saved after Face1", [x["name"] for x in st["ops"]] == ["Face", "OD Rough"])
 win.run_tool("Contour")
 o = win.session
 check("turning Contour opens with the G70 box", o.kind == "finish" and o.panel.g70.isVisible()
@@ -254,7 +254,7 @@ check("turning Contour opens with the G70 box", o.kind == "finish" and o.panel.g
 o.panel.g70.setChecked(True)
 shot("cam_04c_contour")
 key(Qt.Key_Return)
-check("Contour1 saved after the rough", [x["name"] for x in st["ops"]] == ["Face1", "OD Rough1", "Contour1"])
+check("Contour1 saved after the rough", [x["name"] for x in st["ops"]] == ["Face", "OD Rough", "Contour"])
 from gsend_cad.core import post
 g = post.post_setup(st, [(cam.validate_op(st, x), op_moves(win, st, x)[0]) for x in st["ops"]], "haas", 1)
 check("post writes G94 face + G71 rough with its contour", "G94 " in g and "G71 P200 Q201" in g and "N200 G00 X1.\n" in g and "X1.5\n" in g
@@ -311,12 +311,12 @@ check("contour preview has passes", "depth pass" in o.panel.info.text())
 shot("cam_07_contour")
 key(Qt.Key_Return)
 cop = win.doc.setup(ms["id"])["ops"][-1]
-check("Contour1 saved", cop["type"] == "contour" and cop["name"] == "Contour1")
+check("Contour1 saved", cop["type"] == "contour" and cop["name"] == "Contour")
 win.browser.simulate.emit(cop["id"])
 pump()
 sim = win.session
 check("right-click Simulate opens the simulator on that op", sim.__class__.__name__ == "SimSession"
-      and len(sim.world) > 10 and sim.panel.step.text().endswith("Contour1"))
+      and len(sim.world) > 10 and sim.panel.step.text().endswith("Contour"))
 sim.seek(sim.total / 2)
 mid = tuple(sim.tool.GetPosition())
 check("scrubbing moves the tool along the path", mid != (0.0, 0.0, 0.0) and "/" in sim.panel.time.text())

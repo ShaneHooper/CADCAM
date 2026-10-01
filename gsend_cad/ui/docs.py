@@ -291,7 +291,7 @@ removes it (Ctrl+Z brings it back); F2 renames it. Click one to show its stock.<
 <p>Faces the stock down to the part (plus any stock to leave). Make a Setup first.</p>
 <ol>
 <li>CAM → <b>Face</b> (Milling or Turning tab). It opens on the setup you last picked, or a setup
-of the tab's type (pick a setup in the Browser first to choose another). It's named Face1, Face2...
+of the tab's type (pick a setup in the Browser first to choose another). It's named Face (a second one Face2, then Face3...)
 (rename it in the Browser).</li>
 <li><b>Tool</b>: picked from the Tool Library (the tools that fit, e.g. face and end mills). <b>New tool…</b>
 at the bottom of the list opens the library with a new tool ready to fill in.</li>

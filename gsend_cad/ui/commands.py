@@ -1408,8 +1408,7 @@ class SetupSession:
         self.panel = SetupPanel(self)
         p = self.panel
         self._loading = True
-        n = len(win.doc.setups) + 1
-        p.name.setText(edit["name"] if edit else f"Setup{n}")
+        p.name.setText(edit["name"] if edit else cam.next_name("Setup", {x["name"] for x in win.doc.setups}))
         start = edit or cam.new_setup(kind)
         self._fill(start)
         self._loading = False
@@ -1906,12 +1905,7 @@ class OpSession:
         if "output" in op:
             p.output.setCurrentIndex(max(0, p.output.findData(op["output"])))
             p.g70.setChecked(op["output"] == "cycle")
-        base = cam.OP_TYPES[self.kind]
-        names = {o["name"] for o in st.get("ops", [])}
-        k = 1
-        while f"{base}{k}" in names:
-            k += 1
-        p.name.setText(op.get("name", f"{base}{k}"))
+        p.name.setText(op.get("name", cam.next_name(cam.OP_TYPES[self.kind], {o["name"] for o in st.get("ops", [])})))
         self._loading = False
         for stype, g in p.groups.items():
             g.setVisible(stype == st["type"])

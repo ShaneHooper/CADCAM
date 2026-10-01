@@ -244,7 +244,7 @@ def test_setup_defaults_and_document_roundtrip():
     d = Document()
     a = d.add_setup(cam.new_setup("milling"))
     b = d.add_setup(cam.new_setup("turning"))
-    assert (a["id"], a["name"], b["name"]) == ("setup1", "Setup1", "Setup2")
+    assert (a["id"], a["name"], b["name"]) == ("setup1", "Setup", "Setup2")
     d2 = Document.from_dict(d.to_dict())
     assert [s["type"] for s in d2.setups] == ["milling", "turning"]
     d2.remove_setup("setup1")
@@ -339,12 +339,14 @@ def test_ops_in_document():
     d = Document()
     st = d.add_setup(cam.new_setup("milling"))
     o = d.add_op(st["id"], cam.new_op(st))
-    assert (o["id"], o["name"]) == ("op1", "Face1")
+    assert (o["id"], o["name"]) == ("op1", "Face")
+    assert d.add_op(st["id"], cam.new_op(st))["name"] == "Face2"                  # a second one gets a 2
+    d.remove_op("op2")
     d.update_op("op1", {**o, "stepover": 50})
     d.update_setup(st["id"], {**d.setup(st["id"]), "stock": {"mode": "offset", "side": .2, "top": .1, "bottom": 0}})
     assert d.setup(st["id"])["ops"][0]["stepover"] == 50         # editing the setup keeps its ops
     d2 = Document.from_dict(d.to_dict())
-    assert d2.op("op1")[1]["name"] == "Face1"
+    assert d2.op("op1")[1]["name"] == "Face"
     with pytest.raises(ValueError):
         d.update_op("op1", {**o, "tool_dia": 0})
     d.remove_op("op1")

@@ -4,7 +4,7 @@ A setup is what Fusion calls a Setup: which kind of machine (milling or turning)
 body, the stock around it and where the work zero (WCS) sits. It lives in
 Document.setups (saved in the .gcad file), not in the design timeline.
 
-    {"id": "setup1", "name": "Setup1", "type": "milling", "body": "all" | body id,
+    {"id": "setup1", "name": "Setup", "type": "milling", "body": "all" | body id,
      "stock": {"mode": "offset", "side": .1, "top": .05, "bottom": 0,       stock per side
                or "mode": "size", "x": 4.25, "y": 3.25, "z": 1.5, "top": .05},  fixed size, centered
                                                                                in X/Y, `top` above
@@ -252,6 +252,16 @@ TURN_DRILL_CYCLES = ("drill", "peck")          # G73 is a pattern cycle on a lat
 DRILL_TIP = 0.5 / math.tan(math.radians(59))   # 118° point: tip length = 0.3004 x drill Ø
 PECK_GAP = 0.02                                # rapid back down to this far above the last peck
 OP_TYPES = {"face": "Face", "contour": "Contour", "rough": "OD Rough", "finish": "Contour", "drill": "Drill"}
+
+
+def next_name(base: str, taken) -> str:
+    """The first one is just its name (Setup, Face, OD Rough); a second gets a 2 (Face2), ..."""
+    if base not in taken:
+        return base
+    k = 2
+    while f"{base}{k}" in taken:
+        k += 1
+    return f"{base}{k}"
 
 
 def new_op(setup: dict, kind: str = "face") -> dict:
