@@ -656,3 +656,174 @@ def recorner(ents, origin, i: int, size):
     del ents[i]
     del origin[i]
     return corner_op(ents, origin, P, size, "fillet" if c["type"] == "arc" else "chamfer", 1e-6)
+
+
+# ---------------------------------------------------------------- trim
+# Click a piece of a line / arc / circle: the stretch between the nearest crossings on either side
+# of the click is removed (a piece with nothing crossing it goes entirely). Rects and polygons
+# are split into lines first, like Fillet does.
+
+def _prims(e):
+    """An entity's outline as ('seg', a, b) / ('arc', c, r, a0, a1) pieces (circle: 0..360)."""
+    t = e["type"]
+    if t == "line":
+        return [("seg", e["pts"][0], e["pts"][1])]
+    if t == "circle":
+        return [("arc", e["c"], e["r"], 0.0, 360.0)]
+    if t == "arc":
+        return [("arc", e["c"], e["r"], e["a0"], e["a1"])]
+    if t in ("rect", "polygon"):
+        return [q for s in explode(e) for q in _prims(s)]
+    return []
+
+
+def _ang(c, p):
+    return math.degrees(math.atan2(p[1] - c[1], p[0] - c[0]))
+
+
+def _on_arc(q, p, eps=1e-7):
+    _, c, r, a0, a1 = q
+    if a1 - a0 >= 360 - 1e-9:
+        return True
+    d = (_ang(c, p) - a0) % 360
+    return d <= a1 - a0 + eps or d >= 360 - eps
+
+
+def _hits(q1, q2):
+    """Points where two pieces cross."""
+    eps = 1e-9
+    if q1[0] == "arc" and q2[0] == "seg":
+        q1, q2 = q2, q1
+    out = []
+    if q1[0] == "seg" and q2[0] == "seg":
+        (ax, ay), (bx, by), (cx, cy), (dx, dy) = q1[1], q1[2], q2[1], q2[2]
+        rx, ry, sx, sy = bx - ax, by - ay, dx - cx, dy - cy
+        den = rx * sy - ry * sx
+        if abs(den) < 1e-12:
+            return []                                 # parallel / in line: no single crossing
+        t = ((cx - ax) * sy - (cy - ay) * sx) / den
+        u = ((cx - ax) * ry - (cy - ay) * rx) / den
+        if -eps <= t <= 1 + eps and -eps <= u <= 1 + eps:
+            out.append([ax + t * rx, ay + t * ry])
+        return out
+    if q1[0] == "seg":                                # segment x arc
+        (ax, ay), (bx, by), (_, c, r, _a0, _a1) = q1[1], q1[2], q2
+        dx, dy = bx - ax, by - ay
+        fx, fy = ax - c[0], ay - c[1]
+        A, B, C = dx * dx + dy * dy, 2 * (fx * dx + fy * dy), fx * fx + fy * fy - r * r
+        disc = B * B - 4 * A * C
+        if A < 1e-18 or disc < -1e-12:
+            return []
+        disc = math.sqrt(max(disc, 0.0))
+        for t in {(-B - disc) / (2 * A), (-B + disc) / (2 * A)}:
+            p = [ax + t * dx, ay + t * dy]
+            if -eps <= t <= 1 + eps and _on_arc(q2, p):
+                out.append(p)
+        return out
+    (_, c1, r1, *_), (_, c2, r2, *_) = q1, q2         # arc x arc
+    d = math.hypot(c2[0] - c1[0], c2[1] - c1[1])
+    if d < 1e-12 or d > r1 + r2 + 1e-9 or d < abs(r1 - r2) - 1e-9:
+        return []
+    a = (r1 * r1 - r2 * r2 + d * d) / (2 * d)
+    h = math.sqrt(max(r1 * r1 - a * a, 0.0))
+    mx, my = c1[0] + a * (c2[0] - c1[0]) / d, c1[1] + a * (c2[1] - c1[1]) / d
+    for s in ((1, -1) if h > 1e-12 else (1,)):
+        p = [mx + s * h * (c2[1] - c1[1]) / d, my - s * h * (c2[0] - c1[0]) / d]
+        if _on_arc(q1, p) and _on_arc(q2, p):
+            out.append(p)
+    return out
+
+
+def _param(e, p):
+    """Where p sits along entity e: 0..1 on a line, degrees past a0 on an arc / circle."""
+    if e["type"] == "line":
+        (ax, ay), (bx, by) = e["pts"]
+        L = (bx - ax) ** 2 + (by - ay) ** 2
+        return ((p[0] - ax) * (bx - ax) + (p[1] - ay) * (by - ay)) / L if L else 0.0
+    return (_ang(e["c"], p) - e.get("a0", 0.0)) % 360
+
+
+def _piece(e, lo, hi):
+    """The part of line / arc e between params lo and hi (a circle: arc lo -> hi, degrees)."""
+    if e["type"] == "line":
+        (ax, ay), (bx, by) = e["pts"]
+        return _clean(line([ax + lo * (bx - ax), ay + lo * (by - ay)], [ax + hi * (bx - ax), ay + hi * (by - ay)]))
+    a0 = e.get("a0", 0.0)
+    return _clean(arc(e["c"], e["r"], a0 + lo, a0 + hi))
+
+
+def _trim_span(ents, i, p):
+    """(lo, hi, end) of the stretch of entity i around p to remove; end = the param range."""
+    e = ents[i]
+    end = 1.0 if e["type"] == "line" else (360.0 if e["type"] == "circle" else e["a1"] - e["a0"])
+    cuts = set()
+    for j, o in enumerate(ents):
+        if j == i:
+            continue
+        for q1 in _prims(e):
+            for q2 in _prims(o):
+                for h in _hits(q1, q2):
+                    t = _param(e, h)
+                    if e["type"] == "circle" or 1e-7 < t < end - 1e-7:
+                        cuts.add(round(t, 9))
+    t = _param(e, p)
+    cuts = sorted(cuts)
+    if e["type"] == "circle":
+        if len(cuts) < 2:
+            return None, None, end                    # nothing (or one thing) crossing: all of it
+        lo = max((c for c in cuts if c <= t), default=cuts[-1] - 360)
+        hi = min((c for c in cuts if c > t), default=cuts[0] + 360)
+        return lo, hi, end
+    lo = max((c for c in cuts if c <= t), default=0.0)
+    hi = min((c for c in cuts if c > t), default=end)
+    return lo, hi, end
+
+
+def trim_preview(ents, p, tol: float):
+    """The piece a Trim click at p would remove (an entity to draw), else None."""
+    i = nearest(ents, p, tol)
+    if i is None:
+        return None
+    if ents[i]["type"] in ("rect", "polygon"):
+        parts = explode(ents[i])
+        k = nearest(parts, p, tol)
+        rest = ents[:i] + ents[i + 1:] + parts[:k] + parts[k + 1:]
+        return trim_preview(rest + [parts[k]], p, tol) if k is not None else None
+    e = ents[i]
+    if e["type"] == "point":
+        return e
+    lo, hi, end = _trim_span(ents, i, p)
+    if lo is None:
+        return e
+    return _piece(e, lo, hi)
+
+
+def trim(ents, origin, p, tol: float):
+    """Trim at p: returns new (ents, origin). Raises ValueError when nothing is under p."""
+    i = nearest(ents, p, tol)
+    if i is None:
+        raise ValueError("Click on the piece of a line, arc or circle to trim")
+    ents, origin = [dict(e) for e in ents], list(origin)
+    if ents[i]["type"] in ("rect", "polygon"):        # split into sides, then trim the one clicked
+        parts = explode(ents[i])
+        ents[i] = parts[0]
+        for q in parts[1:]:
+            ents.append(q)
+            origin.append(origin[i])
+        i = nearest(ents, p, tol)
+    e = ents[i]
+    keep = []
+    if e["type"] != "point":
+        lo, hi, end = _trim_span(ents, i, p)
+        if lo is not None:
+            if e["type"] == "circle":
+                keep = [_piece(e, hi, lo + 360)]
+            else:
+                keep = ([_piece(e, 0.0, lo)] if lo > 1e-9 else []) + \
+                       ([_piece(e, hi, end)] if hi < end - 1e-9 else [])
+    o = origin[i]
+    del ents[i], origin[i]
+    for k in keep:
+        ents.append(k)
+        origin.append(o)
+    return ents, origin

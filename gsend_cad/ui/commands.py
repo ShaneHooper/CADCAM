@@ -25,14 +25,16 @@ from ..kernel import (bodies_bbox, edge_list, max_radius, model_snap_points, out
 from . import icons, theme
 
 TOOL_KEYS = {"Line": "line", "Rectangle": "rect", "Center Rect": "center_rect", "Circle": "circle",
-             "Polygon": "polygon", "Point": "point", "Fillet": "fillet", "Chamfer": "chamfer"}
+             "Polygon": "polygon", "Point": "point", "Fillet": "fillet", "Chamfer": "chamfer",
+             "Trim": "trim"}
 CORNER_TOOLS = ("fillet", "chamfer")
 HINTS = {"line": "Click start, click end. Keep clicking to chain. Esc ends the chain.",
          "rect": "Click two opposite corners.", "center_rect": "Click center, then a corner.",
          "circle": "Click center, then a point on the circle.", "polygon": "Click center, then a vertex.",
          "point": "Click to place a point.",
          "fillet": "Click a sharp corner to round it (radius: Fillet R in the palette).",
-         "chamfer": "Click a sharp corner to bevel it (Chamfer H × V in the palette)."}
+         "chamfer": "Click a sharp corner to bevel it (Chamfer H × V in the palette).",
+         "trim": "Click the piece to cut away: it goes back to the nearest crossing on each side (T)."}
 SNAP_PX = 8         # how close (screen px) the cursor must come to an end / mid / center to snap
 ORTHO_DEG = 10      # a line within this many degrees of level / plumb is held straight (Ctrl: free)
 SELECT_HINT = ("Click a line or shape (or its row in the palette) to type exact values; right-click a "
@@ -609,12 +611,26 @@ class SketchSession:
             self.vp.show_dim(f"{word} {size} · move onto a sharp corner", pos)
         self.vp.render()
 
+    def _trim_hover(self, w, pos):
+        """Trim: the piece a click would cut away, in red."""
+        self.vp.clear("preview", render=False)
+        piece = sk.trim_preview(self.ents, w, 8 * self.vp.pixel_size(pos))
+        if piece is not None:
+            self.vp.add_lines("preview", self._lines([piece]), color=theme.BAD, width=3.0)
+            self.vp.show_dim("Trim · click to cut this away", pos)
+        else:
+            self.vp.show_dim("Trim · move onto a line, arc or circle", pos)
+        self.vp.render()
+
     def on_move(self, w, ev):
         if not self.tool:
             return
         pos = ev.position().toPoint()
         if self.tool in CORNER_TOOLS:
             self._corner_hover(w, pos)
+            return
+        if self.tool == "trim":
+            self._trim_hover(w, pos)
             return
         p = self._snap(w, ev)
         self._mark_snap(p, pos)
@@ -698,6 +714,18 @@ class SketchSession:
             self.select(len(self.ents) - 1)  # the new arc / bevel line: its values show
             self._corner_hover(w, pos)
             return
+        if self.tool == "trim":
+            pos = ev.position().toPoint()
+            try:
+                ents, origin = sk.trim(self.ents, self.origin, w, 8 * self.vp.pixel_size(pos))
+            except ValueError as exc:
+                self.vp.show_toast(str(exc), bad=True)
+                return
+            self._push()
+            self.ents, self.origin = ents, origin
+            self.select(None)
+            self._trim_hover(w, pos)
+            return
         p = self._snap(w, ev)
         if self.tool == "point":
             self._add(sk.point(p))
@@ -765,6 +793,8 @@ class SketchSession:
             self.set_tool("Circle")
         elif k == Qt.Key_P:
             self.set_tool("Polygon")
+        elif k == Qt.Key_T:
+            self.set_tool("Trim")
         else:
             return False
         return True

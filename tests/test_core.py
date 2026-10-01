@@ -553,3 +553,22 @@ def test_line_position_moves_the_whole_line():
     assert sk.set_param(e, "y", 1.5)["pts"] == [[-4, 1.5], [0, 1.5]]
     assert sk.set_param(e, "x", -3)["pts"] == [[-3, 1], [1, 1]]
     assert sk.set_param(e, "y2", 2)["pts"] == [[-4, 1], [0, 2]]
+
+
+def test_sketch_trim():
+    ents = [sk.line((0, 0), (4, 0)), sk.line((2, -1), (2, 1))]                  # a cross
+    e, o = sk.trim(ents, [0, 1], (3, 0.01), 0.1)                                 # right of the crossing goes
+    assert e[-1]["pts"] == [[0, 0], [2, 0]] and o == [1, 0]
+    e, o = sk.trim([sk.line((0, 0), (4, 0))], [0], (1, 0), 0.1)                  # nothing crossing: all of it
+    assert e == [] and o == []
+    ents = [sk.circle((0, 0), 1), sk.line((-2, 0), (2, 0))]
+    e, _ = sk.trim(ents, [0, 1], (0, 1), 0.1)                                    # top half of the circle
+    assert e[-1]["type"] == "arc" and (e[-1]["a0"], e[-1]["a1"]) == (180, 360)
+    e, _ = sk.trim(ents, [0, 1], (0, 0), 0.1)                                    # the chord inside: two stubs
+    assert [x["pts"] for x in e[1:]] == [[[-2, 0], [-1, 0]], [[1, 0], [2, 0]]]
+    ents = [sk.rect((0, 0), (2, 2)), sk.line((1, -1), (1, 3))]                  # rect: split, then trimmed
+    assert sk.trim_preview(ents, (1.5, 0), 0.1)["pts"] == [[1, 0], [2, 0]]
+    e, o = sk.trim(ents, [0, 1], (1.5, 0), 0.1)
+    assert len(e) == 5 and e[-1]["pts"] == [[0, 0], [1, 0]] and o == [1, 0, 0, 0, 0]
+    with pytest.raises(ValueError):
+        sk.trim(ents, [0, 1], (9, 9), 0.1)

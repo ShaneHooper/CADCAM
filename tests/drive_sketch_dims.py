@@ -228,5 +228,25 @@ check("Ctrl draws at any angle", abs(e["pts"][1][1] - 0.25) < 1e-9)
 key(Qt.Key_Escape)
 key(Qt.Key_Escape)
 win.run_tool("Cancel")
+
+# ---- Trim: a cross of two lines, click the right arm: it goes back to the crossing
+start_xy_sketch()
+s = win.session
+s.ents += [sk.line((0, 0), (2, 0)), sk.line((1, -1), (1, 1))]
+s.origin += [None, None]
+s.redraw()
+win.run_tool("Trim")
+check("Trim is a sketch tool", s.tool == "trim")
+QTest.mouseMove(vp.plotter, screen(1.6, 0.0))
+pump(60)
+check("hovering shows the piece to cut away", vp.dim.isVisible() and "Trim" in vp.dim.text())
+shot("sketch_trim_hover")
+click(1.6, 0.0)
+check("Trim cut the right arm back to the crossing",
+      len(s.ents) == 2 and any(e["pts"] == [[0, 0], [1, 0]] for e in s.ents))
+key(Qt.Key_Z, Qt.ControlModifier)
+check("Ctrl+Z brings it back", len(s.ents) == 2 and any(e["pts"] == [[0, 0], [2, 0]] for e in s.ents))
+key(Qt.Key_Escape)
+win.run_tool("Cancel")
 print("FAILURES:", failures or "none")
 sys.exit(1 if failures else 0)

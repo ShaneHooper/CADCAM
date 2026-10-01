@@ -128,6 +128,13 @@ Extrudes already made from it keep working.</li>
 chamfer's <b>Horizontal</b> and <b>Vertical</b> legs. Its dimensions show them too; right-click one to
 change it. The corner stays put: the two sides are trimmed back to the new size and nothing else moves.</li>
 </ul>
+<h3>Trim</h3>
+<ul>
+<li>Click <b>Trim</b> (Sketch tab, Modify) or press <b>T</b>. Hover a line, arc or circle: the piece a click
+will cut away turns red. It runs to the nearest crossing on each side of the cursor.</li>
+<li>A piece with nothing crossing it is removed entirely. A circle needs two crossings to be trimmed
+into an arc. A rectangle or polygon is split into lines first. Each click is its own Ctrl+Z.</li>
+</ul>
 <h3>Closed shapes (what can be extruded)</h3>
 <p>Only closed shapes can become solid: a rectangle, circle, polygon, or lines that join
 end to end back to the start. A shape drawn <b>inside</b> another becomes a hole in it, so a

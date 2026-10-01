@@ -16,6 +16,7 @@ PATHS = {
     "hole": '<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/>',
     "fillet": '<path d="M4 20V10a6 6 0 0 1 6-6h10"/>',
     "chamfer": '<path d="M4 20V10l6-6h10"/>',
+    "trim": '<circle cx="6" cy="7" r="3"/><circle cx="6" cy="17" r="3"/><path d="M8.5 8.5 20 18M8.5 15.5 20 6"/>',
     "shell": '<path d="M4 6h16v14H4zM8 6v10h8V6"/>',
     "thread": '<path d="M7 3v18M17 3v18M7 7l10-2M7 12l10-2M7 17l10-2"/>',
     "move": '<path d="M12 3v18M3 12h18M8 7l4-4 4 4M8 17l4 4 4-4"/>',
