@@ -416,6 +416,10 @@ and feed in/rev.</li>
 <li><b>Cycle</b>: Drill (G81), Peck (G83, full retract each peck Q) or, on a mill, Chip break (G73).</li>
 <li>Blind holes are drilled to the hole's bottom. Through holes go the <b>Breakthrough</b> plus the
 drill's 118° point further. <b>R plane</b> is how far above the hole (or off the face) the feed starts.</li>
+<li><b>Milling, select holes</b>: the arrow button beside <b>Holes</b>, then click holes in the view (grey rings):
+a click picks one (blue), a second click drops it. Only the picked holes are drilled, e.g. one of four 1/2 holes,
+or a mix of sizes to center drill. Esc or the button stops selecting; picking a size in the list goes back
+to drilling by size.</li>
 <li><b>Depth</b>: drill the point this far below the hole's top instead (0 = to the modelled hole).</li>
 <li><b>Turning Start / End</b>: click the cursor button, then an edge or end point of the part, to start or stop
 the drill there (right-click the button: back to the hole). <b>Extend</b> goes that much further. With a Depth

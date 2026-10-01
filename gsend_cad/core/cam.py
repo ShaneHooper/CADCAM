@@ -250,7 +250,8 @@ FINISH_TURN = {"type": "finish", "tool": 3, "leave_x": 0.0, "leave_z": 0.0, "ret
                "sfm": 800.0, "ipr": 0.005, "max_rpm": 3000.0, "clearance": 0.1, "output": "cycle",
                "start_at": None, "end_at": None, "start_ext": 0.0, "internal": False, "bore_dia": 0.0}
 DRILL_MILL = {"type": "drill", "tool": 4, "tool_dia": 0.25, "cycle": "peck", "peck": 0.1, "breakthrough": 0.05,
-              "retract": 0.1, "clearance": 0.5, "rpm": 2500.0, "feed": 10.0, "hole_dia": 0.0, "depth": 0.0}
+              "retract": 0.1, "clearance": 0.5, "rpm": 2500.0, "feed": 10.0, "hole_dia": 0.0, "depth": 0.0,
+              "picked": []}                    # picked holes (their top centres, model coords); [] = by size
 DRILL_TURN = {"type": "drill", "tool": 5, "tool_dia": 0.25, "cycle": "peck", "peck": 0.1, "breakthrough": 0.05,
               "retract": 0.1, "clearance": 0.1, "rpm": 1200.0, "ipr": 0.004, "hole_dia": 0.0, "depth": 0.0,
               "start_at": None, "end_at": None, "start_ext": 0.0, "past_back": 0.0}
@@ -778,9 +779,13 @@ def drill_targets(bbox, setup: dict, op: dict, holes, radius: float = 0.0) -> li
     w = wcs(bbox, setup, radius)
     o = w["origin"]
     want = op.get("hole_dia", 0.0)
+    picked = op.get("picked") or []
     out = []
     for h in holes:
-        if want and abs(h["dia"] - want) > 1e-4:
+        if picked:                                               # just the holes clicked in the view
+            if not any(math.dist(h["p"], q) < 1e-4 for q in picked):
+                continue
+        elif want and abs(h["dia"] - want) > 1e-4:
             continue
         extra = op["breakthrough"] + op["tool_dia"] * DRILL_TIP if h["through"] else 0.0
         if setup["type"] == MILLING:

@@ -389,6 +389,35 @@ check("Drill opens with the hole sizes found in the model",
 check("Drill preview: 2 holes", o.panel.info.text().startswith("2 holes"))
 o.panel.holes.setCurrentIndex(0)
 check("All holes: 3", o.panel.info.text().startswith("3 holes"))
+# ---- Select holes: the cursor button, click a hole to pick it, again to drop it
+from gsend_cad.ui.commands import setup_holes
+from PySide6.QtCore import QPoint as _QP2
+o.panel.hole_btn.setChecked(True)
+pump()
+hs = [h for h in setup_holes(win, o.current_setup()) if abs(h["dia"] - 0.25) < 1e-6 and h["axis"][2] > 0.99]
+
+
+def click_hole(h):
+    q = vp.project([h["p"]])[0]
+    pt = _QP2(round(q[0]), round(q[1]))
+    QTest.mouseMove(vp.plotter, pt)
+    pump(40)
+    QTest.mouseClick(vp.plotter, Qt.LeftButton, Qt.NoModifier, pt)
+    pump(150)
+click_hole(hs[0])
+check("Select holes: one click picks that hole only", o.panel.holes.currentText() == "1 picked"
+      and o.panel.info.text().startswith("1 hole") and len(o.op()["picked"]) == 1)
+shot("cam_09a_pick_holes")
+click_hole(hs[1])
+check("a second hole adds to it", o.panel.holes.currentText() == "2 picked" and o.panel.info.text().startswith("2 holes"))
+click_hole(hs[0])
+check("clicking a picked hole again drops it", o.panel.holes.currentText() == "1 picked"
+      and o.op()["picked"][0] == list(hs[1]["p"]))
+key(Qt.Key_Escape)                                     # stops selecting, the panel stays
+check("Esc stops selecting holes", not o.panel.hole_btn.isChecked() and win.session is o)
+o.panel.holes.setCurrentIndex(o.panel.holes.findData(0.25))
+check("choosing a size drops the picks", not o.op()["picked"] and o.panel.holes.findData("picked") < 0
+      and o.panel.info.text().startswith("2 holes"))
 o.panel.holes.setCurrentIndex(1)
 shot("cam_09_drill")
 key(Qt.Key_Return)

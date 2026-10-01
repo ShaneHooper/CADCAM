@@ -427,8 +427,8 @@ class Viewport(QWidget):
             w = self.world_at(ev.position().toPoint())
             if w:
                 self.cursor.emit(w[0], w[1], self.plane_z)
-            if self.handler and w:
-                self.handler.on_move(w, ev)
+            if self.handler and (w or getattr(self.handler, "wants_any_click", False)):
+                self.handler.on_move(w, ev)          # (toolpath panels pick on screen, any view)
             return False
         if t == QEvent.MouseButtonPress and ev.button() == Qt.RightButton:
             # a session may claim a right-click (a dimension under it); otherwise VTK pans
@@ -492,7 +492,7 @@ class Viewport(QWidget):
                 return True
             if self.handler and p0 is not None and (ev.position().toPoint() - p0).manhattanLength() <= 4:
                 w = self.world_at(ev.position().toPoint())
-                if w:
+                if w or getattr(self.handler, "wants_any_click", False):
                     self.handler.on_click(w, ev)   # a click, not an orbit drag
             return False
         if t in (QEvent.KeyPress, QEvent.ShortcutOverride):

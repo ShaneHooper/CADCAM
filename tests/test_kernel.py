@@ -273,6 +273,10 @@ def test_drill_mill_and_lathe_from_model_holes():
     op = {**cam.new_op(st, "drill"), "name": "Drill1", "hole_dia": 0.25}
     t = cam.drill_targets(bb, st, cam.validate_op(st, op), holes)
     assert len(t) == 2 and all(z1 == pytest.approx(-0.05 - 0.5 - 0.05 - 0.25 * cam.DRILL_TIP) for *_x, z1 in t)
+    one = [x["p"] for x in up if x["dia"] < 0.3][:1]                 # picked in the view: just that hole
+    tp = cam.drill_targets(bb, st, cam.validate_op(st, {**op, "hole_dia": 0.0, "picked": one}), holes)
+    o = cam.wcs(bb, st)["origin"]                                     # targets are in WCS
+    assert len(tp) == 1 and (tp[0][0], tp[0][1]) == pytest.approx((one[0][0] - o[0], one[0][1] - o[1]))
     op5 = {**op, "hole_dia": 0.5, "tool_dia": 0.5, "cycle": "chip"}
     t5 = cam.drill_targets(bb, st, cam.validate_op(st, op5), holes)
     assert len(t5) == 1 and t5[0][3] == pytest.approx(-0.05 - 0.3)                  # blind: to its bottom

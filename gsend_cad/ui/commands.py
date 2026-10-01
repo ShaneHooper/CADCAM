@@ -2191,6 +2191,21 @@ class OpPanel(Panel):
             self.ends[which] = (w, pick)
         self.holes = QComboBox()                 # Drill (mill): which hole size, found in the model
         self.holes.currentIndexChanged.connect(s.holes_changed)
+        self.hole_btn = QToolButton()            # ... or click the holes themselves in the view
+        self.hole_btn.setObjectName("pickBtn")
+        self.hole_btn.setCheckable(True)
+        self.hole_btn.setIconSize(QSize(16, 16))
+        self.hole_btn.setFixedSize(30, 24)
+        self.hole_btn.setIcon(icons.icon("cursor", theme.FG2))
+        self.hole_btn.setToolTip("Select holes: click a hole to pick it, click it again to drop it.\n"
+                                 "Only the picked holes are drilled. Pick a size in the list to go back.")
+        self.hole_btn.toggled.connect(s.set_hole_pick)
+        self.holes_row = QWidget()
+        hl = QHBoxLayout(self.holes_row)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(6)
+        hl.addWidget(self.hole_btn)
+        hl.addWidget(self.holes)
         for stype, fields in self.FIELDS[kind].items():
             g = QWidget()
             lay = QVBoxLayout(g)
@@ -2224,7 +2239,7 @@ class OpPanel(Panel):
             if kind == "drill":
                 items.insert(0, ("Cycle", self.cycles[stype]))
                 if stype == cam.MILLING:
-                    items.insert(0, ("Holes", self.holes))
+                    items.insert(0, ("Holes", self.holes_row))
             elif stype == cam.MILLING:
                 items.insert(3, ("Cut direction", self.direction))
             elif kind in ("face", "rough"):
@@ -2262,6 +2277,7 @@ class OpPanel(Panel):
 class OpSession:
     """CAM → Face / 2D Contour: pick the setup, set the cut, see the toolpath. Also edits an op."""
     captures_left = False
+    wants_any_click = True                   # picks on screen (holes, Start / End), whatever the view
 
     def __init__(self, win, setup_id: str | None, kind: str = "face", edit_id: str | None = None):
         self.win, self.vp = win, win.viewport
@@ -2309,6 +2325,8 @@ class OpSession:
                 p.holes.addItem(f"Ø{d:.4f}", d)
             want = op.get("hole_dia", 0.0) if op.get("id") else (sizes[0] if sizes else 0.0)
             p.holes.setCurrentIndex(max(0, p.holes.findData(want)))
+            self.picked_holes = [list(q) for q in op.get("picked") or []]
+            self.show_picked()
             if not op.get("id") and want and st["type"] == cam.MILLING:
                 op = self._drill_for(st, op, want)
         self.fill_tools(st, op)
@@ -2480,11 +2498,83 @@ class OpSession:
         if self.kind == "drill":
             o["cycle"] = p.cycles[st["type"]].currentData()
             o["hole_dia"] = (p.holes.currentData() or 0.0) if st["type"] == cam.MILLING else 0.0
+            if p.holes.currentData() == "picked":
+                o["hole_dia"] = 0.0
+            o["picked"] = [list(q) for q in self.picked_holes] if st["type"] == cam.MILLING else []
         return o
+
+    # ---- Drill (mill): click holes in the view to pick / drop them
+    picked_holes: list = []
+    hole_pick = False
+
+    def show_picked(self):
+        """The Holes list says "N picked" while holes are picked (a size / All holes clears them)."""
+        cb = self.panel.holes
+        cb.blockSignals(True)
+        k = cb.findData("picked")
+        if self.picked_holes:
+            text = f"{len(self.picked_holes)} picked"
+            if k < 0:
+                cb.insertItem(0, text, "picked")
+                k = 0
+            cb.setItemText(k, text)
+            cb.setCurrentIndex(k)
+        elif k >= 0:
+            cb.removeItem(k)
+        cb.blockSignals(False)
+        self.panel.hole_btn.setIcon(icons.icon("cursor", theme.ACCENT if self.picked_holes else theme.FG2))
+
+    def set_hole_pick(self, on: bool):
+        self.hole_pick = on
+        if on:
+            self.win.message("SELECT HOLES: click a hole to pick it, again to drop it · Esc or the button stops")
+        else:
+            self.vp.dim.hide()
+        self.preview()
+
+    def _hole_under(self, ev):
+        """The mill-able hole (opening up +Z) nearest the cursor on screen, within 18 px."""
+        holes = [h for h in setup_holes(self.win, self.current_setup()) if h["axis"][2] > 1 - 1e-6]
+        if not holes:
+            return None
+        xy = self.vp.project([h["p"] for h in holes])[:, :2]
+        p = ev.position()
+        d = np.hypot(xy[:, 0] - p.x(), xy[:, 1] - p.y())
+        k = int(np.argmin(d))
+        if d[k] > 18:                            # or inside its circle on screen
+            r = self.vp.project([np.add(holes[k]["p"], (holes[k]["dia"] / 2, 0, 0))])[0, :2]
+            if d[k] > np.hypot(*(r - xy[k])) + 4:
+                return None
+        return holes[k]
+
+    def _is_picked(self, h):
+        return any(math.dist(h["p"], q) < 1e-4 for q in self.picked_holes)
+
+    def draw_holes(self, st):
+        """Rings on the holes while selecting: picked blue, the rest grey."""
+        if not (self.hole_pick or self.picked_holes):
+            return
+        rings_on, rings_off = [], []
+        for h in setup_holes(self.win, st):
+            if h["axis"][2] < 1 - 1e-6:
+                continue
+            r = h["dia"] / 2 + 0.03
+            ring = [[h["p"][0] + r * math.cos(a * math.pi / 24), h["p"][1] + r * math.sin(a * math.pi / 24),
+                     h["p"][2] + 0.002] for a in range(49)]
+            (rings_on if self._is_picked(h) else rings_off).append(ring)
+        if rings_off and self.hole_pick:
+            self.vp.add_lines("op", rings_off, theme.FG2, 1.4, opacity=0.8)
+        if rings_on:
+            self.vp.add_lines("op", rings_on, theme.ACCENT, 2.6)
 
     def holes_changed(self, *_):
         """Picking a hole size picks a library drill of that size (when there is one)."""
         d = self.panel.holes.currentData()
+        if d == "picked":
+            return
+        if not self._loading and self.picked_holes:          # a size / All holes: picks are dropped
+            self.picked_holes = []
+            self.show_picked()
         if not self._loading and d:
             st = self.current_setup()
             op = self._drill_for(st, self.op(), d)
@@ -2505,11 +2595,15 @@ class OpSession:
             moves, world = op_moves(self.win, st, self.op())
         except ValueError as exc:
             self.panel.info.setText(str(exc))
+            if self.kind == "drill" and st["type"] == cam.MILLING:
+                self.draw_holes(st)              # (rings to pick from, even with nothing to drill yet)
             self.vp.render()
             return
         draw_toolpath(self.vp, world, "op")
         if self.kind in ("rough", "finish"):
             self.draw_ends(st, self.op())
+        if self.kind == "drill" and st["type"] == cam.MILLING:
+            self.draw_holes(st)
         zs = {round(p[2], 6) for k, p in moves if k == "feed"} if st["type"] == cam.MILLING else \
             {i for i, (k, _p) in enumerate(moves) if k == "feed" and moves[i - 1][0] == "rapid"}   # facing cuts
         t = cam.cycle_time(moves, st, self.op())
@@ -2615,6 +2709,14 @@ class OpSession:
         return i, w[cam.AXES[self.current_setup()["axis"]]]
 
     def on_move(self, w, ev):
+        if self.hole_pick and not ev.buttons():
+            h = self._hole_under(ev)
+            if h is None:
+                self.vp.dim.hide()
+            else:
+                self.vp.show_dim(f"Ø{h['dia']:.4f} · click to {'drop' if self._is_picked(h) else 'pick'}",
+                                 ev.position().toPoint())
+            return
         if not self.picking or ev.buttons():
             return
         i, a = self._axial(ev)
@@ -2630,6 +2732,23 @@ class OpSession:
         self.vp.render()
 
     def on_click(self, w, ev):
+        if self.hole_pick:
+            h = self._hole_under(ev)
+            if h is None:
+                return
+            if self._is_picked(h):
+                self.picked_holes = [q for q in self.picked_holes if math.dist(h["p"], q) >= 1e-4]
+            else:
+                self.picked_holes = self.picked_holes + [list(h["p"])]
+                if len(self.picked_holes) == 1:                   # first pick: a drill that size
+                    st = self.current_setup()
+                    self._loading = True
+                    self.fill_tools(st, self._drill_for(st, self.op(), h["dia"]))
+                    self._loading = False
+                    self.rpm_changed(st["type"])
+            self.show_picked()
+            self.preview()
+            return
         if not self.picking:
             return
         i, a = self._axial(ev)
@@ -2646,7 +2765,9 @@ class OpSession:
             self.commit()
             return True
         if ev.key() == Qt.Key_Escape:
-            if self.picking:
+            if self.hole_pick:
+                self.panel.hole_btn.setChecked(False)
+            elif self.picking:
                 self.panel.ends[self.picking][1].setChecked(False)
             else:
                 self.win.cancel_command()
