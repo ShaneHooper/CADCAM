@@ -359,6 +359,12 @@ check("Esc closes the simulator", win.session is None)
 win.browser.simulate.emit(ms["id"])
 pump()
 check("Simulate on a setup plays all its ops", len({id(x) for x in win.session.op_of}) == 2)
+sim = win.session
+sim.seek(0.0)
+first = sim.tool_op["name"]
+sim.seek(sim.total)
+check("each op shows its own tool (it changes with the op)", first != sim.tool_op["name"]
+      and sim.tool_op is sim.op_of[-1])
 key(Qt.Key_Escape)
 win.browser.post.emit(cop["id"])
 pump()

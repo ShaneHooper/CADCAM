@@ -2843,8 +2843,13 @@ class SimSession:
         self.win, self.vp = win, win.viewport
         self.setup = setup
         self.world, self.times, self.op_of = [], [], []
+        skipped = []
         for op in ops:
-            moves, world = op_moves(win, setup, op)
+            try:
+                moves, world = op_moves(win, setup, op)
+            except ValueError as exc:                    # an op with no toolpath: play the rest
+                skipped.append(f"{op.get('name', 'op')}: {exc}")
+                continue
             t = cam.move_times(moves, setup, op)
             if self.world and world:                     # rapid from the last op to the next
                 t[0] = math.dist(self.world[-1][1], world[0][1]) / cam.RAPID_IPM
@@ -2862,14 +2867,24 @@ class SimSession:
         self.vp.clear("cam", render=False)
         draw_setup(self.vp, win, setup, "sim")
         draw_toolpath(self.vp, self.world, "sim", dim=True)
-        mill = setup["type"] == cam.MILLING
-        dia = max((o.get("tool_dia", 0.5) for o in ops), default=0.5) if mill else 0.08
-        tool = pv.Cylinder(center=(0, 0, 0.75), direction=(0, 0, 1), radius=dia / 2, height=1.5, resolution=32) \
-            if mill else pv.Sphere(radius=0.05, center=(0, 0, 0))
-        self.tool = self.vp.add_surface("simtool", tool, theme.FG, 0.85)
-        self.vp.set_side(self.panel)
+        self.tool, self.tool_op = None, None             # each op shows its own tool (a 2" face mill
+        self.vp.set_side(self.panel)                     # must not ride on into the 1/4 drill's holes)
         self.seek(0.0)
-        self.win.message("SIMULATE: ▶ plays · drag the slider to scrub · Space = play / pause · Esc closes")
+        self.win.message("SIMULATE: ▶ plays · drag the slider to scrub · Space = play / pause · Esc closes"
+                         + (" · LEFT OUT: " + " · ".join(skipped) if skipped else ""))
+
+    def _show_tool(self, op):
+        """The tool of the op being played: a cylinder its diameter (mill), a ball (lathe)."""
+        if op is self.tool_op and self.tool is not None:
+            return
+        self.vp.clear("simtool", render=False)
+        if self.setup["type"] == cam.MILLING:
+            dia = op.get("tool_dia", 0.5) or 0.5
+            shape = pv.Cylinder(center=(0, 0, 0.75), direction=(0, 0, 1), radius=dia / 2, height=1.5,
+                                resolution=32)
+        else:
+            shape = pv.Sphere(radius=0.05, center=(0, 0, 0))
+        self.tool, self.tool_op = self.vp.add_surface("simtool", shape, theme.FG, 0.85), op
 
     def toggle(self):
         if self.timer.isActive():
@@ -2899,6 +2914,7 @@ class SimSession:
             at = p0 + (p1 - p0) * min(max(f, 0.0), 1.0)
         else:
             at = p1
+        self._show_tool(self.op_of[i])
         self.tool.SetPosition(*at)
         self.vp.clear("simdone", render=False)
         done = [np.array(w[1]) for w in self.world[:i]] + [at]
