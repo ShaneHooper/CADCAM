@@ -1841,6 +1841,7 @@ class OpPanel(Panel):
                 cb.addItem(cam.DRILL_CYCLES[k], k)
             cb.currentIndexChanged.connect(s.preview)
             self.cycles[stype] = cb
+        self.sfm = {}                            # SFM box next to each RPM box, per setup type
         self.tools = {}                          # the Tool box (from the tool library), per setup type
         for stype in self.FIELDS[kind]:
             cb = QComboBox()
@@ -1886,6 +1887,24 @@ class OpPanel(Panel):
                 nb.setRange(0, 100000)
                 nb.valueChanged.connect(s.preview)
                 self.boxes[(stype, key)] = nb
+                if key == "rpm":                 # RPM and SFM side by side, each works out the other
+                    sfm = NumBox(0, 0)
+                    sfm.setRange(0, 100000)
+                    sfm.setFixedWidth(64)
+                    nb.setFixedWidth(64)
+                    sfm.setToolTip("Surface speed (ft/min) at the tool's diameter. Type one, the other follows.")
+                    nb.valueChanged.connect(partial(s.rpm_changed, stype))
+                    sfm.valueChanged.connect(partial(s.sfm_changed, stype))
+                    self.sfm[stype] = sfm
+                    w = QWidget()
+                    hl = QHBoxLayout(w)
+                    hl.setContentsMargins(0, 0, 0, 0)
+                    hl.setSpacing(4)
+                    hl.addWidget(nb)
+                    hl.addWidget(QLabel("SFM"))
+                    hl.addWidget(sfm)
+                    items.append(("RPM", w))
+                    continue
                 items.append((label, nb))
             if kind == "drill":
                 items.insert(0, ("Cycle", self.cycles[stype]))
@@ -1978,6 +1997,7 @@ class OpSession:
             if not op.get("id") and want and st["type"] == cam.MILLING:
                 op = self._drill_for(st, op, want)
         self.fill_tools(st, op)
+        self.rpm_changed(st["type"])
         if "output" in op:
             p.output.setCurrentIndex(max(0, p.output.findData(op["output"])))
             p.g70.setChecked(op["output"] == "cycle")
@@ -2032,6 +2052,34 @@ class OpSession:
                    if t["id"] == getattr(self.win, "last_new_tool", None)]
             if new:
                 cb.setCurrentIndex(cb.findData(new[0]["id"]))
+        self.rpm_changed(stype)                  # same RPM, new Ø: its SFM
+        self.preview()
+
+    # ---- RPM <-> SFM through the tool's diameter: SFM = RPM x pi x D / 12
+    _sfm_busy = False
+
+    def _dia(self, stype):
+        t = self.tool(self.current_setup()) if self.current_setup()["type"] == stype else None
+        return (t or {}).get("dia") or 0.0
+
+    def rpm_changed(self, stype, *_):
+        """RPM typed (or loaded): show the SFM it gives at this tool's diameter."""
+        box = self.panel.sfm.get(stype)
+        d = self._dia(stype)
+        if box is None or self._sfm_busy or d <= 0:
+            return
+        self._sfm_busy = True
+        box.setValue(self.panel.boxes[(stype, "rpm")].value() * math.pi * d / 12)
+        self._sfm_busy = False
+
+    def sfm_changed(self, stype, *_):
+        """SFM typed: work out the RPM for it."""
+        d = self._dia(stype)
+        if self._sfm_busy or d <= 0:
+            return
+        self._sfm_busy = True
+        self.panel.boxes[(stype, "rpm")].setValue(round(self.panel.sfm[stype].value() * 12 / (math.pi * d)))
+        self._sfm_busy = False
         self.preview()
 
     def show_bore_row(self):
@@ -2082,6 +2130,7 @@ class OpSession:
         cb = self.panel.tools[stype]
         if cb.findData(tid) >= 0:
             cb.setCurrentIndex(cb.findData(tid))   # the edited tool, with its new sizes
+        self.rpm_changed(stype)
         self.preview()
 
     def _drill_for(self, st, op, dia):
@@ -2127,6 +2176,7 @@ class OpSession:
             self._loading = True
             self.fill_tools(st, op)
             self._loading = False
+            self.rpm_changed(st["type"])
         self.preview()
 
     def preview(self, *_):

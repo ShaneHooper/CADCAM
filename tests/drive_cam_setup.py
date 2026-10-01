@@ -289,6 +289,14 @@ o = win.session
 check("Face from the Milling tab picks the milling setup", o.current_setup()["type"] == "milling"
       and o.panel.groups["milling"].isVisible())
 o.panel.tools["milling"].setCurrentIndex(o.panel.tools["milling"].findText("T2", Qt.MatchStartsWith))
+rpm, sfm = o.panel.boxes[("milling", "rpm")], o.panel.sfm["milling"]
+rpm.setValue(3000)
+check("RPM 3000 on the Ø0.5 end mill shows SFM 393 (3000 x pi x 0.5 / 12)", round(sfm.value()) == 393)
+sfm.setValue(600)
+check("SFM 600 works out RPM 4584", rpm.value() == 4584 and o.op()["rpm"] == 4584)
+o.panel.tools["milling"].setCurrentIndex(o.panel.tools["milling"].findText("T1", Qt.MatchStartsWith))
+check("a Ø2 face mill keeps the RPM, SFM follows (2400)", rpm.value() == 4584 and round(sfm.value()) == 2400)
+o.panel.tools["milling"].setCurrentIndex(o.panel.tools["milling"].findText("T2", Qt.MatchStartsWith))
 shot("cam_05_face_milling")
 key(Qt.Key_Return)
 ms = win.doc.setups[-1]

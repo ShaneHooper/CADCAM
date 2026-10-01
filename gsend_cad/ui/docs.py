@@ -303,7 +303,7 @@ of the tab's type (pick a setup in the Browser first to choose another). It's na
 <li><b>Tool</b>: picked from the Tool Library (the tools that fit, e.g. face and end mills). <b>New tool…</b>
 at the bottom of the list opens the library with a new tool ready to fill in.</li>
 <li><b>Milling setup</b>: stepover % of the tool, max stepdown, stock
-to leave, cut direction (along X or Y), spindle RPM and feed (in/min). Zigzag passes run fully off
+to leave, cut direction (along X or Y), spindle RPM (with an SFM box beside it: type either, the other is worked out from the tool Ø, SFM = RPM × π × Ø ÷ 12; same on 2D Contour and Drill) and feed (in/min). Zigzag passes run fully off
 the stock at both ends, from the stock top down to the part top.</li>
 <li><b>Turning setup</b>: max stepdown per pass, stock to leave, how far past center (X, radius), surface
 speed SFM, feed in/rev and max RPM. Each pass feeds from outside the bar in past center, then rapids
