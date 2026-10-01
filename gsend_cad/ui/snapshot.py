@@ -7,7 +7,8 @@ mouse is on before anything closes, copies the picture to the clipboard (paste i
 chat) and saves a PNG in Pictures / G-SEND Screenshots.
 
 It also keeps an open drop-down / menu up when the app loses focus (Print Screen → Snipping Tool,
-Win+Shift+S): a popup that closes without a click or key from the user is held for HOLD_S seconds,
+Win+Shift+S): a popup that closes while another program has the focus, without a click or key
+from the user, is held for HOLD_S seconds,
 so the snip still has it. A click or Escape back in the app closes it as usual.
 """
 from __future__ import annotations
@@ -56,7 +57,10 @@ class Snapshot(QObject):
         return False
 
     def held(self, w) -> bool:
+        """Only while another program has the focus (the snipping tool) and the user didn't
+        just click / press a key: picking an item or clicking away always closes it."""
         return (isinstance(w, QWidget) and w.isWindow() and w.windowType() == Qt.Popup and w.isVisible()
+                and QGuiApplication.applicationState() != Qt.ApplicationActive
                 and time.monotonic() - self._input > 0.3)
 
     def let_go(self, w):

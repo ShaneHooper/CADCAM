@@ -9,7 +9,7 @@ import math
 
 import numpy as np
 import pyvista as pv
-from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QObject, QPoint, QSize, Qt, QTimer
 from functools import partial
 
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout,
@@ -123,6 +123,25 @@ class EntRow(QWidget):
 
     def mousePressEvent(self, ev):
         self._on_click()
+
+
+class _RightClick(QObject):
+    """A combo box's open list: a right-click calls on_right(pos) instead of picking the item
+    (Qt's list takes any button's release as a pick and closes). Left-click picks as usual."""
+
+    def __init__(self, viewport, on_right):
+        super().__init__(viewport)
+        self.on_right = on_right
+        viewport.installEventFilter(self)
+
+    def eventFilter(self, obj, ev):
+        t = ev.type()
+        if t in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.MouseButtonDblClick) \
+                and ev.button() == Qt.RightButton:
+            if t == QEvent.MouseButtonRelease:
+                self.on_right(ev.position().toPoint())
+            return True
+        return t == QEvent.ContextMenu
 
 
 class DimEditor(QFrame):
@@ -1808,8 +1827,7 @@ class OpPanel(Panel):
             cb = QComboBox()
             cb.setMinimumWidth(200)
             cb.currentIndexChanged.connect(partial(s.tool_changed, stype))
-            cb.view().setContextMenuPolicy(Qt.CustomContextMenu)      # right-click a tool in the list: Edit
-            cb.view().customContextMenuRequested.connect(partial(s.tool_menu, stype))
+            cb._right = _RightClick(cb.view().viewport(), partial(s.tool_menu, stype))   # right-click: Edit
             self.tools[stype] = cb
         self.ends = {}                           # turning rough / contour: Start / End (cursor) + Extend
         for which, key in (("start", "start_ext"), ("end", "past_back")) if kind in ("rough", "finish", "drill") else ():

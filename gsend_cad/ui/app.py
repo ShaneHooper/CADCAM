@@ -136,6 +136,8 @@ def launch(document: Document | str | None = None, block: bool | None = None):
         from pathlib import Path
         win.path = Path(path)
     win.show()
+    from . import winicon                # taskbar: our .ico, not the exe's embedded icon
+    winicon.apply(win, str(theme.LOGO_ICO))
     if splash is not None:
         splash.finish(win)
     _trace("window shown")
