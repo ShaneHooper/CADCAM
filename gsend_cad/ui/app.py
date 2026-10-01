@@ -135,7 +135,10 @@ def launch(document: Document | str | None = None, block: bool | None = None):
     if path:
         from pathlib import Path
         win.path = Path(path)
-    win.show()
+    if created:
+        win.showMaximized()              # the app itself opens filling the screen (Shane 10/1/26)
+    else:
+        win.show()                       # inside a host app / the UI tests: its normal size
     from . import winicon                # taskbar: our .ico, not the exe's embedded icon
     winicon.apply(win, str(theme.LOGO_ICO))
     if splash is not None:
