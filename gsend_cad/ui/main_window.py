@@ -86,6 +86,10 @@ class MainWindow(QMainWindow):
                        shortcutContext=Qt.ApplicationShortcut, triggered=self.show_docs)
         self.addAction(docs)
         self.docs = None
+        from PySide6.QtWidgets import QApplication
+        from .snapshot import Snapshot
+        self.snapshot = Snapshot(self)                  # F12 / Print Screen: screenshot, menus and all
+        QApplication.instance().installEventFilter(self.snapshot)
         self.topbar.new.connect(self.new_doc)
         self.topbar.save_as.connect(self.save_as)
         self.topbar.export.connect(self.export)

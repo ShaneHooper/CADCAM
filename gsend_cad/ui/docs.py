@@ -442,6 +442,9 @@ earlier.</li>
     ("keys", "Keyboard Shortcuts", """
 <h1>Keyboard Shortcuts</h1>
 <table>
+<tr><td class="k">F12 / Print Screen</td><td>Screenshot of the whole screen, open menus included: copied to the
+clipboard (paste it straight into a chat or email) and saved in Pictures → G-SEND Screenshots. Use it
+instead of the Snipping Tool, which closes G-SEND's menus before it can take them.</td></tr>
 <tr><td class="k">L</td><td>New sketch (in a sketch: Line)</td></tr>
 <tr><td class="k">R / C / P</td><td>Rectangle / Circle / Polygon (in a sketch)</td></tr>
 <tr><td class="k">Shift + click</td><td>Snap 4× finer</td></tr>

@@ -18,6 +18,7 @@ small and cheap.** Read only the file(s) the task needs, change only what he ask
 | Sketch tools (incl. corner Fillet/Chamfer), palette value fields, Extrude / Revolve / edge Fillet dialogs | `gsend_cad/ui/commands.py` |
 | 3D view, camera, grid, HUD, view cube, projection (ortho / perspective) | `gsend_cad/ui/viewport.py` · Settings menu in `panels.py` TopBar, saved via QSettings in `main_window.py` |
 | Menus, shortcuts, wiring, save/open | `gsend_cad/ui/main_window.py` |
+| F12 / Print Screen screenshot (menus included, to clipboard + Pictures) | `gsend_cad/ui/snapshot.py` |
 | Startup, splash, crash logs, `--selftest` | `gsend_cad/ui/app.py` |
 | Sketch entity math, exact values (`params`/`set_param`), dimensions, picking / closed profiles | `gsend_cad/core/sketch.py`, `core/profiles.py` |
 | Features, timeline, .gcad file format | `gsend_cad/core/document.py` |
