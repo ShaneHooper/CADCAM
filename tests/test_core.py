@@ -368,7 +368,8 @@ def test_post_mill_and_lathe():
     assert all(ord(c) < 128 for c in g)                          # plain ASCII for the control
     assert "G28 G91 X0. Y0." in post.post_setup(s, [(op, cam.face_toolpath(box, s, op))], "fanuc", 1000)
     t = {**cam.new_setup("turning"), "name": "Setup2"}
-    o2 = cam.validate_op(t, {**cam.new_op(t), "name": "Face1"})
+    o2 = cam.validate_op(t, {**cam.new_op(t), "name": "Face1", "output": "lines"})
+    assert cam.new_op(t)["output"] == "cycle"                   # canned cycles are the default
     g = post.post_setup(t, [(o2, cam.face_toolpath(((-1, -1, 0), (1, 1, 3)), t, o2, 1.0))], "haas", 1001)
     lines = g.splitlines()
     assert "T0101" in lines and "G50 S3000" in lines and "G96 S600 M03 M08" in lines

@@ -434,8 +434,10 @@ class Browser(QFrame):
         self.tree.setIndentation(14)
         self.tree.setIconSize(QSize(34, 14))
         self.tree.setRootIsDecorated(True)
-        self.tree.itemClicked.connect(lambda it, _c: self.selected.emit(it.data(0, Qt.UserRole) or ""))
+        self.tree.itemClicked.connect(self._click)
         self.tree.itemDoubleClicked.connect(self._double)
+        self._last_click = (None, 0.0)            # (node, time): a second click on it soon = double-click
+        self._last_edit = (None, 0.0)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._menu)
         self.tree.viewport().installEventFilter(self)
@@ -538,10 +540,29 @@ class Browser(QFrame):
                     return True
         return super().eventFilter(obj, ev)
 
+    def _click(self, it, _c):
+        """A click selects. Picking a toolpath works it out, which can take long enough on a
+        slow PC that Windows reports the second click of a double-click as a plain click: so two
+        clicks on the same row within the double-click time open it too."""
+        from time import monotonic
+        nid = it.data(0, Qt.UserRole) or ""
+        last, self._last_click = self._last_click, (nid, monotonic())
+        self.selected.emit(nid)
+        if nid and last[0] == nid and monotonic() - last[1] < QApplication.doubleClickInterval() / 1000:
+            self._last_click = (None, 0.0)
+            self._double_id(nid)
+
     def _double(self, it, _c):
-        nid = it.data(0, Qt.UserRole)
-        if nid in self.sketch_ids or nid in self.setup_ids:
-            self.edit.emit(nid)
+        self._double_id(it.data(0, Qt.UserRole))
+
+    def _double_id(self, nid):
+        from time import monotonic
+        if nid not in self.sketch_ids and nid not in self.setup_ids:
+            return
+        if self._last_edit[0] == nid and monotonic() - self._last_edit[1] < 1.0:
+            return                                # the same double-click seen both ways: open it once
+        self._last_edit = (nid, monotonic())
+        self.edit.emit(nid)
 
     def _menu(self, pos):
         it = self.tree.itemAt(pos)

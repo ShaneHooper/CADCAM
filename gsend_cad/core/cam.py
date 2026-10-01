@@ -230,8 +230,9 @@ def describe(s: dict) -> str:
 
 FACE_MILL = {"type": "face", "tool": 1, "tool_dia": 2.0, "stepover": 70.0, "stepdown": 0.05, "leave": 0.0,
              "direction": "x", "rpm": 3000.0, "feed": 60.0, "clearance": 0.5}
+# turning Face / Roughing / Contour default to the canned cycles (G72 / G71 / G70), Shane 10/1/26
 FACE_TURN = {"type": "face", "tool": 1, "stepdown": 0.02, "leave": 0.0, "past_center": 0.02, "sfm": 600.0,
-             "ipr": 0.008, "max_rpm": 3000.0, "clearance": 0.1, "output": "lines"}
+             "ipr": 0.008, "max_rpm": 3000.0, "clearance": 0.1, "output": "cycle"}
 TURN_OUTPUT = {"lines": "Single lines (G01)", "cycle": "Canned cycle (G72)"}
 GROOVE_TURN = {"type": "groove", "tool": 6, "tool_dia": 0.125, "side": "od", "stepover": 80.0, "peck": 0.0,
                "leave": 0.0, "sfm": 400.0, "ipr": 0.003, "max_rpm": 2500.0, "clearance": 0.1,
@@ -242,11 +243,11 @@ CONTOUR_MILL = {"type": "contour", "tool": 2, "tool_dia": 0.5, "stepdown": 0.25,
                 "bottom_offset": 0.0, "direction": "climb", "rpm": 5000.0, "feed": 30.0, "plunge": 10.0,
                 "lead": 0.1, "clearance": 0.5}
 ROUGH_TURN = {"type": "rough", "tool": 2, "stepdown": 0.05, "leave_x": 0.01, "leave_z": 0.005, "retract": 0.02,
-              "past_back": 0.0, "sfm": 600.0, "ipr": 0.01, "max_rpm": 3000.0, "clearance": 0.1, "output": "lines",
+              "past_back": 0.0, "sfm": 600.0, "ipr": 0.01, "max_rpm": 3000.0, "clearance": 0.1, "output": "cycle",
               "start_at": None, "end_at": None, "start_ext": 0.0, "internal": False, "bore_dia": 0.0}
 ROUGH_OUTPUT = {"lines": "Single lines (G01)", "cycle": "Canned cycle (G71)"}
 FINISH_TURN = {"type": "finish", "tool": 3, "leave_x": 0.0, "leave_z": 0.0, "retract": 0.02, "past_back": 0.0,
-               "sfm": 800.0, "ipr": 0.005, "max_rpm": 3000.0, "clearance": 0.1, "output": "lines",
+               "sfm": 800.0, "ipr": 0.005, "max_rpm": 3000.0, "clearance": 0.1, "output": "cycle",
                "start_at": None, "end_at": None, "start_ext": 0.0, "internal": False, "bore_dia": 0.0}
 DRILL_MILL = {"type": "drill", "tool": 4, "tool_dia": 0.25, "cycle": "peck", "peck": 0.1, "breakthrough": 0.05,
               "retract": 0.1, "clearance": 0.5, "rpm": 2500.0, "feed": 10.0, "hole_dia": 0.0, "depth": 0.0}
