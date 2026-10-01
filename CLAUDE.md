@@ -15,13 +15,13 @@ small and cheap.** Read only the file(s) the task needs, change only what he ask
 | CAD/CAM switch, CAM tabs (`CAM_TABS`), G-SEND wordmark (`Wordmark`, text/colour in `theme.BRAND_TEXT` / `BRAND_INK`) | `gsend_cad/ui/panels.py` |
 | Toolbar/tree icons | `gsend_cad/ui/icons.py` → `PATHS` |
 | Help → Documentation text | `gsend_cad/ui/docs.py` |
-| Sketch tools (incl. corner Fillet/Chamfer), palette value fields, Extrude / Revolve / edge Fillet dialogs | `gsend_cad/ui/commands.py` |
+| Sketch tools (incl. corner Fillet/Chamfer, Trim, Rotate / Mirror / Pattern `XformPanel`), palette value fields, Extrude / Revolve / edge Fillet dialogs | `gsend_cad/ui/commands.py` |
 | 3D view, camera, grid, HUD, view cube, projection (ortho / perspective) | `gsend_cad/ui/viewport.py` · Settings menu in `panels.py` TopBar, saved via QSettings in `main_window.py` |
 | Menus, shortcuts, wiring, save/open | `gsend_cad/ui/main_window.py` |
 | F12 / Print Screen screenshot (menus included, to clipboard + Pictures) | `gsend_cad/ui/snapshot.py` |
 | Help → About version / update date (`build.json` stamped by `packaging/update_app.py`) | `gsend_cad/buildinfo.py` · `show_about` in `main_window.py` |
 | Startup, splash, crash logs, `--selftest` | `gsend_cad/ui/app.py` · Windows taskbar icon (from the .ico, no exe rebuild): `ui/winicon.py` |
-| Sketch entity math, exact values (`params`/`set_param`), dimensions, picking / closed profiles | `gsend_cad/core/sketch.py`, `core/profiles.py` |
+| Sketch entity math, exact values (`params`/`set_param`), dimensions, picking / closed profiles, trim, rotate / mirror / pattern math | `gsend_cad/core/sketch.py`, `core/profiles.py` |
 | Features, timeline, .gcad file format | `gsend_cad/core/document.py` |
 | CAM setups (milling / turning, stock, WCS math) and operations (Face, 2D Contour, Roughing (OD / ID), turning Contour (op type `finish`), Groove (OD / ID / face), Drill toolpaths, cycle / move times) | `gsend_cad/core/cam.py` (data, toolpaths) · `ui/commands.py` `SetupSession` / `OpSession` / `SimSession` / `draw_setup` / `draw_toolpath` (panels, simulate, drawing); part outline for contours = `kernel.outline_loops`, turned OD silhouette for Roughing / Contour = `kernel.turn_profile`, bore (Internal) = `kernel.turn_bore`, half cross-section for Groove = `kernel.turn_section`, holes for Drill = `kernel.find_holes` |
 | Tool library (tools ops pick from; JSON in the user's app-data folder) | `gsend_cad/core/tools.py` · dialog `ui/commands.py` `ToolLibraryDialog` · path / load / save in `main_window.py` |

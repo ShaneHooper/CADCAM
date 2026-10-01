@@ -134,7 +134,7 @@ def test_circle_polygon_point_edit():
     c = sk.set_param(sk.circle((0, 0), 1), "dia", 0.5)
     assert c["r"] == 0.25
     pg = sk.set_param(sk.polygon((1, 1), (2, 1), 6), "sides", 8)
-    assert len(pg["pts"]) == 8 and abs(sk.params(pg)["r"] - 1) < 1e-9
+    assert len(pg["pts"]) == 8 and abs(sk.params(pg)["ac"] - 2) < 1e-9
     assert sk.set_param(sk.point((1, 2)), "y", 3) == {"type": "point", "p": [1.0, 3.0]}
 
 
@@ -585,3 +585,38 @@ def test_old_tool_library_gets_a_groove_insert(tmp_path):
     assert tools.describe(lib[-1]) == "T6 · Groove · W0.1250"
     tools.save(str(path), [t for t in lib if t["kind"] != "groove"])     # deleted it: stays deleted
     assert not any(t["kind"] == "groove" for t in tools.load(str(path)))
+
+
+
+def test_hex_across_flats_and_corners():
+    h = sk.polygon((0, 0), (0, 0.5), 6, flats=True)                     # drawn by a flat: 1.0 AF
+    v = sk.params(h)
+    assert v["af"] == pytest.approx(1.0) and v["ac"] == pytest.approx(2 / math.sqrt(3))
+    assert max(abs(q[1]) for q in h["pts"]) == pytest.approx(0.5)        # flats top and bottom
+    h2 = sk.set_param(h, "af", 0.75)
+    assert sk.params(h2)["af"] == pytest.approx(0.75) and sk.params(h2)["ang"] == pytest.approx(v["ang"])
+    assert sk.params(sk.set_param(h, "ac", 1.0))["ac"] == pytest.approx(1.0)
+    assert [d["key"] for d in sk.dimensions(h2)][-2:] == ["af", "ac"]
+    assert sk.entity_label(h2) == ("Polygon", "6 · AF 0.7500")
+
+
+def test_rotate_mirror_pattern():
+    ln = sk.line((1, 0), (2, 0))
+    r = sk.rotated([ln], (0, 0), 90)[0]
+    assert r["pts"] == [[0, 1], [0, 2]]
+    a = sk.arc((1, 0), 0.5, 0, 90)
+    ra = sk.rotated([a], (0, 0), 90)[0]
+    assert (ra["a0"], ra["a1"]) == (90, 180) and ra["c"] == [0, 1]
+    ma = sk.mirrored([a], (0, 0), (0, 1))[0]                              # across the Y axis
+    assert ma["c"] == [-1, 0] and (ma["a0"], ma["a1"]) == (90, 180) and ma["pts"][0] == [-1, 0.5]
+    rc = sk.mirrored([sk.rect((1, 1), (2, 3))], (0, 0), (1, 0))[0]       # still a rect
+    assert rc["type"] == "rect" and rc["pts"][0] == [1, -3]
+    assert [e["type"] for e in sk.rotated([sk.rect((0, 0), (1, 1))], (0, 0), 30)] == ["line"] * 4
+    holes = sk.circular_pattern([sk.circle((1, 0), 0.1)], (0, 0), 4)      # 4 on a Ø2 bolt circle
+    assert [c["c"] for c in holes] == [[0, 1], [-1, 0], [0, -1]]
+    arc3 = sk.circular_pattern([sk.point((1, 0))], (0, 0), 3, 90)         # 0, 45, 90 degrees
+    assert arc3[-1]["p"] == [0, 1]
+    grid = sk.rect_pattern([sk.point((0, 0))], 3, 0.5, 2, 1.0)
+    assert len(grid) == 5 and grid[-1]["p"] == [1, 1]
+    with pytest.raises(ValueError):
+        sk.circular_pattern([ln], (0, 0), 1)

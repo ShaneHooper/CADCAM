@@ -26,7 +26,8 @@ from . import icons, theme
 
 TOOL_KEYS = {"Line": "line", "Rectangle": "rect", "Center Rect": "center_rect", "Circle": "circle",
              "Polygon": "polygon", "Point": "point", "Fillet": "fillet", "Chamfer": "chamfer",
-             "Trim": "trim"}
+             "Trim": "trim", "Rotate": "rotate", "Mirror": "mirror", "Pattern": "pattern"}
+XFORM_TOOLS = ("rotate", "mirror", "pattern")
 CORNER_TOOLS = ("fillet", "chamfer")
 HINTS = {"line": "Click start, click end. Keep clicking to chain. Esc ends the chain.",
          "rect": "Click two opposite corners.", "center_rect": "Click center, then a corner.",
@@ -34,7 +35,10 @@ HINTS = {"line": "Click start, click end. Keep clicking to chain. Esc ends the c
          "point": "Click to place a point.",
          "fillet": "Click a sharp corner to round it (radius: Fillet R in the palette).",
          "chamfer": "Click a sharp corner to bevel it (Chamfer H × V in the palette).",
-         "trim": "Click the piece to cut away: it goes back to the nearest crossing on each side (T)."}
+         "trim": "Click the piece to cut away: it goes back to the nearest crossing on each side (T).",
+         "rotate": "Click the shapes to turn (click again to drop one), set the angle and center, OK.",
+         "mirror": "Click the shapes to mirror, pick the mirror line (Y / X axis or a line), OK.",
+         "pattern": "Click the shapes to copy, set circular (count, angle, center) or rectangular, OK."}
 SNAP_PX = 8         # how close (screen px) the cursor must come to an end / mid / center to snap
 ORTHO_DEG = 10      # a line within this many degrees of level / plumb is held straight (Ctrl: free)
 SELECT_HINT = ("Click a line or shape (or its row in the palette) to type exact values; right-click a "
@@ -214,11 +218,19 @@ class SketchPalette(Panel):
         for v in ("0.250", "0.125", "0.0625", "0.010"):
             self.size.addItem(f"{v} in", float(v))
         self.row("Snap size", self.size)
-        self.sides = QComboBox()
-        self.sides.addItems(["3", "4", "5", "6", "8"])
-        self.sides.setCurrentText("6")
-        self.sides.setStyleSheet("min-width: 36px;")
+        self.sides = QSpinBox()
+        self.sides.setRange(3, 64)
+        self.sides.setValue(6)
+        self.sides.setButtonSymbols(QSpinBox.NoButtons)
+        self.sides.setAlignment(Qt.AlignRight)
+        self.sides.setFixedWidth(60)
         self.row("Polygon sides", self.sides)
+        self.poly_size = QComboBox()             # how the drag sizes it: to a flat or to a corner
+        self.poly_size.addItem("Across flats", True)
+        self.poly_size.addItem("Across corners", False)
+        self.poly_size.setToolTip("Drawing a polygon: the second click is the middle of a flat (across "
+                                  "flats) or a corner (across corners). Both sizes can be typed after.")
+        self.row("Polygon size", self.poly_size)
         self.corner = NumBox(0.125)
         self.corner.setRange(0.0001, 1000)
         self.corner.setToolTip("Radius for Fillet")
@@ -369,6 +381,98 @@ class SketchPalette(Panel):
                 box.blockSignals(False)
 
 
+class XformPanel(Panel):
+    """Sketch Rotate / Mirror / Pattern: the values, and its own OK / CANCEL (cancel only puts
+    the tool down; the sketch stays)."""
+
+    def __init__(self, s: "SketchSession", kind: str):
+        super().__init__({"rotate": "Rotate", "mirror": "Mirror", "pattern": "Pattern"}[kind], 270)
+        self.kind = kind
+        self.rows = {}
+
+        def num(v, dec=4, lo=-100000.0, hi=100000.0):
+            b = NumBox(v, dec)
+            b.setRange(lo, hi)
+            b.valueChanged.connect(lambda *_: s.xform_preview())
+            return b
+
+        def add(key, label, w):
+            self.row(label, w)
+            self.rows[key] = w.parentWidget()
+            return w
+        if kind == "pattern":
+            self.type = add("type", "Pattern", QComboBox())
+            self.type.addItem("Circular", "circular")
+            self.type.addItem("Rectangular", "rect")
+            self.type.currentIndexChanged.connect(lambda *_: (self.show_rows(), s.xform_preview()))
+            self.count = add("count", "Count", num(6, 0, 2, 500))
+            self.total = add("total", "Angle °", num(360.0, 3, -360, 360))
+            self.total.setToolTip("360 = evenly all the way round · less = spread from the original to that angle")
+            self.nx = add("nx", "Count X", num(3, 0, 1, 500))
+            self.dx = add("dx", "Spacing X", num(1.0))
+            self.ny = add("ny", "Count Y", num(1, 0, 1, 500))
+            self.dy = add("dy", "Spacing Y", num(1.0))
+        if kind == "rotate":
+            self.angle = add("angle", "Angle °", num(90.0, 3, -360, 360))
+        if kind == "mirror":
+            self.about = add("about", "Mirror line", QComboBox())
+            self.about.addItem("Y axis (vertical)", "y")
+            self.about.addItem("X axis (horizontal)", "x")
+            self.about.addItem("A line in the sketch", "line")
+            self.about.currentIndexChanged.connect(lambda *_: s.mirror_about_changed())
+            self.line_btn = QToolButton()
+            self.line_btn.setObjectName("pickBtn")
+            self.line_btn.setCheckable(True)
+            self.line_btn.setIcon(icons.icon("cursor", theme.FG2))
+            self.line_btn.setFixedSize(30, 24)
+            self.line_btn.setToolTip("Click, then click the line to mirror across")
+            self.line_btn.toggled.connect(lambda on: s.set_xpick("line" if on else None))
+            add("line", "Pick the line", self.line_btn)
+        if kind in ("rotate", "pattern"):
+            self.center_btn = QToolButton()
+            self.center_btn.setObjectName("pickBtn")
+            self.center_btn.setCheckable(True)
+            self.center_btn.setIcon(icons.icon("cursor", theme.FG2))
+            self.center_btn.setFixedSize(30, 24)
+            self.center_btn.setToolTip("Click, then click the center in the sketch (snaps to ends / centers)")
+            self.center_btn.toggled.connect(lambda on: s.set_xpick("center" if on else None))
+            add("center", "Center (pick)", self.center_btn)
+            self.cx = add("cx", "Center X", num(0.0))
+            self.cy = add("cy", "Center Y", num(0.0))
+        if kind in ("rotate", "mirror"):
+            self.copy = add("copy", "Keep original", QCheckBox("Copy"))
+            self.copy.setChecked(kind == "mirror")
+            self.copy.toggled.connect(lambda *_: s.xform_preview())
+        self.info = QLabel("")                   # one line: a wrapping label sizes wrong (see SketchPalette.fit)
+        self.info.setStyleSheet(f"color:{theme.FG2};padding:4px 10px;")
+        self.v.addWidget(self.info)
+        foot = QWidget()
+        fl = QHBoxLayout(foot)
+        fl.setContentsMargins(10, 6, 10, 6)
+        fl.addStretch()
+        cancel, ok = QPushButton("CANCEL"), QPushButton("OK")
+        for b in (cancel, ok):
+            b.setObjectName("dlgBtn")
+            fl.addWidget(b)
+        ok.setProperty("ok", True)
+        cancel.clicked.connect(lambda: s.set_tool(None))
+        ok.clicked.connect(s.xform_apply)
+        self.v.addWidget(foot)
+        self.show_rows()
+
+    def show_rows(self):
+        if self.kind == "pattern":
+            circ = self.type.currentData() == "circular"
+            for k in ("count", "total", "center", "cx", "cy"):
+                self.rows[k].setVisible(circ)
+            for k in ("nx", "dx", "ny", "dy"):
+                self.rows[k].setVisible(not circ)
+        if self.kind == "mirror":
+            self.rows["line"].setVisible(self.about.currentData() == "line")
+        self.adjustSize()
+        self.setFixedHeight(self.sizeHint().height())
+
+
 class PlanePickSession:
     """Sketch on the part: hover a flat face of the model and it is outlined, click it and the
     sketch opens on that face. Click empty space or press Enter for the XY plane. Esc cancels.
@@ -453,6 +557,10 @@ class SketchSession:
         self.sel: int | None = None          # entity whose exact values are in the palette
         self.gen = 0                         # bumps when the palette's fields are rebuilt
         self.palette = SketchPalette(self)
+        self.xpanel = None                   # Rotate / Mirror / Pattern panel while that tool is on
+        self.picked: list = []               # entities those tools work on
+        self.xpick = None                    # "center" / "line": the next click picks that
+        self.mirror_line = None
         self.editor = DimEditor(self.vp)     # right-click a dimension: type its value in place
         self._plane_changed()
 
@@ -524,6 +632,7 @@ class SketchSession:
         self.redraw()
 
     def set_tool(self, label: str | None):
+        self._end_xform()
         self.tool = TOOL_KEYS.get(label) if label else None
         self.pts = []
         self.vp.clear("preview")
@@ -534,6 +643,8 @@ class SketchSession:
         where = "XY PLANE" if pl.is_xy(self.frame) else "FACE PLANE"
         self.vp.show_banner(f"{head} · {where} · <span style='color:{theme.ACCENT}'>{name}</span>")
         self.win.message(HINTS.get(self.tool, SELECT_HINT))
+        if self.tool in XFORM_TOOLS:
+            self._start_xform()
 
     def _snap(self, w, ev):
         """Where a click lands: a snap point (end / mid / center of the sketch or of the part's
@@ -645,6 +756,16 @@ class SketchSession:
         if not self.tool:
             return
         pos = ev.position().toPoint()
+        if self.tool in XFORM_TOOLS:
+            if self.xpick == "center":
+                p = self._snap(w, ev)
+                self._mark_snap(p, pos)
+                self.vp.show_dim(f"CENTER X {sk.fmt(p[0])}  Y {sk.fmt(p[1])}", pos)
+            else:
+                self.vp.show_dim("click the mirror line" if self.xpick == "line" else
+                                 f"{len(self.picked)} picked · click a shape to add / drop it", pos)
+            self.vp.render()
+            return
         if self.tool in CORNER_TOOLS:
             self._corner_hover(w, pos)
             return
@@ -660,11 +781,12 @@ class SketchSession:
             self.vp.show_dim(f"X {sk.fmt(p[0])}  Y {sk.fmt(p[1])}{tag}", pos)
             self.vp.render()
             return
-        ent = sk.build_entity(self.tool, self.pts[0], p, int(self.palette.sides.currentText()))
+        n, flats = self.palette.sides.value(), self.palette.poly_size.currentData()
+        ent = sk.build_entity(self.tool, self.pts[0], p, n, flats)
         self.vp.clear("preview", render=False)
         if ent:
             self.vp.add_lines("preview", self._lines([ent]), opacity=0.45)
-        self.vp.show_dim(sk.preview_label(self.tool, self.pts[0], p, int(self.palette.sides.currentText())) + tag, pos)
+        self.vp.show_dim(sk.preview_label(self.tool, self.pts[0], p, n, flats) + tag, pos)
         self.vp.render()
 
     def _add(self, ent):
@@ -718,6 +840,9 @@ class SketchSession:
             pos = ev.position().toPoint()
             self.select(sk.nearest(self.ents, w, 8 * self.vp.pixel_size(pos)))
             return
+        if self.tool in XFORM_TOOLS:
+            self.xform_click(w, ev)
+            return
         if self.tool in CORNER_TOOLS:
             pos = ev.position().toPoint()
             try:
@@ -752,7 +877,7 @@ class SketchSession:
         if not self.pts:
             self.pts = [p]
             return
-        ent = sk.build_entity(self.tool, self.pts[0], p, int(self.palette.sides.currentText()))
+        ent = sk.build_entity(self.tool, self.pts[0], p, self.palette.sides.value(), self.palette.poly_size.currentData())
         self.pts = [p] if self.tool == "line" else []
         self.vp.clear("preview", render=False)
         if ent:
@@ -796,6 +921,8 @@ class SketchSession:
                 self.set_tool(None)
             else:
                 self.select(None)
+        elif k in (Qt.Key_Return, Qt.Key_Enter) and self.tool in XFORM_TOOLS:
+            self.xform_apply()
         elif k in (Qt.Key_Return, Qt.Key_Enter):
             self.win.finish_sketch()
         elif k == Qt.Key_Z and ev.modifiers() & Qt.ControlModifier:
@@ -841,7 +968,138 @@ class SketchSession:
             self.win.not_built(label)
             self.win.ribbon.set_active(None)
 
+    # ---- Rotate / Mirror / Pattern: pick shapes, set values, OK
+    def _start_xform(self):
+        self.picked = [self.sel] if self.sel is not None else []
+        self.xpick, self.mirror_line = None, None
+        self.xpanel = XformPanel(self, self.tool)
+        self.vp.set_side(self.xpanel)
+        self.xform_preview()
+
+    def _end_xform(self):
+        if self.xpanel is None:
+            return
+        self.xpanel.hide()
+        self.xpanel.deleteLater()
+        self.xpanel, self.picked, self.xpick = None, [], None
+        self.vp.clear("xform", render=False)
+        self.vp.clear("snapmark", render=False)
+        self.vp.dim.hide()
+        self.vp.set_side(self.palette)
+        self.redraw()
+
+    def set_xpick(self, what):
+        self.xpick = what
+
+    def mirror_about_changed(self):
+        self.xpanel.show_rows()
+        if self.xpanel.about.currentData() == "line" and self.mirror_line is None:
+            self.xpanel.line_btn.setChecked(True)
+        self.xform_preview()
+
+    def xform_click(self, w, ev):
+        pos = ev.position().toPoint()
+        p = self.xpanel
+        if self.xpick == "center":
+            q = self._snap(w, ev)
+            p.cx.setValue(q[0])
+            p.cy.setValue(q[1])
+            p.center_btn.setChecked(False)
+            self.vp.clear("snapmark", render=False)
+        elif self.xpick == "line":
+            i = sk.nearest(self.ents, w, 8 * self.vp.pixel_size(pos))
+            if i is None or self.ents[i]["type"] != "line":
+                self.vp.show_toast("Click a line to mirror across", bad=True)
+                return
+            self.mirror_line = list(self.ents[i]["pts"])
+            if i in self.picked:
+                self.picked.remove(i)
+            p.line_btn.setChecked(False)
+        else:
+            i = sk.nearest(self.ents, w, 8 * self.vp.pixel_size(pos))
+            if i is None:
+                return
+            if i in self.picked:
+                self.picked.remove(i)
+            else:
+                self.picked.append(i)
+        self.xform_preview()
+
+    def _xform_result(self):
+        """(ents, origin) after the tool, or raises ValueError (nothing picked, no line...)."""
+        if not self.picked:
+            raise ValueError("Click the shapes to " + self.tool + " first")
+        p, kind = self.xpanel, self.tool
+        src = [self.ents[i] for i in self.picked]
+        if kind == "pattern":
+            if p.type.currentData() == "circular":
+                new = sk.circular_pattern(src, (p.cx.value(), p.cy.value()), int(p.count.value()), p.total.value())
+            else:
+                new = sk.rect_pattern(src, int(p.nx.value()), p.dx.value(), int(p.ny.value()), p.dy.value())
+            return self.ents + new, self.origin + [None] * len(new)
+        if kind == "rotate":
+            def f(es):
+                return sk.rotated(es, (p.cx.value(), p.cy.value()), p.angle.value())
+        else:
+            about = p.about.currentData()
+            if about == "line" and self.mirror_line is None:
+                raise ValueError("Pick the line to mirror across")
+            a, b = {"y": ((0, 0), (0, 1)), "x": ((0, 0), (1, 0))}.get(about) or self.mirror_line
+
+            def f(es):
+                return sk.mirrored(es, a, b)
+        if p.copy.isChecked():
+            new = f(src)
+            return self.ents + new, self.origin + [None] * len(new)
+        ents, origin = [], []
+        for i, e in enumerate(self.ents):
+            if i in self.picked:
+                moved = f([e])
+                ents += moved
+                origin += [self.origin[i]] * len(moved)
+            else:
+                ents.append(e)
+                origin.append(self.origin[i])
+        return ents, origin
+
+    def xform_preview(self):
+        if self.xpanel is None:
+            return
+        self.vp.clear("xform", render=False)
+        picked = [self.ents[i] for i in self.picked if 0 <= i < len(self.ents)]
+        if picked:
+            self.vp.add_lines("xform", self._lines(picked, 0.005), color=theme.ACCENT, width=3.0)
+        if self.tool == "mirror" and self.xpanel.about.currentData() == "line" and self.mirror_line:
+            self.vp.add_lines("xform", self._lines([sk.line(*self.mirror_line)], 0.006), color=theme.WARN, width=2.0)
+        try:
+            ents, _o = self._xform_result()
+            old = {id(e) for e in self.ents}
+            new = [e for e in ents if id(e) not in old]
+            self.vp.add_lines("xform", self._lines(new, 0.004), color=theme.ACCENT, width=1.6, opacity=0.55)
+            self.xpanel.info.setText(f"{len(self.picked)} picked · {len(new)} new · Enter applies")
+        except ValueError as exc:
+            self.xpanel.info.setText(str(exc))
+        self.xpanel.info.setToolTip(self.xpanel.info.text())
+        self.vp.render()
+
+    def xform_apply(self):
+        try:
+            ents, origin = self._xform_result()
+        except ValueError as exc:
+            self.vp.show_toast(str(exc), bad=True)
+            return
+        self._push()
+        self.ents, self.origin = ents, origin
+        self.set_tool(None)                  # back to Select, the palette back
+        self.select(None)
+
     def close(self):
+        if self.xpanel is not None:
+            self.xpanel.hide()
+            self.xpanel.deleteLater()
+            self.xpanel = None
+        for g in ("xform",):
+            self.vp.clear(g, render=False)
         for g in ("sketch", "sel", "dims", "preview", "plane_edges", "snapmark"):
             self.vp.clear(g, render=False)
         self.vp.dim.hide()

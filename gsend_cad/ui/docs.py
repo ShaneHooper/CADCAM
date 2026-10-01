@@ -128,6 +128,27 @@ Extrudes already made from it keep working.</li>
 chamfer's <b>Horizontal</b> and <b>Vertical</b> legs. Its dimensions show them too; right-click one to
 change it. The corner stays put: the two sides are trimmed back to the new size and nothing else moves.</li>
 </ul>
+<h3>Polygon: sides, across flats / across corners</h3>
+<ul>
+<li>Set <b>Polygon sides</b> (3 to 64) and <b>Polygon size</b> in the palette, then click the center and drag:
+with <b>Across flats</b> the second click is the middle of a flat (a hex drawn 1/2 out is 1.0 across flats);
+with <b>Across corners</b> it's a corner.</li>
+<li>Click the polygon to type its <b>Across flats</b> or <b>Across corners</b> exactly (the other follows), its
+sides, center X / Y and angle. Its dimensions show AF and AC; right-click one to change it.</li>
+</ul>
+<h3>Rotate, Mirror, Pattern</h3>
+<ul>
+<li>Pick the tool (Sketch tab, Modify), then click the shapes to work on (they turn blue; click again to
+drop one). A shape that was selected is picked already. The result shows faintly; <b>OK</b> or Enter applies,
+<b>CANCEL</b> or Esc puts the tool down. Each one is a single Ctrl+Z.</li>
+<li><b>Rotate</b>: angle (counter-clockwise +), center (type X / Y or click the arrow then a point in the
+sketch; it snaps to ends and centers). <b>Keep original</b> makes a turned copy instead.</li>
+<li><b>Mirror</b>: across the Y axis, the X axis or a line in the sketch (click the arrow, then the line).
+Keeps the original by default.</li>
+<li><b>Pattern</b>: <b>Circular</b> = count and angle about a center (360 = evenly all the way round, e.g. a bolt
+circle; less = from the original to that angle). <b>Rectangular</b> = count and spacing in X and Y.</li>
+<li>A rectangle turned by an odd angle becomes its four lines (so it can still be edited line by line).</li>
+</ul>
 <h3>Trim</h3>
 <ul>
 <li>Click <b>Trim</b> (Sketch tab, Modify) or press <b>T</b>. Hover a line, arc or circle: the piece a click

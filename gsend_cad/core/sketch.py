@@ -71,15 +71,19 @@ def center_rect(c, corner):
     return e
 
 
-def polygon(c, vertex, sides):
+def polygon(c, vertex, sides, flats=False):
+    """Regular polygon about c. `vertex` is a corner, or with flats=True the middle of a flat
+    (how a hex is drawn by its size across flats)."""
     r = math.hypot(vertex[0] - c[0], vertex[1] - c[1])
     a0 = math.atan2(vertex[1] - c[1], vertex[0] - c[0])
+    if flats:
+        r, a0 = r / math.cos(math.pi / sides), a0 + math.pi / sides
     pts = [[c[0] + r * math.cos(a0 + i / sides * 2 * math.pi), c[1] + r * math.sin(a0 + i / sides * 2 * math.pi)]
            for i in range(sides)]
     return {"type": "polygon", "pts": pts, "r": r}
 
 
-def build_entity(tool: str, a, b, sides: int = 6):
+def build_entity(tool: str, a, b, sides: int = 6, flats: bool = False):
     """Entity for a two-click sketch tool (the prototype's buildEntity). None if degenerate."""
     if tool == "point":
         return point(a)
@@ -95,7 +99,7 @@ def build_entity(tool: str, a, b, sides: int = 6):
     if tool == "circle":
         return circle(a, r)
     if tool == "polygon":
-        return polygon(a, b, sides)
+        return polygon(a, b, sides, flats)
     raise ValueError(f"unknown sketch tool {tool!r}")
 
 
@@ -161,10 +165,11 @@ def entity_label(e):
     if t == "rect":
         p = e["pts"]
         return "Rect", f"{fmt(abs(p[2][0] - p[0][0]))} × {fmt(abs(p[2][1] - p[0][1]))}"
-    return "Polygon", f"{len(e['pts'])} sides · R {fmt(e['r'])}"
+    n = len(e["pts"])
+    return "Polygon", f"{n} · AF {fmt(2 * e['r'] * math.cos(math.pi / n))}"
 
 
-def preview_label(tool, a, b, sides=6):
+def preview_label(tool, a, b, sides=6, flats=False):
     """Live dimension text that follows the cursor."""
     dx, dy = b[0] - a[0], b[1] - a[1]
     L = math.hypot(dx, dy)
@@ -177,7 +182,8 @@ def preview_label(tool, a, b, sides=6):
     if tool == "circle":
         return f"Ø {fmt(L * 2)}  R {fmt(L)}"
     if tool == "polygon":
-        return f"{sides} sides  R {fmt(L)}"
+        r = L / math.cos(math.pi / sides) if flats else L
+        return f"{sides} sides  AF {fmt(2 * r * math.cos(math.pi / sides))}  AC {fmt(2 * r)}"
     return ""
 
 
@@ -190,7 +196,7 @@ def snap(v: float, step: float) -> float:
 # params() reads them, set_param() rebuilds the entity with one of them changed.
 LABELS = {"x": "X", "y": "Y", "x2": "End X", "y2": "End Y", "len": "Length", "ang": "Angle °",
           "dia": "Diameter", "w": "Width", "h": "Height", "cr": "Corner R", "r": "Radius", "sides": "Sides",
-          "ch": "Horizontal", "cv": "Vertical"}
+          "ch": "Horizontal", "cv": "Vertical", "af": "Across flats", "ac": "Across corners"}
 
 
 def _center(pts):
@@ -222,7 +228,8 @@ def params(e) -> dict:
         return {"x": x, "y": y, "w": w, "h": h, "cr": e.get("corner_r", 0.0)}
     c = _center(e["pts"])
     v = e["pts"][0]
-    return {"x": c[0], "y": c[1], "r": e["r"], "sides": len(e["pts"]),
+    n = len(e["pts"])
+    return {"x": c[0], "y": c[1], "sides": n, "af": 2 * e["r"] * math.cos(math.pi / n), "ac": 2 * e["r"],
             "ang": math.degrees(math.atan2(v[1] - c[1], v[0] - c[0]))}
 
 
@@ -247,7 +254,7 @@ def _set_param(e, key, value):
         raise ValueError("A chamfer is changed with edit() (its sides move too)")
     v = params(e)
     v[key] = float(value)
-    for k in ("len", "dia", "w", "h", "r"):
+    for k in ("len", "dia", "w", "h", "r", "af", "ac"):
         if k in v and v[k] <= 1e-9:
             raise ValueError(f"{LABELS[k]} must be greater than 0")
     t = e["type"]
@@ -278,8 +285,9 @@ def _set_param(e, key, value):
     n = int(round(v["sides"]))
     if n < 3:
         raise ValueError("A polygon needs at least 3 sides")
+    r = v["af"] / 2 / math.cos(math.pi / n) if key == "af" else v["ac"] / 2   # sides changed: same corners
     a = math.radians(v["ang"])
-    return polygon((v["x"], v["y"]), (v["x"] + v["r"] * math.cos(a), v["y"] + v["r"] * math.sin(a)), n)
+    return polygon((v["x"], v["y"]), (v["x"] + r * math.cos(a), v["y"] + r * math.sin(a)), n)
 
 
 def _bbox(e):
@@ -343,8 +351,13 @@ def dimensions(e) -> list[dict]:
                         key="dia"))
     elif t == "line":
         out.append(_dim(e["pts"][0], e["pts"][1], g, fmt(v["len"]), key="len"))
-    elif t == "polygon":
-        out.append(_dim([ax, ay], e["pts"][0], 0, "R " + fmt(v["r"]), key="r"))
+    elif t == "polygon":                              # across flats (flat to flat), across corners
+        P, n = e["pts"], len(e["pts"])
+        m0 = [(P[0][0] + P[1][0]) / 2, (P[0][1] + P[1][1]) / 2]
+        m1 = [2 * ax - m0[0], 2 * ay - m0[1]]
+        out.append(_dim(m0, m1, 0, "AF " + fmt(v["af"]), key="af"))
+        out.append(_dim(P[0], [2 * ax - P[0][0], 2 * ay - P[0][1]], 0, "AC " + fmt(v["ac"]),
+                        [ax + (P[0][0] - ax) * 0.55, ay + (P[0][1] - ay) * 0.55], key="ac"))
     elif t == "arc":
         out.append(_dim([ax, ay], arc_mid(e), 0, "R " + fmt(v["r"]), key="r"))
     return out
@@ -827,3 +840,100 @@ def trim(ents, origin, p, tol: float):
         ents.append(k)
         origin.append(o)
     return ents, origin
+
+
+
+# ---------------------------------------------------------------- rotate / mirror / pattern
+# Whole entities moved or copied. A rect stays a rect when it lands square to the axes (mirror,
+# quarter turns); otherwise it becomes its sides (lines, plus arcs for a rounded one).
+
+def _xform(e, f, flip: bool, turn: float):
+    """Entity e with every point through f. turn = degrees its angles turn by (rotation), or for
+    a mirror (flip=True) the mirror line's angle x2 (an angle a becomes turn - a)."""
+    e = dict(e)
+    if e.get("corner"):
+        e["corner"] = list(f(e["corner"]))
+    t = e["type"]
+    if t == "point":
+        e["p"] = list(f(e["p"]))
+    elif t == "line":
+        e["pts"] = [list(f(q)) for q in e["pts"]]
+    elif t == "circle":
+        e["c"] = list(f(e["c"]))
+    elif t == "arc":
+        c, pts = list(f(e["c"])), [list(f(q)) for q in e["pts"]]
+        if flip:                                       # a mirror runs the arc the other way round
+            out = arc(c, e["r"], turn - e["a1"], turn - e["a0"], [pts[1], pts[0]])
+        else:
+            out = arc(c, e["r"], e["a0"] + turn, e["a1"] + turn, pts)
+        if e.get("corner"):
+            out["corner"] = e["corner"]
+        return out
+    elif t == "polygon":
+        e["pts"] = [list(f(q)) for q in e["pts"]]
+    elif t == "rect":
+        pts = [f(q) for q in e["pts"]]
+        xs, ys = {round(q[0], 9) for q in pts}, {round(q[1], 9) for q in pts}
+        if len(xs) == 2 and len(ys) == 2:              # still square to the axes: still a rect
+            out = rect((min(xs), min(ys)), (max(xs), max(ys)), e.get("corner_r", 0.0))
+            if e.get("anchor"):
+                out["anchor"] = e["anchor"]
+            return out
+        return [_xform(q, f, flip, turn) for q in explode(e)]
+    return e
+
+
+def _apply(ents, f, flip, turn):
+    out = []
+    for e in ents:
+        r = _xform(e, f, flip, turn)
+        out += r if isinstance(r, list) else [_clean(r)]
+    return out
+
+
+def rotated(ents, center, deg: float) -> list:
+    """The entities turned deg (counter-clockwise) about center."""
+    a = math.radians(deg)
+    ca, sa = math.cos(a), math.sin(a)
+
+    def f(p):
+        dx, dy = p[0] - center[0], p[1] - center[1]
+        return [center[0] + dx * ca - dy * sa, center[1] + dx * sa + dy * ca]
+    return _apply(ents, f, False, deg)
+
+
+def mirrored(ents, a, b) -> list:
+    """The entities mirrored across the line through a and b."""
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    L = math.hypot(dx, dy)
+    if L < 1e-12:
+        raise ValueError("The mirror line needs two different points")
+    ux, uy = dx / L, dy / L
+
+    def f(p):
+        px, py = p[0] - a[0], p[1] - a[1]
+        d = px * ux + py * uy
+        return [a[0] + 2 * d * ux - px, a[1] + 2 * d * uy - py]
+    return _apply(ents, f, True, 2 * math.degrees(math.atan2(uy, ux)))
+
+
+def moved(ents, dx: float, dy: float) -> list:
+    return _apply(ents, lambda p: [p[0] + dx, p[1] + dy], False, 0.0)
+
+
+def circular_pattern(ents, center, count: int, total: float = 360.0) -> list:
+    """count - 1 copies (the originals are the first) spread over `total` degrees about center:
+    360 = all the way round, evenly; less = from the original to that angle."""
+    count = int(count)
+    if count < 2:
+        raise ValueError("A pattern needs at least 2")
+    step = total / count if abs(total) >= 360 - 1e-9 else total / (count - 1)
+    return [q for k in range(1, count) for q in rotated(ents, center, step * k)]
+
+
+def rect_pattern(ents, nx: int, dx: float, ny: int = 1, dy: float = 0.0) -> list:
+    """Copies in a grid: nx along X every dx, ny along Y every dy (the originals at the corner)."""
+    nx, ny = int(nx), int(ny)
+    if nx < 1 or ny < 1 or nx * ny < 2:
+        raise ValueError("A pattern needs at least 2")
+    return [q for j in range(ny) for i in range(nx) if i or j for q in moved(ents, dx * i, dy * j)]

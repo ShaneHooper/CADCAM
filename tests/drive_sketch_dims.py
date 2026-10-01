@@ -248,5 +248,50 @@ key(Qt.Key_Z, Qt.ControlModifier)
 check("Ctrl+Z brings it back", len(s.ents) == 2 and any(e["pts"] == [[0, 0], [2, 0]] for e in s.ents))
 key(Qt.Key_Escape)
 win.run_tool("Cancel")
+
+# ---- Polygon by its size across flats; Rotate / Mirror / Pattern on picked shapes
+start_xy_sketch()
+s = win.session
+win.run_tool("Polygon")
+check("polygon: sides box and across flats / corners choice", s.palette.sides.value() == 6
+      and s.palette.poly_size.currentData() is True)
+click(0, 0)
+click(0, 0.5)                                         # to the middle of a flat: 1.0 across flats
+e = s.ents[-1]
+check("hex drawn 1.0 across flats", e["type"] == "polygon" and abs(sk.params(e)["af"] - 1) < 1e-9)
+s.select(len(s.ents) - 1)
+check("palette offers Across flats / Across corners", "af" in s.palette.boxes and "ac" in s.palette.boxes)
+key(Qt.Key_Escape)
+s.ents.append(sk.circle((2, 0), 0.25))
+s.origin.append(None)
+s.select(None)                                        # (a selected shape starts out picked)
+s.redraw()
+win.run_tool("Pattern")
+check("Pattern panel opens in the palette's place", s.xpanel is not None and s.xpanel.isVisible()
+      and not s.palette.isVisible())
+click(2.25, 0)                                        # pick the circle
+check("clicking the circle picks it", s.picked == [len(s.ents) - 1])
+s.xpanel.count.setValue(4)
+shot("sketch_pattern_panel")
+key(Qt.Key_Return)
+cs = [x["c"] for x in s.ents if x["type"] == "circle"]
+check("circular pattern of 4 about the origin", len(cs) == 4 and [0, 2] in cs and [-2, 0] in cs)
+check("back to Select with the palette", s.tool is None and s.palette.isVisible())
+win.run_tool("Mirror")
+click(0.0, 2.25)                                      # the top circle
+s.xpanel.about.setCurrentIndex(s.xpanel.about.findData("x"))
+s.xform_apply()
+check("mirror across X keeps the original (Copy on)", sum(1 for x in s.ents if x["type"] == "circle"
+                                                          and x["c"] == [0, -2]) == 2)
+win.run_tool("Rotate")
+s.picked = [0]
+s.xpanel.angle.setValue(30)
+s.xpanel.copy.setChecked(False)
+s.xform_apply()
+check("rotate turns the hex 30° in place", abs(sk.params(s.ents[0])["ang"] - (sk.params(e)["ang"] + 30)) < 1e-6
+      or abs(sk.params(s.ents[-1])["ang"] - (sk.params(e)["ang"] + 30)) < 1e-6)
+shot("sketch_xform")
+key(Qt.Key_Escape)
+win.run_tool("Cancel")
 print("FAILURES:", failures or "none")
 sys.exit(1 if failures else 0)
