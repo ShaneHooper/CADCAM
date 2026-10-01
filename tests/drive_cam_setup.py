@@ -16,6 +16,10 @@ from gsend_cad.core import sketch_regions
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "."
 app = QApplication(sys.argv[:1])
+_lib = os.path.join(OUT, "tool_library_test.json")    # a fresh library (the defaults), not the user's
+if os.path.exists(_lib):
+    os.remove(_lib)
+os.environ["GSEND_TOOL_LIBRARY"] = _lib
 win = gsend_cad.launch(block=False)
 win.move(0, 0)
 vp = win.viewport
@@ -205,9 +209,11 @@ check("rough stops at the shoulder + leave Z, never below the part + leave X",
       min(p[0] for p in feeds) >= 0.5 + 0.01 - 1e-6
       and all(p[0] >= 0.75 + 0.01 - 1e-6 for p in feeds if p[2] < -1.05 - 0.005 - 1e-6))
 check("rough preview counts passes", "roughing pass" in o.panel.info.text())
-check("rough has Start / End rows (Part front / Part back)", o.panel.ends["start"][1].text() == "Part front"
-      and o.panel.ends["end"][1].text() == "Part back" and o.panel.ends["start"][2].isVisible())
-o.panel.ends["end"][2].setChecked(True)
+check("rough panel: Tool from the library first, Start / End cursor buttons with Extend, no Setup / Name rows",
+      o.panel.tools["turning"].currentText().startswith("T2 · CNMG Rough") and o.panel.ends["start"][1].isVisible()
+      and not o.panel.setup.isVisible() and not o.panel.name.isVisible()
+      and o.panel.boxes[("turning", "past_back")].isVisible())
+o.panel.ends["end"][1].setChecked(True)
 pump()
 q = vp.project([(2.0, 0.0, 0.75)])[0]                  # the shoulder edge (Ø1.5 at x = 2)
 from PySide6.QtCore import QPoint as _QP
@@ -216,12 +222,17 @@ pump(60)
 QTest.mouseClick(vp.plotter, Qt.LeftButton, Qt.NoModifier, _QP(round(q[0]), round(q[1])))
 pump(150)
 check("picking the shoulder edge sets End there (Z-1.05)", abs(o.end_at - 2.0) < 1e-6
-      and o.panel.ends["end"][1].text() == "Z-1.0500" and not o.panel.ends["end"][2].isChecked())
+      and "Z-1.0500" in o.panel.ends["end"][1].toolTip() and not o.panel.ends["end"][1].isChecked())
 mv, _w = op_moves(win, o.current_setup(), o.op())
 check("rough now stops at the shoulder", min(p[2] for k, p in mv if k == "feed") >= -1.05 - 0.03)
+o.panel.boxes[("turning", "past_back")].setValue(0.25)
+mv, _w = op_moves(win, o.current_setup(), o.op())
+check("End Extend 0.25 runs it further", min(p[2] for k, p in mv if k == "feed") < -1.05 - 0.2)
+o.panel.boxes[("turning", "past_back")].setValue(0.0)
 shot("cam_04a_rough_end")
-o.panel.ends["end"][2].parent().findChildren(type(o.panel.ends["end"][2]))[-1].click()
-check("× puts End back to Part back", o.end_at is None and o.panel.ends["end"][1].text() == "Part back")
+o.clear_end("end")
+check("right-click the End button puts End back to the part's back end", o.end_at is None
+      and "back end" in o.panel.ends["end"][1].toolTip().splitlines()[0])
 o.panel.output.setCurrentIndex(o.panel.output.findData("cycle"))
 shot("cam_04b_rough")
 key(Qt.Key_Return)
@@ -247,16 +258,16 @@ win.run_tool("Face")
 o = win.session
 check("Face from the Milling tab picks the milling setup", o.current_setup()["type"] == "milling"
       and o.panel.groups["milling"].isVisible())
-o.panel.boxes[("milling", "tool_dia")].setValue(1.0)
+o.panel.tools["milling"].setCurrentIndex(o.panel.tools["milling"].findText("T2", Qt.MatchStartsWith))
 shot("cam_05_face_milling")
 key(Qt.Key_Return)
 ms = win.doc.setups[-1]
 oid = ms["ops"][0]["id"]
-check("milling Face saved with the Ø1 tool", ms["ops"][0]["tool_dia"] == 1.0)
+check("milling Face saved with the picked tool (T2 Ø0.5)", ms["ops"][0]["tool_dia"] == 0.5 and ms["ops"][0]["tool"] == 2)
 win.browser.edit.emit(oid)
 pump()
 check("double-click reopens the Face op", win.session.edit_id == oid and
-      win.session.panel.boxes[("milling", "tool_dia")].value() == 1.0)
+      win.session.panel.tools["milling"].currentText().startswith("T2 ·"))
 key(Qt.Key_Escape)
 win.delete_node(oid)
 check("Delete removes the op", not win.doc.setup(ms["id"]).get("ops"))
@@ -269,7 +280,7 @@ win.run_tool("Post Process")
 pump()
 dlg = win.post_dialog
 g = dlg.text.toPlainText()
-check("Post dialog shows G-code for the milling setup", g.startswith("%\nO") and "T1 M06" in g and "M30" in g)
+check("Post dialog shows G-code for the milling setup", g.startswith("%\nO") and "T2 M06" in g and "M30" in g)
 dlg.control.setCurrentIndex(dlg.control.findData("fanuc"))
 check("switching to Fanuc updates the code", "G28 G91 X0. Y0." in dlg.text.toPlainText())
 from PySide6.QtWidgets import QFileDialog
@@ -336,7 +347,7 @@ o = win.session
 check("Drill opens with the hole sizes found in the model",
       o.kind == "drill" and [o.panel.holes.itemText(i) for i in range(o.panel.holes.count())]
       == ["All holes", "Ø0.2500", "Ø0.5000"] and o.panel.holes.currentData() == 0.25
-      and o.panel.boxes[("milling", "tool_dia")].value() == 0.25)
+      and o.panel.tools["milling"].currentText().startswith("T4 · 1/4 Drill"))
 check("Drill preview: 2 holes", o.panel.info.text().startswith("2 holes"))
 o.panel.holes.setCurrentIndex(0)
 check("All holes: 3", o.panel.info.text().startswith("3 holes"))
@@ -346,5 +357,31 @@ key(Qt.Key_Return)
 dst = win.doc.setups[-1]
 g = post.post_setup(dst, [(cam.validate_op(dst, x), op_moves(win, dst, x)[0]) for x in dst["ops"]], "haas", 1)
 check("Drill posts a G83 peck cycle over both holes", "G98 G83 X" in g and "Q0.1" in g and "G80" in g)
+
+# ---- Tool Library: make a Ø0.5 drill, it shows in the Drill op's Tool box and is saved
+from gsend_cad.ui.commands import ToolLibraryDialog
+from gsend_cad.core import tools as _tools
+dlg = ToolLibraryDialog(win, "milling")
+dlg.show()
+pump()
+n0 = dlg.list.count()
+dlg.new_tool("drill")
+dlg.number.setValue(7)
+dlg.name.setText("1/2 Drill")
+dlg.name.editingFinished.emit()
+dlg.dia.setValue(0.5)
+pump()
+check("Tool Library: NEW TOOL adds T7 1/2 Drill Ø0.5", dlg.list.count() == n0 + 1 and
+      any(t["number"] == 7 and t["dia"] == 0.5 and t["name"] == "1/2 Drill" for t in win.tool_lib))
+check("library saved to its file", any(t["number"] == 7 for t in _tools.load(_lib)))
+shot("cam_10_tool_library")
+dlg.accept()
+win.run_tool("Drill")
+o = win.session
+o.panel.holes.setCurrentIndex(o.panel.holes.findData(0.5))
+pump()
+check("picking the Ø0.5 holes picks the Ø0.5 drill from the library",
+      o.panel.tools["milling"].currentText().startswith("T7 · 1/2 Drill") and o.op()["tool_dia"] == 0.5)
+key(Qt.Key_Escape)
 print("FAILURES:", failures or "none")
 sys.exit(1 if failures else 0)

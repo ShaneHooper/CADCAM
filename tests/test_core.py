@@ -517,3 +517,22 @@ def test_turning_start_end_and_extend():
     r = {**cam.new_op(s, "rough"), "name": "R", "end_at": 2.0}
     feeds = [p for k, p in cam.toolpath(box, s, r, 1.0, profile=prof) if k == "feed"]
     assert min(z for _x, _y, z in feeds) >= -1.05 - 0.02                                  # rough stops at End
+
+
+def test_tool_library_load_save_and_choices(tmp_path):
+    from gsend_cad.core import cam, tools
+    p = str(tmp_path / "lib.json")
+    lib = tools.load(p)                                     # no file yet: the defaults
+    assert {t["machine"] for t in lib} == {"milling", "turning"}
+    lib.append(tools.validate({"id": tools.new_id(lib), "number": 9, "name": "3/8 End mill", "kind": "end mill",
+                               "machine": "milling", "dia": 0.375}))
+    tools.save(p, lib)
+    lib2 = tools.load(p)
+    assert [t["name"] for t in tools.choices(lib2, "milling", "contour")] == ["1/2 End mill", "3/8 End mill"]
+    s = cam.new_setup("milling")
+    op = tools.apply(cam.new_op(s, "contour"), lib2[-1])
+    assert (op["tool"], op["tool_dia"]) == (9, 0.375) and tools.find(lib2, op, "milling", "contour")["number"] == 9
+    with pytest.raises(ValueError):
+        tools.validate({"number": 1, "kind": "drill", "machine": "milling", "dia": 0})
+    with pytest.raises(ValueError):
+        tools.validate({"number": 1, "kind": "od turn", "machine": "milling"})

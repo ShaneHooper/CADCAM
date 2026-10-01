@@ -28,6 +28,8 @@ PATHS = {
     "section": '<path d="M4 6h16v12H4zM12 6v12"/><path d="M4 12h8" stroke-dasharray="2 2"/>',
     "insert": '<path d="M12 5v14M5 12h14"/>',
     "select": '<path d="M5 3l14 9-6 1 3 6-2 1-3-6-4 4z"/>',
+    "cursor": '<path d="M5 3l14 9-6 1 3 6-2 1-3-6-4 4z"/>',
+    "tools": '<path d="M14 4a4 4 0 0 0-4 5L4 15l3 3 6-6a4 4 0 0 0 5-4l-2 2-3-1-1-3z"/>',
     "line": '<path d="M4 20 20 4"/><circle cx="4" cy="20" r="1.5"/><circle cx="20" cy="4" r="1.5"/>',
     "rect": '<rect x="4" y="6" width="16" height="12"/>',
     "crect": '<rect x="4" y="6" width="16" height="12"/><path d="M12 9v6M9 12h6"/>',

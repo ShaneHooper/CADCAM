@@ -291,8 +291,11 @@ removes it (Ctrl+Z brings it back); F2 renames it. Click one to show its stock.<
 <p>Faces the stock down to the part (plus any stock to leave). Make a Setup first.</p>
 <ol>
 <li>CAM → <b>Face</b> (Milling or Turning tab). It opens on the setup you last picked, or a setup
-of the tab's type. The <b>Setup</b> box at the top switches it.</li>
-<li><b>Milling setup</b>: tool diameter (a face mill), stepover % of the tool, max stepdown, stock
+of the tab's type (pick a setup in the Browser first to choose another). It's named Face1, Face2...
+(rename it in the Browser).</li>
+<li><b>Tool</b>: picked from the Tool Library (the tools that fit, e.g. face and end mills). <b>New tool…</b>
+at the bottom of the list opens the library with a new tool ready to fill in.</li>
+<li><b>Milling setup</b>: stepover % of the tool, max stepdown, stock
 to leave, cut direction (along X or Y), spindle RPM and feed (in/min). Zigzag passes run fully off
 the stock at both ends, from the stock top down to the part top.</li>
 <li><b>Turning setup</b>: max stepdown per pass, stock to leave, how far past center (X, radius), surface
@@ -315,11 +318,12 @@ F2 to rename. Clicking an operation shows its path bright; the setup's other pat
 <ol>
 <li>CAM → Turning tab → <b>OD Rough</b>.</li>
 <li><b>Depth of cut (side)</b> per pass (radius), <b>Stock to leave X</b> (per side) and <b>Z</b> (on shoulders),
-<b>Extend end</b> to run further toward the chuck, <b>Pull-off</b> (the 45° lift at the end of each
+<b>Pull-off</b> (the 45° lift at the end of each
 pass), surface speed SFM, feed in/rev, max RPM.</li>
-<li><b>Start</b> / <b>End</b>: click <b>PICK</b>, then click an edge or end point of the part. The toolpath starts
-(or stops) at that Z; white rings in the view show where. <b>×</b> puts it back to the part's front face /
-back end. <b>Extend start</b> / <b>Extend end</b> run it further past them. Same on turning <b>Contour</b>.</li>
+<li><b>Start</b> / <b>End</b>: click the arrow button, then click an edge or end point of the part. The toolpath
+starts (or stops) at that Z; white rings in the view show where, and the button turns blue (hover it for
+the Z). Right-click the button to go back to the part's front face / back end. The <b>Extend</b> box on the
+same line runs it that much further. Same on turning <b>Contour</b>.</li>
 <li>Passes run along Z toward the chuck at falling diameters, each stopping where it meets the part
 (plus stock to leave), then a last pass follows the profile to take off the steps. Grooves and
 undercuts are skipped: an OD tool can't reach into them.</li>
@@ -333,7 +337,7 @@ finished contour in N-blocks (Haas: one line with D; Fanuc: two G71 lines). U / 
 OD Rough. Needs a Turning setup.</p>
 <ol>
 <li>CAM → Turning tab → <b>Contour</b>. Set the tool, <b>Stock to leave X / Z</b> (0 = finished size; set
-some to use it as a semi-finish), <b>Start</b> / <b>End</b> (PICK on the part) with <b>Extend start / end</b>,
+some to use it as a semi-finish), <b>Start</b> / <b>End</b> (arrow button, pick on the part) each with an <b>Extend</b>,
 pull-off, SFM, feed in/rev and max RPM.</li>
 <li><b>Use G70 cycle</b> ticked: the post writes <b>G70 P Q</b> over the contour blocks of an OD Rough with
 G71 output earlier in the same setup (the usual rough-then-finish program, with its own tool
@@ -347,8 +351,8 @@ rough, Post Process says so.</li>
 <p>Drills the round holes in your model. Model the hole in CAD (a circle cut through or partway),
 then CAM → <b>Drill</b> (Milling tab: Drilling; Turning tab: Turning).</p>
 <ol>
-<li><b>Milling</b>: <b>Holes</b> lists every hole size found opening up (+Z); pick one (Drill diameter
-follows) or All holes. Holes are drilled nearest first, returning to the clearance height between
+<li><b>Milling</b>: <b>Holes</b> lists every hole size found opening up (+Z); pick one (a library drill of that size is picked
+when there is one) or All holes. Holes are drilled nearest first, returning to the clearance height between
 holes (G98).</li>
 <li><b>Turning</b>: drills the hole on the spindle axis that opens at the front face, at a fixed RPM (G97)
 and feed in/rev.</li>
@@ -359,12 +363,26 @@ drill's 118° point further. <b>R plane</b> is how far above the hole (or off th
 written out as G01 / G00 (lathe drilling cycles differ between Fanuc controls).</li>
 </ol>
 """),
+    ("tools", "CAM: Tool Library", """
+<h1>Tool Library</h1>
+<p>Your cutting tools, saved on this computer and shared by every part. Operations pick their tool here.</p>
+<ol>
+<li>CAM → <b>Tool Library</b> (Setup / Operation group), or <b>New tool…</b> at the bottom of an operation's
+Tool list.</li>
+<li><b>Machine</b>: Milling or Turning, each with its own list (in T-number order).</li>
+<li><b>NEW TOOL</b> adds one; set its <b>Number</b> (the T number on the machine), <b>Name</b>, <b>Type</b> (face mill,
+end mill, drill; OD turning insert or drill on a lathe) and <b>Diameter</b> (or <b>Nose radius</b> for an insert).
+Changes save straight away. <b>DELETE</b> removes the selected tool.</li>
+<li>An operation copies its tool (number, size, name), so a saved part posts the same even if the library
+changes later. An op whose tool is no longer in the library shows it as "(not in library)".</li>
+</ol>
+"""),
     ("contour", "CAM: 2D Contour and Simulate", """
 <h1>2D Contour (milling)</h1>
 <ol>
 <li>CAM → <b>2D Contour</b> (needs a Milling setup). The outline is found from the part: its outside as
 seen from above, including bosses and flanges higher up.</li>
-<li>Tool number and diameter, <b>max stepdown</b>, <b>wall stock</b> to leave, <b>below part bottom</b>
+<li><b>Tool</b> (an end mill from the Tool Library), <b>max stepdown</b>, <b>wall stock</b> to leave, <b>below part bottom</b>
 (extra depth to clean the floor edge), <b>cut direction</b> (Climb = clockwise around the outside with
 M03, or Conventional), <b>lead in / out</b> distance, spindle RPM, feed and <b>plunge</b> feed.</li>
 <li>Passes step down from the stock top to the part bottom. Each pass plunges beside the part

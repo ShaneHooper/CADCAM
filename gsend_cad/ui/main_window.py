@@ -1,19 +1,21 @@
 """Main window: wires the Document, the Kernel and the panels together."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QStandardPaths, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import QFileDialog, QGridLayout, QMainWindow, QMessageBox, QWidget
 
 from .. import APP_NAME
-from ..core import Document, bracket_plate
+from ..core import Document, bracket_plate, tools
 from ..core import plane as pl
 from ..kernel import Kernel
 from . import theme
 from .commands import (EdgeSession, ExtrudeSession, OpSession, PlanePickSession, RevolveSession, SetupSession,
-                       SimSession, SketchSession, draw_setup, draw_toolpath, op_moves, regions_for)
+                       SimSession, SketchSession, ToolLibraryDialog, draw_setup, draw_toolpath, op_moves,
+                       regions_for)
 from .panels import Browser, Ribbon, StatusBar, Timeline, TopBar
 
 FILE_FILTER = f"{APP_NAME} (*.gcad);;All files (*)"
@@ -93,6 +95,10 @@ class MainWindow(QMainWindow):
         self.topbar.projection.connect(self.set_projection)
         from PySide6.QtCore import QSettings
         self.prefs = QSettings("G-SEND", "CADCAM")            # remembered between runs
+        self.tool_lib_path = os.environ.get("GSEND_TOOL_LIBRARY") or os.path.join(
+            QStandardPaths.writableLocation(QStandardPaths.AppDataLocation) or os.path.expanduser("~/.gsend_cadcam"),
+            "tool_library.json")
+        self.tool_lib = tools.load(self.tool_lib_path)          # CAM → Tool Library
         proj = str(self.prefs.value("view/projection", "ortho"))
         self.viewport.set_projection(proj)
         self.topbar.set_projection(self.viewport.projection)
@@ -513,6 +519,8 @@ class MainWindow(QMainWindow):
             self.post_process()
         elif label == "2D Contour" and self.ribbon.switch.mode == "cam":
             self.start_op("contour")
+        elif label == "Tool Library" and self.ribbon.switch.mode == "cam":
+            self.open_tool_library("turning" if self.ribbon.current == "turning" else "milling")
         elif label == "Drill" and self.ribbon.switch.mode == "cam":
             self.start_op("drill")
         elif label == "Contour" and self.ribbon.switch.mode == "cam":
@@ -527,6 +535,16 @@ class MainWindow(QMainWindow):
             self.export("stl")
         else:
             self.not_built(label)
+
+    def open_tool_library(self, machine: str = "milling", new_kind: str | None = None):
+        """CAM → Tool Library (also "New tool…" in an operation's Tool box)."""
+        ToolLibraryDialog(self, machine, new_kind).exec()
+
+    def save_tool_lib(self):
+        try:
+            tools.save(self.tool_lib_path, self.tool_lib)
+        except OSError as exc:
+            self.viewport.show_toast(f"Tool library not saved: {exc}", bad=True)
 
     def cancel_command(self):
         s, self.session = self.session, None

@@ -9,20 +9,20 @@ import math
 
 import numpy as np
 import pyvista as pv
-from PySide6.QtCore import QEvent, QPoint, Qt, QTimer
+from PySide6.QtCore import QEvent, QPoint, QSize, Qt, QTimer
 from functools import partial
 
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFrame, QHBoxLayout,
-                               QLabel, QPlainTextEdit, QPushButton, QScrollArea, QSlider, QSpinBox, QToolButton,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout,
+                               QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit,
+                               QPushButton, QScrollArea, QSlider, QSpinBox, QToolButton, QVBoxLayout, QWidget)
 
-from ..core import cam, post
+from ..core import cam, post, tools
 from ..core import plane as pl
 from ..core import sketch as sk
 from ..core.profiles import region_at, sketch_regions
 from ..kernel import (bodies_bbox, edge_list, max_radius, model_snap_points, outline_loops, turn_profile, find_holes, extrude_tool, face_outline, planar_face_at, plane_edges, region_face, revolve_axis,
                       revolve_tool, triangles)
-from . import theme
+from . import icons, theme
 
 TOOL_KEYS = {"Line": "line", "Rectangle": "rect", "Center Rect": "center_rect", "Circle": "circle",
              "Polygon": "polygon", "Point": "point", "Fillet": "fillet", "Chamfer": "chamfer"}
@@ -1688,52 +1688,50 @@ def draw_toolpath(vp, world, group="cam", dim=False):
 
 
 class OpPanel(Panel):
-    # op kind -> setup type -> [(key, label, decimals)]; a combo (direction) is added per kind below
-    FIELDS = {"face": {cam.MILLING: [("tool", "Tool number", 0), ("tool_dia", "Tool diameter", 4),
-                                     ("stepover", "Stepover %", 1), ("stepdown", "Max stepdown", 4),
+    # op kind -> setup type -> [(key, label, decimals)]. The tool (T number, Ø) comes from the Tool
+    # box (the tool library); combos (cut direction, cycle, output) are added per kind below.
+    FIELDS = {"face": {cam.MILLING: [("stepover", "Stepover %", 1), ("stepdown", "Max stepdown", 4),
                                      ("leave", "Stock to leave", 4), ("rpm", "Spindle RPM", 0),
                                      ("feed", "Feed (in/min)", 2)],
-                       cam.TURNING: [("tool", "Tool number", 0), ("stepdown", "Max stepdown", 4),
+                       cam.TURNING: [("stepdown", "Max stepdown", 4),
                                      ("leave", "Stock to leave", 4), ("past_center", "Past center (X)", 4),
                                      ("sfm", "Surface speed SFM", 0), ("ipr", "Feed (in/rev)", 4),
                                      ("max_rpm", "Max RPM", 0)]},
-              "contour": {cam.MILLING: [("tool", "Tool number", 0), ("tool_dia", "Tool diameter", 4),
-                                        ("stepdown", "Max stepdown", 4), ("leave", "Wall stock", 4),
+              "contour": {cam.MILLING: [("stepdown", "Max stepdown", 4), ("leave", "Wall stock", 4),
                                         ("bottom_offset", "Below part bottom", 4), ("lead", "Lead in / out", 4),
                                         ("rpm", "Spindle RPM", 0), ("feed", "Feed (in/min)", 2),
                                         ("plunge", "Plunge (in/min)", 2)]},
-              "rough": {cam.TURNING: [("tool", "Tool number", 0), ("stepdown", "Depth of cut (side)", 4),
+              "rough": {cam.TURNING: [("stepdown", "Depth of cut (side)", 4),
                                       ("leave_x", "Stock to leave X", 4), ("leave_z", "Stock to leave Z", 4),
-                                      ("start_ext", "Extend start", 4), ("past_back", "Extend end", 4),
                                       ("retract", "Pull-off", 4),
                                       ("sfm", "Surface speed SFM", 0), ("ipr", "Feed (in/rev)", 4),
                                       ("max_rpm", "Max RPM", 0)]},
-              "finish": {cam.TURNING: [("tool", "Tool number", 0), ("leave_x", "Stock to leave X", 4),
-                                       ("leave_z", "Stock to leave Z", 4), ("start_ext", "Extend start", 4),
-                                       ("past_back", "Extend end", 4),
+              "finish": {cam.TURNING: [("leave_x", "Stock to leave X", 4), ("leave_z", "Stock to leave Z", 4),
                                        ("retract", "Pull-off", 4), ("sfm", "Surface speed SFM", 0),
                                        ("ipr", "Feed (in/rev)", 4), ("max_rpm", "Max RPM", 0)]},
-              "drill": {cam.MILLING: [("tool", "Tool number", 0), ("tool_dia", "Drill diameter", 4),
-                                      ("peck", "Peck (Q)", 4), ("breakthrough", "Breakthrough", 4),
+              "drill": {cam.MILLING: [("peck", "Peck (Q)", 4), ("breakthrough", "Breakthrough", 4),
                                       ("retract", "R plane above hole", 4), ("rpm", "Spindle RPM", 0),
                                       ("feed", "Feed (in/min)", 2)],
-                        cam.TURNING: [("tool", "Tool number", 0), ("tool_dia", "Drill diameter", 4),
-                                      ("peck", "Peck (Q)", 4), ("breakthrough", "Breakthrough", 4),
+                        cam.TURNING: [("peck", "Peck (Q)", 4), ("breakthrough", "Breakthrough", 4),
                                       ("retract", "R plane off face", 4), ("rpm", "Spindle RPM", 0),
                                       ("ipr", "Feed (in/rev)", 4)]}}
     DIRECTIONS = {"face": [("Along X", "x"), ("Along Y", "y")],
                   "contour": [("Climb", "climb"), ("Conventional", "conventional")]}
+    NEW_TOOL = "__new__"
 
     def __init__(self, session: "OpSession", kind: str):
         super().__init__({"face": "Face", "contour": "2D Contour", "rough": "OD Rough", "finish": "Contour",
-                          "drill": "Drill"}[kind], 260)
+                          "drill": "Drill"}[kind], 300)
         s = session
-        self.setup = QComboBox()
+        # the setup and the name aren't shown: the op goes in the setup it was started from, and is
+        # named Face1, Contour2, ... (rename it in the Browser)
+        self.setup = QComboBox(self)
+        self.setup.hide()
         for st in s.win.doc.setups:
             if st["type"] in self.FIELDS[kind]:
                 self.setup.addItem(f"{st['name']} · {cam.TYPES[st['type']]}", st["id"])
-        self.row("Setup", self.setup)
-        self.name = self.row("Name", self.value(""))
+        self.name = QLabel("", self)
+        self.name.hide()
         self.boxes = {}
         self.groups = {}
         self.direction = QComboBox()
@@ -1755,30 +1753,37 @@ class OpPanel(Panel):
                 cb.addItem(cam.DRILL_CYCLES[k], k)
             cb.currentIndexChanged.connect(s.preview)
             self.cycles[stype] = cb
-        self.ends = {}                           # turning rough / contour: Start / End picked on the part
-        for which in ("start", "end"):
+        self.tools = {}                          # the Tool box (from the tool library), per setup type
+        for stype in self.FIELDS[kind]:
+            cb = QComboBox()
+            cb.setMinimumWidth(200)
+            cb.currentIndexChanged.connect(partial(s.tool_changed, stype))
+            self.tools[stype] = cb
+        self.ends = {}                           # turning rough / contour: Start / End (cursor) + Extend
+        for which, key in (("start", "start_ext"), ("end", "past_back")) if kind in ("rough", "finish") else ():
             w = QWidget()
             hl = QHBoxLayout(w)
             hl.setContentsMargins(0, 0, 0, 0)
-            hl.setSpacing(4)
-            val = QLabel("")
-            val.setStyleSheet(f"color:{theme.FG2};")
-            pick = QPushButton("PICK")
-            pick.setObjectName("dlgBtn")
+            hl.setSpacing(6)
+            pick = QToolButton()
+            pick.setObjectName("pickBtn")
             pick.setCheckable(True)
-            pick.setToolTip(f"Click an edge or end point of the part: the toolpath {'starts' if which == 'start' else 'ends'}"
-                            " at that Z")
+            pick.setIconSize(QSize(16, 16))
+            pick.setFixedSize(30, 24)
             pick.toggled.connect(partial(s.set_picking, which))
-            clear = QPushButton("×")
-            clear.setObjectName("dlgBtn")
-            clear.setFixedWidth(26)
-            clear.setStyleSheet("padding:0px;")
-            clear.setToolTip("Back to the part's " + ("front face" if which == "start" else "back end"))
-            clear.clicked.connect(partial(s.clear_end, which))
-            hl.addWidget(val)
+            pick.setContextMenuPolicy(Qt.CustomContextMenu)
+            pick.customContextMenuRequested.connect(partial(s.clear_end, which))
+            ext = NumBox(0, 4)
+            ext.setRange(0, 100000)
+            ext.valueChanged.connect(s.preview)
+            ext.setToolTip("Run the toolpath this much further " + ("ahead of the start" if which == "start"
+                                                                    else "past the end"))
+            self.boxes[(cam.TURNING, key)] = ext
             hl.addWidget(pick)
-            hl.addWidget(clear)
-            self.ends[which] = (w, val, pick)
+            hl.addStretch()
+            hl.addWidget(QLabel("Extend"))
+            hl.addWidget(ext)
+            self.ends[which] = (w, pick)
         self.holes = QComboBox()                 # Drill (mill): which hole size, found in the model
         self.holes.currentIndexChanged.connect(s.holes_changed)
         for stype, fields in self.FIELDS[kind].items():
@@ -1794,25 +1799,26 @@ class OpPanel(Panel):
                 self.boxes[(stype, key)] = nb
                 items.append((label, nb))
             if kind == "drill":
-                items.insert(1, ("Cycle", self.cycles[stype]))
+                items.insert(0, ("Cycle", self.cycles[stype]))
                 if stype == cam.MILLING:
                     items.insert(0, ("Holes", self.holes))
             elif stype == cam.MILLING:
-                items.insert(5, ("Cut direction", self.direction))
+                items.insert(3, ("Cut direction", self.direction))
             elif kind in ("face", "rough"):
                 items.append(("Output", self.output))
             elif kind == "finish":
                 items.append(("Use G70 cycle", self.g70))
             if kind in ("rough", "finish"):
-                items[1:1] = [("Start", self.ends["start"][0]), ("End", self.ends["end"][0])]
+                items[0:0] = [("Start", self.ends["start"][0]), ("End", self.ends["end"][0])]
+            items.insert(0, ("Tool", self.tools[stype]))
             for label, w in items:
                 r = QWidget()
                 r.setObjectName("panelRow")
                 hl = QHBoxLayout(r)
                 hl.setContentsMargins(10, 4, 10, 4)
                 hl.addWidget(QLabel(label))
-                hl.addStretch()
-                hl.addWidget(w)
+                hl.addStretch() if label not in ("Start", "End") else None
+                hl.addWidget(w, 1 if label in ("Start", "End") else 0)
                 lay.addWidget(r)
             self.v.addWidget(g)
             self.groups[stype] = g
@@ -1873,8 +1879,9 @@ class OpSession:
                 p.holes.addItem(f"Ø{d:.4f}", d)
             want = op.get("hole_dia", 0.0) if op.get("id") else (sizes[0] if sizes else 0.0)
             p.holes.setCurrentIndex(max(0, p.holes.findData(want)))
-            if not op.get("id") and want:
-                p.boxes[(cam.MILLING, "tool_dia")].setValue(want)
+            if not op.get("id") and want and st["type"] == cam.MILLING:
+                op = self._drill_for(st, op, want)
+        self.fill_tools(st, op)
         if "output" in op:
             p.output.setCurrentIndex(max(0, p.output.findData(op["output"])))
             p.g70.setChecked(op["output"] == "cycle")
@@ -1891,6 +1898,54 @@ class OpSession:
         self.vp.set_side(p)
         self.preview()
 
+    # ---- the Tool box: tools from the library that fit this op (+ "New tool…")
+    def fill_tools(self, st, op):
+        """List the library tools for this op and select the one it uses. A tool that isn't in
+        the library (deleted, or from an older file) stays listed as it is, so nothing changes
+        until another tool is picked."""
+        cb = self.panel.tools[st["type"]]
+        lib = self.win.tool_lib
+        self._own_tool = None
+        cb.blockSignals(True)
+        cb.clear()
+        for t in tools.choices(lib, st["type"], self.kind):
+            cb.addItem(tools.describe(t), t["id"])
+        hit = tools.find(lib, op, st["type"], self.kind)
+        if hit is None and "tool" in op:
+            self._own_tool = {"number": int(op["tool"]), "dia": op.get("tool_dia", 0.0),
+                              "name": op.get("tool_name", "not in library")}
+            cb.insertItem(0, tools.describe(self._own_tool) + " (not in library)", "__own__")
+        cb.addItem("New tool…", OpPanel.NEW_TOOL)
+        cb.setCurrentIndex(max(0, cb.findData(hit["id"] if hit else "__own__")))
+        cb.blockSignals(False)
+
+    def tool(self, st):
+        """The picked tool as a library-style dict."""
+        cb = self.panel.tools[st["type"]]
+        d = cb.currentData()
+        if d == "__own__":
+            return self._own_tool
+        return next((t for t in self.win.tool_lib if t["id"] == d), None)
+
+    def tool_changed(self, stype, *_):
+        cb = self.panel.tools[stype]
+        if cb.currentData() == OpPanel.NEW_TOOL:
+            st = self.current_setup()
+            keep = self.op()
+            self.win.open_tool_library(st["type"], tools.FITS[(st["type"], self.kind)][0])
+            self.fill_tools(st, keep)            # the new tool (if one was made) shows in the list
+            new = [t for t in tools.choices(self.win.tool_lib, st["type"], self.kind)
+                   if t["id"] == getattr(self.win, "last_new_tool", None)]
+            if new:
+                cb.setCurrentIndex(cb.findData(new[0]["id"]))
+        self.preview()
+
+    def _drill_for(self, st, op, dia):
+        """A new mill Drill on a hole size: use a library drill of that size if there is one."""
+        t = next((t for t in tools.choices(self.win.tool_lib, st["type"], "drill") if abs(t["dia"] - dia) < 1e-6),
+                 None)
+        return tools.apply(op, t) if t else op
+
     def op(self) -> dict:
         p = self.panel
         st = self.current_setup()
@@ -1898,6 +1953,10 @@ class OpSession:
         for (stype, key), box in p.boxes.items():
             if stype == st["type"]:
                 o[key] = box.value()
+        t = self.tool(st)
+        if t is not None:
+            o = tools.apply(o, t) if t is not self._own_tool else \
+                {**o, "tool": t["number"], "tool_name": t["name"], **({"tool_dia": t["dia"]} if t["dia"] else {})}
         if st["type"] == cam.MILLING:
             o["direction"] = p.direction.currentData()
         elif self.kind in ("face", "rough"):
@@ -1912,10 +1971,14 @@ class OpSession:
         return o
 
     def holes_changed(self, *_):
-        """Picking a hole size puts that size in Drill diameter."""
+        """Picking a hole size picks a library drill of that size (when there is one)."""
         d = self.panel.holes.currentData()
         if not self._loading and d:
-            self.panel.boxes[(cam.MILLING, "tool_dia")].setValue(d)
+            st = self.current_setup()
+            op = self._drill_for(st, self.op(), d)
+            self._loading = True
+            self.fill_tools(st, op)
+            self._loading = False
         self.preview()
 
     def preview(self, *_):
@@ -1991,20 +2054,23 @@ class OpSession:
     picking = None
 
     def show_ends(self):
+        """The cursor buttons: blue once a Start / End is picked; the tooltip says where."""
         st = self.current_setup()
         bodies = setup_bodies(self.win, st)
         for which in ("start", "end"):
             v = self.start_at if which == "start" else self.end_at
-            _w, lab, _p = self.panel.ends[which]
+            btn = self.panel.ends[which][1]
             if v is None or not bodies:
-                lab.setText("Part front" if which == "start" else "Part back")
+                where = "the part's front face" if which == "start" else "the part's back end"
             else:
-                bb = bodies_bbox(bodies)
-                lab.setText(f"Z{cam.axial_to_wcs(bb, st, v, turning_radius(self.win, st, bodies)):.4f}")
+                where = f"Z{cam.axial_to_wcs(bodies_bbox(bodies), st, v, turning_radius(self.win, st, bodies)):.4f}"
+            btn.setIcon(icons.icon("cursor", theme.ACCENT if v is not None else theme.FG2))
+            btn.setToolTip(f"{which.capitalize()}: {where}\nClick, then click an edge or end point of the part."
+                           "\nRight-click: back to the part's " + ("front face" if which == "start" else "back end"))
 
     def set_picking(self, which, on: bool):
         if on:
-            other = self.panel.ends["end" if which == "start" else "start"][2]
+            other = self.panel.ends["end" if which == "start" else "start"][1]
             other.blockSignals(True)
             other.setChecked(False)
             other.blockSignals(False)
@@ -2015,7 +2081,7 @@ class OpSession:
             self.picking = None
             self.vp.clear("pick")
             self.vp.dim.hide()
-        self.panel.ends[which][2].setText("PICKING…" if on else "PICK")
+        self.show_ends()
 
     def clear_end(self, which, *_):
         setattr(self, "start_at" if which == "start" else "end_at", None)
@@ -2052,7 +2118,7 @@ class OpSession:
             return
         which = self.picking
         setattr(self, "start_at" if which == "start" else "end_at", a)
-        self.panel.ends[which][2].setChecked(False)
+        self.panel.ends[which][1].setChecked(False)
         self.show_ends()
         self.preview()
 
@@ -2062,7 +2128,7 @@ class OpSession:
             return True
         if ev.key() == Qt.Key_Escape:
             if self.picking:
-                self.panel.ends[self.picking][2].setChecked(False)
+                self.panel.ends[self.picking][1].setChecked(False)
             else:
                 self.win.cancel_command()
             return True
@@ -2234,6 +2300,170 @@ class SimSession:
 
 
 # ------------------------------------------------------------------ post process (G-code)
+class ToolLibraryDialog(QDialog):
+    """CAM → Tool Library: the tools operations pick from (one list per machine). Every change
+    is saved to the library file right away; operations copy the tool they use."""
+
+    def __init__(self, win, machine: str = cam.MILLING, new_kind: str | None = None):
+        super().__init__(win)
+        self.win = win
+        self.setWindowTitle("Tool Library")
+        self.resize(640, 380)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(12, 12, 12, 12)
+        top = QHBoxLayout()
+        self.machine = QComboBox()
+        for k in (cam.MILLING, cam.TURNING):
+            self.machine.addItem(cam.TYPES[k], k)
+        self.machine.setCurrentIndex(self.machine.findData(machine))
+        top.addWidget(QLabel("Machine"))
+        top.addWidget(self.machine)
+        top.addStretch()
+        v.addLayout(top)
+        body = QHBoxLayout()
+        self.list = QListWidget()
+        self.list.setMinimumWidth(260)
+        body.addWidget(self.list, 1)
+        form = QGridLayout()
+        self.number = QSpinBox()
+        self.number.setRange(1, 99)
+        self.number.setPrefix("T")
+        self.name = QLineEdit()
+        self.kind = QComboBox()
+        self.dia = NumBox(0.25, 4)
+        self.dia.setRange(0, 100)
+        self.nose = NumBox(0.0, 4)
+        self.nose.setRange(0, 10)
+        self.form, self._labels = form, {}
+        for row, (label, w) in enumerate((("Number", self.number), ("Name", self.name), ("Type", self.kind),
+                                          ("Diameter", self.dia), ("Nose radius", self.nose))):
+            lb = QLabel(label)
+            self._labels[id(w)] = [lb]
+            form.addWidget(lb, row, 0)
+            form.addWidget(w, row, 1)
+        self.err = QLabel("")
+        self.err.setStyleSheet(f"color:{theme.BAD};")
+        self.err.setWordWrap(True)
+        form.addWidget(self.err, 5, 0, 1, 2)
+        form.setRowStretch(6, 1)
+        body.addLayout(form, 1)
+        v.addLayout(body, 1)
+        foot = QHBoxLayout()
+        self.add, self.delete, done = QPushButton("NEW TOOL"), QPushButton("DELETE"), QPushButton("CLOSE")
+        for b in (self.add, self.delete, done):
+            b.setObjectName("dlgBtn")
+        foot.addWidget(self.add)
+        foot.addWidget(self.delete)
+        foot.addStretch()
+        foot.addWidget(done)
+        v.addLayout(foot)
+        self.machine.currentIndexChanged.connect(lambda *_: self.fill())
+        self.list.currentRowChanged.connect(self.show_tool)
+        for sig in (self.number.valueChanged, self.name.editingFinished, self.kind.currentIndexChanged,
+                    self.dia.valueChanged, self.nose.valueChanged):
+            sig.connect(self.store)
+        self.add.clicked.connect(lambda: self.new_tool())
+        self.delete.clicked.connect(self.remove)
+        done.clicked.connect(self.accept)
+        self._busy = False
+        self.fill()
+        if new_kind:
+            self.new_tool(new_kind)
+
+    def tools_here(self):
+        return sorted((t for t in self.win.tool_lib if t["machine"] == self.machine.currentData()),
+                      key=lambda t: (t["number"], t["name"]))
+
+    def fill(self, select: str | None = None):
+        self._busy = True
+        m = self.machine.currentData()
+        self.kind.clear()
+        for k in tools.MACHINE_KINDS[m]:
+            self.kind.addItem(tools.KINDS[k], k)
+        self.list.clear()
+        for t in self.tools_here():
+            it = QListWidgetItem(tools.describe(t))
+            it.setData(Qt.UserRole, t["id"])
+            self.list.addItem(it)
+        self._busy = False
+        ids = [t["id"] for t in self.tools_here()]
+        self.list.setCurrentRow(ids.index(select) if select in ids else (0 if ids else -1))
+        if not ids:
+            self.show_tool(-1)
+
+    def current(self):
+        it = self.list.currentItem()
+        tid = it.data(Qt.UserRole) if it else None
+        return next((t for t in self.win.tool_lib if t["id"] == tid), None)
+
+    def show_tool(self, _row):
+        t = self.current()
+        self._busy = True
+        for w in (self.number, self.name, self.kind, self.dia, self.nose, self.delete):
+            w.setEnabled(t is not None)
+        if t:
+            self.number.setValue(t["number"])
+            self.name.setText(t["name"])
+            self.kind.setCurrentIndex(max(0, self.kind.findData(t["kind"])))
+            self.dia.setValue(t["dia"])
+            self.nose.setValue(t["nose_r"])
+        self.err.setText("")
+        self._busy = False
+        self.show_sizes()
+
+    def store(self, *_):
+        """A field changed: check the tool, put it in the library and save."""
+        t = self.current()
+        if self._busy or t is None:
+            return
+        try:
+            new = tools.validate({**t, "number": self.number.value(), "name": self.name.text().strip(),
+                                  "kind": self.kind.currentData(), "dia": self.dia.value(),
+                                  "nose_r": self.nose.value()})
+        except ValueError as exc:
+            self.err.setText(str(exc))
+            return
+        self.err.setText("")
+        renumbered = new["number"] != t["number"]
+        t.update(new)
+        self.win.save_tool_lib()
+        self.list.currentItem().setText(tools.describe(t))
+        self.show_sizes()
+        if renumbered:
+            self.fill(select=t["id"])              # keep the list in T-number order
+
+    def show_sizes(self):
+        """Diameter for mills / drills, nose radius for turning inserts."""
+        insert = self.kind.currentData() == "od turn"
+        for w, show in ((self.dia, not insert), (self.nose, insert)):
+            w.setVisible(show)
+            for lb in self._labels.get(id(w), []):
+                lb.setVisible(show)
+
+    def new_tool(self, kind: str | None = None):
+        m = self.machine.currentData()
+        kind = kind or tools.MACHINE_KINDS[m][0]
+        used = {t["number"] for t in self.tools_here()}
+        n = next(k for k in range(1, 100) if k not in used) if len(used) < 99 else 1
+        t = tools.validate({"id": tools.new_id(self.win.tool_lib), "number": n, "name": f"New {tools.KINDS[kind]}",
+                            "kind": kind, "machine": m, "dia": 0.0 if kind == "od turn" else 0.25,
+                            "nose_r": 0.031 if kind == "od turn" else 0.0})
+        self.win.tool_lib.append(t)
+        self.win.last_new_tool = t["id"]
+        self.win.save_tool_lib()
+        self.fill(select=t["id"])
+        self.name.setFocus()
+        self.name.selectAll()
+
+    def remove(self):
+        t = self.current()
+        if t is None:
+            return
+        self.win.tool_lib.remove(t)
+        self.win.save_tool_lib()
+        self.fill()
+
+
 class PostDialog(QDialog):
     """CAM → Post Process: a setup's operations as G-code. Preview, then Save .nc."""
 

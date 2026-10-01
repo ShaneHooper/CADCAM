@@ -101,6 +101,9 @@ QToolButton#menuBtn:hover, QToolButton#menuBtn:open {{ border-color: {LINE2}; co
 QToolButton#menuBtn::menu-indicator {{ image: none; width: 0; }}
 QToolButton#entDel {{ border: 1px solid transparent; color: {FG3}; background: transparent; font-size: 13px; padding: 0; }}
 QToolButton#entDel:hover {{ border-color: {BAD}; color: {BAD}; }}
+QToolButton#pickBtn {{ border: 1px solid {LINE2}; background: {PANEL2}; padding: 0; }}
+QToolButton#pickBtn:hover {{ border-color: {ACCENT}; }}
+QToolButton#pickBtn:checked {{ border-color: {ACCENT}; background: {ACCENT_DIM}; }}
 #docs, #docs QTextBrowser {{ background: {PANEL}; }}
 #docs QTextBrowser {{ border: 0; border-left: 1px solid {LINE}; }}
 #docs QListWidget {{ background: {PANEL}; border: 0; outline: 0; font-family: '{head}'; font-weight: 600;
