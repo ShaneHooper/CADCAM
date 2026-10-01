@@ -476,12 +476,16 @@ def test_turning_contour_finish_and_g70():
     g = post.post_setup(s, [(fin, mv)], "haas", 1)
     assert "G70 P" not in g and "X2. Z-2.05" in g                                       # line by line
     fin_c = {**fin, "output": "cycle"}
-    with pytest.raises(ValueError):                                                     # G70 alone: no contour
-        post.post_setup(s, [(fin_c, mv)], "haas", 1)
+    g = post.post_setup(s, [(fin_c, mv)], "haas", 1)                                     # G70 alone: no G71 to
+    assert "G70 P" not in g and "X2. Z-2.05" in g and "POSTED LINE BY LINE" in g          # point at, line by line
     rough = cam.validate_op(s, {**cam.new_op(s, "rough"), "name": "R", "output": "cycle"})
     g = post.post_setup(s, [(rough, cam.toolpath(box, s, rough, 1.0, profile=prof)), (fin_c, mv)], "haas", 1)
     i = g.index("G70 P100 Q101")                                                        # the rough's G71 blocks
     assert "T0303" in g[:i] and "F0.005\nG70" in g and g.index("N100") < i
+    other = cam.validate_op(s, {**fin_c, "start_at": 1.0})                              # not the same profile:
+    g = post.post_setup(s, [(rough, cam.toolpath(box, s, rough, 1.0, profile=prof)),     # still the rough's G71
+                            (other, cam.toolpath(box, s, other, 1.0, profile=prof))], "haas", 1)
+    assert "G70 P100 Q101" in g
 
 
 def test_rough_and_finish_no_z_chatter_over_a_back_round():

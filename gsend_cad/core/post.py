@@ -117,15 +117,18 @@ def _lathe_op(setup, op, moves, offset, coolant, controller="haas", n=100, g71=N
         return _lathe_drill(op, moves, offset, coolant, controller)
     what = {"rough": "OD ROUGH", "finish": "CONTOUR", "face": "FACE"}[kind] + \
         ({"rough": " G71 CYCLE", "finish": " G70 CYCLE", "face": " G72 CYCLE"}[kind] if cycle else "")
-    if kind == "finish" and cycle:
-        prof = _contour(moves, op)
-        ref = next(((p, q) for c, p, q in reversed(g71 or []) if len(c) == len(prof) and
-                    all(abs(a - b) < 1e-6 for u, v in zip(c, prof) for a, b in zip(u, v))), None)
-        if ref is None:
-            raise ValueError(f"{op['name']}: G70 needs an OD Rough with G71 output before it in this setup, "
-                             "over the same profile · untick G70 to post it line by line")
+    note = None
+    if kind == "finish" and cycle:                    # G70 finishes the last G71 rough's contour (P..Q)
+        ref = (g71 or [None])[-1]
+        ref = ref and ref[1:]
+        if ref is None:                               # no G71 to point at: cut the contour line by line
+            cycle = False
+            note = _comment("G70 NEEDS AN OD ROUGH POSTED AS G71 - POSTED LINE BY LINE")
+            what = "CONTOUR"
     L = ["", _comment(f"{op['name']} T{t:02d} {what}"), "G28 U0. W0.", f"T{t:02d}{t:02d}", offset,
          f"G50 S{int(round(op['max_rpm']))}", f"G96 S{int(round(op['sfm']))} M03" + (" M08" if coolant else "")]
+    if note:
+        L.insert(2, note)
     m = _Modal()
     if cycle:
         if kind == "finish":
