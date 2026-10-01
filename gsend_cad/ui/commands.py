@@ -1729,10 +1729,10 @@ class OpPanel(Panel):
               "finish": {cam.TURNING: [("leave_x", "Stock to leave X", 4), ("leave_z", "Stock to leave Z", 4),
                                        ("retract", "Pull-off", 4), ("sfm", "Surface speed SFM", 0),
                                        ("ipr", "Feed (in/rev)", 4), ("max_rpm", "Max RPM", 0)]},
-              "drill": {cam.MILLING: [("peck", "Peck (Q)", 4), ("breakthrough", "Breakthrough", 4),
+              "drill": {cam.MILLING: [("depth", "Depth (0 = hole)", 4), ("peck", "Peck (Q)", 4), ("breakthrough", "Breakthrough", 4),
                                       ("retract", "R plane above hole", 4), ("rpm", "Spindle RPM", 0),
                                       ("feed", "Feed (in/min)", 2)],
-                        cam.TURNING: [("peck", "Peck (Q)", 4), ("breakthrough", "Breakthrough", 4),
+                        cam.TURNING: [("depth", "Depth (0 = hole)", 4), ("peck", "Peck (Q)", 4), ("breakthrough", "Breakthrough", 4),
                                       ("retract", "R plane off face", 4), ("rpm", "Spindle RPM", 0),
                                       ("ipr", "Feed (in/rev)", 4)]}}
     DIRECTIONS = {"face": [("Along X", "x"), ("Along Y", "y")],
@@ -1782,7 +1782,7 @@ class OpPanel(Panel):
             cb.view().customContextMenuRequested.connect(partial(s.tool_menu, stype))
             self.tools[stype] = cb
         self.ends = {}                           # turning rough / contour: Start / End (cursor) + Extend
-        for which, key in (("start", "start_ext"), ("end", "past_back")) if kind in ("rough", "finish") else ():
+        for which, key in (("start", "start_ext"), ("end", "past_back")) if kind in ("rough", "finish", "drill") else ():
             w = QWidget()
             hl = QHBoxLayout(w)
             hl.setContentsMargins(0, 0, 0, 0)
@@ -1830,7 +1830,7 @@ class OpPanel(Panel):
                 items.append(("Output", self.output))
             elif kind == "finish":
                 items.append(("Use G70 cycle", self.g70))
-            if kind in ("rough", "finish"):
+            if kind in ("rough", "finish") or (kind == "drill" and stype == cam.TURNING):
                 items[0:0] = [("Start", self.ends["start"][0]), ("End", self.ends["end"][0])]
             items.insert(0, ("Tool", self.tools[stype]))
             for label, w in items:
@@ -1889,7 +1889,7 @@ class OpSession:
         if "direction" in op:
             p.direction.setCurrentIndex(max(0, p.direction.findData(op["direction"])))
         self.start_at, self.end_at = op.get("start_at"), op.get("end_at")
-        if self.kind in ("rough", "finish"):
+        if self.kind in ("rough", "finish") or (self.kind == "drill" and st["type"] == cam.TURNING):
             self.show_ends()
         if self.kind == "drill":
             cb = p.cycles[st["type"]]
@@ -2008,7 +2008,7 @@ class OpSession:
             o["output"] = p.output.currentData()
         elif self.kind == "finish":
             o["output"] = "cycle" if p.g70.isChecked() else "lines"
-        if self.kind in ("rough", "finish"):
+        if self.kind in ("rough", "finish") or (self.kind == "drill" and st["type"] == cam.TURNING):
             o["start_at"], o["end_at"] = self.start_at, self.end_at
         if self.kind == "drill":
             o["cycle"] = p.cycles[st["type"]].currentData()
@@ -2105,13 +2105,15 @@ class OpSession:
         for which in ("start", "end"):
             v = self.start_at if which == "start" else self.end_at
             btn = self.panel.ends[which][1]
+            home = (("the hole's top", "the hole's bottom (or Depth)") if self.kind == "drill" else
+                    ("the part's front face", "the part's back end"))[which == "end"]
             if v is None or not bodies:
-                where = "the part's front face" if which == "start" else "the part's back end"
+                where = home
             else:
                 where = f"Z{cam.axial_to_wcs(bodies_bbox(bodies), st, v, turning_radius(self.win, st, bodies)):.4f}"
             btn.setIcon(icons.icon("cursor", theme.ACCENT if v is not None else theme.FG2))
             btn.setToolTip(f"{which.capitalize()}: {where}\nClick, then click an edge or end point of the part."
-                           "\nRight-click: back to the part's " + ("front face" if which == "start" else "back end"))
+                           f"\nRight-click: back to {home}")
 
     def set_picking(self, which, on: bool):
         if on:

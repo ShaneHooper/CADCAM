@@ -245,9 +245,10 @@ FINISH_TURN = {"type": "finish", "tool": 3, "leave_x": 0.0, "leave_z": 0.0, "ret
                "sfm": 800.0, "ipr": 0.005, "max_rpm": 3000.0, "clearance": 0.1, "output": "lines",
                "start_at": None, "end_at": None, "start_ext": 0.0}
 DRILL_MILL = {"type": "drill", "tool": 4, "tool_dia": 0.25, "cycle": "peck", "peck": 0.1, "breakthrough": 0.05,
-              "retract": 0.1, "clearance": 0.5, "rpm": 2500.0, "feed": 10.0, "hole_dia": 0.0}
+              "retract": 0.1, "clearance": 0.5, "rpm": 2500.0, "feed": 10.0, "hole_dia": 0.0, "depth": 0.0}
 DRILL_TURN = {"type": "drill", "tool": 5, "tool_dia": 0.25, "cycle": "peck", "peck": 0.1, "breakthrough": 0.05,
-              "retract": 0.1, "clearance": 0.1, "rpm": 1200.0, "ipr": 0.004, "hole_dia": 0.0}
+              "retract": 0.1, "clearance": 0.1, "rpm": 1200.0, "ipr": 0.004, "hole_dia": 0.0, "depth": 0.0,
+              "start_at": None, "end_at": None, "start_ext": 0.0, "past_back": 0.0}
 DRILL_CYCLES = {"drill": "Drill (G81)", "peck": "Peck (G83)", "chip": "Chip break (G73)"}
 TURN_DRILL_CYCLES = ("drill", "peck")          # G73 is a pattern cycle on a lathe, not chip breaking
 DRILL_TIP = 0.5 / math.tan(math.radians(59))   # 118° point: tip length = 0.3004 x drill Ø
@@ -312,7 +313,7 @@ def validate_op(setup: dict, op: dict) -> dict:
         if op["cycle"] != "drill" and op["peck"] <= 0:
             raise ValueError("peck must be greater than 0")
     for k in ("leave", "past_center", "clearance", "lead", "leave_x", "leave_z", "past_back", "breakthrough",
-              "hole_dia", "start_ext"):
+              "hole_dia", "start_ext", "depth"):
         if k in op and op[k] < 0:
             raise ValueError(f"{k.replace('_', ' ')} can't be negative")
     return op
@@ -622,13 +623,34 @@ def drill_targets(bbox, setup: dict, op: dict, holes, radius: float = 0.0) -> li
             top = (h["p"][i] - o[i]) * sign
             out.append((0.0, 0.0, top, top - h["depth"] - extra))
     if setup["type"] == TURNING:
-        return sorted(out, key=lambda t: -t[2])[:1]              # the one that opens at the front
+        out = sorted(out, key=lambda t: -t[2])[:1]               # the one that opens at the front
+        if not out and (op.get("end_at") is not None or op.get("depth", 0) > 0):
+            f = axial_to_wcs(bbox, setup, turning_frame(bbox, setup)[2][1], radius)
+            out = [(0.0, 0.0, f, f)]                             # no hole modelled: from the front face
+    out = [(x, y) + _drill_span(bbox, setup, op, top, bottom, radius) for x, y, top, bottom in out]
+    if setup["type"] == TURNING:
+        return out
     order, at = [], (0.0, 0.0)
     while out:                                                   # nearest hole next
         k = min(range(len(out)), key=lambda j: math.dist(at, out[j][:2]))
         order.append(out.pop(k))
         at = order[-1][:2]
     return order
+
+
+def _drill_span(bbox, setup, op, top, bottom, radius):
+    """(top, bottom) of a hole after the op's own Start / End (turning picks), Depth (drill point
+    this far below the start; 0 = the model's hole) and Extend start / end."""
+    if op.get("start_at") is not None:
+        top = axial_to_wcs(bbox, setup, op["start_at"], radius)
+    if op.get("end_at") is not None:
+        bottom = axial_to_wcs(bbox, setup, op["end_at"], radius)
+    elif op.get("depth", 0) > 0:
+        bottom = top - op["depth"]
+    top, bottom = top + op.get("start_ext", 0.0), bottom - op.get("past_back", 0.0)
+    if bottom >= top - 1e-9:
+        raise ValueError("the drill End must be deeper than its Start")
+    return top, bottom
 
 
 def _pecks(pt, R, bottom, op):
@@ -656,7 +678,7 @@ def drill_toolpath(bbox, setup: dict, op: dict, holes, radius: float = 0.0) -> l
     if not targets:
         raise ValueError("no hole to drill" + (" of that size" if op.get("hole_dia") else "") +
                          (" · model the hole in CAD (a round hole opening up +Z)" if setup["type"] == MILLING else
-                          " · model a hole down the spindle axis, open at the front"))
+                          " · model a hole down the spindle axis, or give a Depth or pick an End"))
     if setup["type"] == MILLING:
         lo, hi = stock_box(bbox, setup)
         safe = hi[2] - wcs(bbox, setup)["origin"][2] + op["clearance"]
@@ -675,6 +697,7 @@ def drill_toolpath(bbox, setup: dict, op: dict, holes, radius: float = 0.0) -> l
     x_out = c["r"] + op["clearance"]
     _x, _y, top, bottom = targets[0]
     R = top + op["retract"]
+    z_start = max(z_start, R)                                    # a Start picked off the part
 
     def pt(z):
         return (0.0, 0.0, z)

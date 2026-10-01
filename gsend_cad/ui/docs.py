@@ -360,6 +360,10 @@ and feed in/rev.</li>
 <li><b>Cycle</b>: Drill (G81), Peck (G83, full retract each peck Q) or, on a mill, Chip break (G73).</li>
 <li>Blind holes are drilled to the hole's bottom. Through holes go the <b>Breakthrough</b> plus the
 drill's 118° point further. <b>R plane</b> is how far above the hole (or off the face) the feed starts.</li>
+<li><b>Depth</b>: drill the point this far below the hole's top instead (0 = to the modelled hole).</li>
+<li><b>Turning Start / End</b>: click the cursor button, then an edge or end point of the part, to start or stop
+the drill there (right-click the button: back to the hole). <b>Extend</b> goes that much further. With a Depth
+or an End you can drill on center even without a hole modelled.</li>
 <li>Post: mill G81 / G83 / G73 then G80. Haas lathe: G81 / G83 on center. Fanuc lathe: the pecks are
 written out as G01 / G00 (lathe drilling cycles differ between Fanuc controls).</li>
 </ol>

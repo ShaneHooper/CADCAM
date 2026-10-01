@@ -294,3 +294,17 @@ def test_drill_mill_and_lathe_from_model_holes():
     assert "G97 S1200 M03" in g2 and "G83 Z-0.8 R0.05 Q0.1 F0.004" in g2 and "G96" not in g2
     g3 = post.post_setup(ts, [(cam.validate_op(ts, lop), mv)], "fanuc", 2)
     assert "G83" not in g3 and "G01 Z-0.05 F0.004\nG00 Z0.05\nZ-0.03\nG01 Z-0.15\n" in g3   # pecks written out
+    # Depth / Start / End override the modelled hole; no hole needed on a lathe once one is given
+    td = cam.drill_targets(bb, st, cam.validate_op(st, {**op, "depth": 0.2}), holes)
+    assert all(z1 == pytest.approx(-0.05 - 0.2) for *_x, z1 in td)
+    hs = find_holes(m2.bodies)
+    top = cam.drill_targets(bb2, ts, cam.validate_op(ts, lop), hs, r)[0][2]
+    assert cam.drill_targets(bb2, ts, cam.validate_op(ts, {**lop, "depth": 0.5}), hs, r)[0][3] == pytest.approx(top - 0.5)
+    se = cam.validate_op(ts, {**lop, "start_at": 1.9, "end_at": 0.5, "past_back": 0.1})
+    _x, _y, t1, b1 = cam.drill_targets(bb2, ts, se, hs, r)[0]
+    assert t1 == pytest.approx(cam.axial_to_wcs(bb2, ts, 1.9, r))
+    assert b1 == pytest.approx(cam.axial_to_wcs(bb2, ts, 0.5, r) - 0.1)
+    face = cam.drill_targets(bb2, ts, cam.validate_op(ts, {**lop, "depth": 1.0}), [], r)[0]
+    assert face[3] == pytest.approx(face[2] - 1.0)
+    with pytest.raises(ValueError):
+        cam.toolpath(bb2, ts, lop, r, holes=[])               # nothing modelled, no depth: nothing to drill
