@@ -477,3 +477,21 @@ def test_turning_contour_finish_and_g70():
     g = post.post_setup(s, [(rough, cam.toolpath(box, s, rough, 1.0, profile=prof)), (fin_c, mv)], "haas", 1)
     i = g.index("G70 P100 Q101")                                                        # the rough's G71 blocks
     assert "T0303" in g[:i] and "F0.005\nG70" in g and g.index("N100") < i
+
+
+def test_rough_and_finish_no_z_chatter_over_a_back_round():
+    """A round on the back edge falls away from an OD tool: the path holds the diameter there
+    as ONE move, not a Z-only line per mesh point of the round (the bad lathe code Shane saw)."""
+    import math
+    from gsend_cad.core import cam, post
+    box = ((0, -1.125, -1.125), (3, 1.125, 1.125))
+    s = {**cam.validate({**cam.new_setup("turning"), "axis": "x"}), "name": "S"}
+    back = [(-1.5 + 0.2 - 0.2 * math.cos(a), 1.125 - 0.2 + 0.2 * math.sin(a))
+            for a in [k * math.pi / 2 / 30 for k in range(31)]]                  # 30 points down the round
+    prof = sorted(back, key=lambda q: q[0]) + [(1.5, 1.125)]
+    for kind in ("rough", "finish"):
+        op = cam.validate_op(s, {**cam.new_op(s, kind), "name": kind})
+        g = post.post_setup(s, [(op, cam.toolpath(box, s, op, 1.125, profile=prof))], "haas", 1)
+        lines = g.splitlines()
+        z_only = [ln for ln in lines if ln.startswith("Z") and not ln.startswith("Z0.1")]
+        assert len(z_only) <= 1, (kind, z_only)

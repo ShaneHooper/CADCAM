@@ -443,8 +443,15 @@ def _envelope(pts):
             out[-1] = (z1, top)
     clean = [out[0]]
     for q in out[1:]:
-        if abs(q[0] - clean[-1][0]) > 1e-9 or abs(q[1] - clean[-1][1]) > 1e-9:
-            clean.append(q)
+        if abs(q[0] - clean[-1][0]) <= 1e-9 and abs(q[1] - clean[-1][1]) <= 1e-9:
+            continue                                     # same point twice
+        if len(clean) >= 2:                              # still on the same straight line: extend it
+            (z0, r0), (z1, r1) = clean[-2], clean[-1]
+            same_way = (z1 - z0) * (q[0] - z1) + (r1 - r0) * (q[1] - r1) > 0
+            if same_way and abs((z1 - z0) * (q[1] - r0) - (r1 - r0) * (q[0] - z0)) < 1e-9:
+                clean[-1] = q
+                continue
+        clean.append(q)
     return clean
 
 
