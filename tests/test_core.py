@@ -495,3 +495,25 @@ def test_rough_and_finish_no_z_chatter_over_a_back_round():
         lines = g.splitlines()
         z_only = [ln for ln in lines if ln.startswith("Z") and not ln.startswith("Z0.1")]
         assert len(z_only) <= 1, (kind, z_only)
+
+
+def test_turning_start_end_and_extend():
+    from gsend_cad.core import cam
+    box = ((0, -1, -1), (3, 1, 1))                     # along X, front at +X; WCS Z0 = x 3.05
+    s = {**cam.validate({**cam.new_setup("turning"), "axis": "x"}), "name": "S"}
+    prof = [(-1.5, 1.0), (0.5, 1.0), (0.5, 0.5), (1.5, 0.5)]   # Ø2 back half, Ø1 front (x 2..3)
+    fin = {**cam.new_op(s, "finish"), "name": "C"}
+    c = cam.rough_contour(box, s, fin, prof, 1.0)
+    assert c[0] == pytest.approx((-0.05, 0.5)) and c[-1] == pytest.approx((-3.05, 1.0))   # whole part
+    c = cam.rough_contour(box, s, {**fin, "start_at": 2.5, "end_at": 2.0}, prof, 1.0)
+    assert c[0] == pytest.approx((-0.55, 0.5)) and c[-1] == pytest.approx((-1.05, 1.0))   # x 2.5 .. shoulder
+    c = cam.rough_contour(box, s, {**fin, "start_at": 2.5, "end_at": 1.0, "start_ext": 0.2, "past_back": 0.1},
+                          prof, 1.0)
+    assert c[0] == pytest.approx((-0.35, 0.5)) and c[-1] == pytest.approx((-2.15, 1.0))
+    mv = cam.toolpath(box, s, {**fin, "start_at": 2.5}, 1.0, profile=prof)
+    assert mv[1][1][2] == pytest.approx(-0.55 + 0.1)                                     # comes in ahead of Start
+    with pytest.raises(ValueError):
+        cam.rough_contour(box, s, {**fin, "start_at": 1.0, "end_at": 2.0}, prof, 1.0)  # Start behind End
+    r = {**cam.new_op(s, "rough"), "name": "R", "end_at": 2.0}
+    feeds = [p for k, p in cam.toolpath(box, s, r, 1.0, profile=prof) if k == "feed"]
+    assert min(z for _x, _y, z in feeds) >= -1.05 - 0.02                                  # rough stops at End

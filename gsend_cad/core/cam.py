@@ -237,10 +237,12 @@ CONTOUR_MILL = {"type": "contour", "tool": 2, "tool_dia": 0.5, "stepdown": 0.25,
                 "bottom_offset": 0.0, "direction": "climb", "rpm": 5000.0, "feed": 30.0, "plunge": 10.0,
                 "lead": 0.1, "clearance": 0.5}
 ROUGH_TURN = {"type": "rough", "tool": 2, "stepdown": 0.05, "leave_x": 0.01, "leave_z": 0.005, "retract": 0.02,
-              "past_back": 0.0, "sfm": 600.0, "ipr": 0.01, "max_rpm": 3000.0, "clearance": 0.1, "output": "lines"}
+              "past_back": 0.0, "sfm": 600.0, "ipr": 0.01, "max_rpm": 3000.0, "clearance": 0.1, "output": "lines",
+              "start_at": None, "end_at": None, "start_ext": 0.0}
 ROUGH_OUTPUT = {"lines": "Single lines (G01)", "cycle": "Canned cycle (G71)"}
 FINISH_TURN = {"type": "finish", "tool": 3, "leave_x": 0.0, "leave_z": 0.0, "retract": 0.02, "past_back": 0.0,
-               "sfm": 800.0, "ipr": 0.005, "max_rpm": 3000.0, "clearance": 0.1, "output": "lines"}
+               "sfm": 800.0, "ipr": 0.005, "max_rpm": 3000.0, "clearance": 0.1, "output": "lines",
+               "start_at": None, "end_at": None, "start_ext": 0.0}
 DRILL_MILL = {"type": "drill", "tool": 4, "tool_dia": 0.25, "cycle": "peck", "peck": 0.1, "breakthrough": 0.05,
               "retract": 0.1, "clearance": 0.5, "rpm": 2500.0, "feed": 10.0, "hole_dia": 0.0}
 DRILL_TURN = {"type": "drill", "tool": 5, "tool_dia": 0.25, "cycle": "peck", "peck": 0.1, "breakthrough": 0.05,
@@ -299,7 +301,7 @@ def validate_op(setup: dict, op: dict) -> dict:
         if op["cycle"] != "drill" and op["peck"] <= 0:
             raise ValueError("peck must be greater than 0")
     for k in ("leave", "past_center", "clearance", "lead", "leave_x", "leave_z", "past_back", "breakthrough",
-              "hole_dia"):
+              "hole_dia", "start_ext"):
         if k in op and op[k] < 0:
             raise ValueError(f"{k.replace('_', ' ')} can't be negative")
     return op
@@ -466,22 +468,53 @@ def rough_contour(bbox, setup: dict, op: dict, profile, radius: float = 0.0) -> 
     def z_of(t):
         return (center[i] + t - w["origin"][i]) * sign
     pts = [(z_of(t), r) for t, r in (reversed(profile) if sign > 0 else profile)]   # front first
-    z_back = (back - w["origin"][i]) * sign - op["past_back"]
     if not pts:
         raise ValueError("no part profile to rough")
+    z_lo, z_hi = toolpath_limits(bbox, setup, op, radius)
+    if z_hi <= z_lo + 1e-6:
+        raise ValueError("Start must be in front of End (Start nearer the part's front face)")
     env = _envelope(pts)
-    if env[-1][0] > z_back + 1e-9:                          # past the part's back end
-        env.append((z_back, env[-1][1]))
+    if env[0][0] < z_hi - 1e-9:                             # Extend start: in the air ahead of the face
+        env.insert(0, (z_hi, env[0][1]))
+    if env[-1][0] > z_lo + 1e-9:                            # past the part's back end
+        env.append((z_lo, env[-1][1]))
+    return _clip(env, z_lo, z_hi)
+
+
+def _clip(env, z_lo, z_hi):
+    """The part of a front-first (z, r) polyline between z_hi (start) and z_lo (end)."""
+    def at(z0, r0, z1, r1, z):
+        return r0 + (r1 - r0) * (z - z0) / (z1 - z0) if z1 != z0 else r1
     cut = []
     for (z0, r0), (z1, r1) in zip(env, env[1:]):
-        if z0 < z_back:
-            break
-        if z1 < z_back:                                      # clip at the back limit
-            r1 = r0 + (r1 - r0) * (z_back - z0) / (z1 - z0) if z1 != z0 else r1
-            z1 = z_back
-        cut += [(z0, r0)] if not cut else []
-        cut.append((z1, r1))
-    return cut or env[:1]
+        if z1 > z_hi + 1e-12 or z0 < z_lo - 1e-12:          # wholly before the start / past the end
+            continue
+        a = (z_hi, at(z0, r0, z1, r1, z_hi)) if z0 > z_hi else (z0, r0)
+        b = (z_lo, at(z0, r0, z1, r1, z_lo)) if z1 < z_lo else (z1, r1)
+        if not cut:
+            cut.append(a)
+        if b != cut[-1]:
+            cut.append(b)
+    return cut or [(z_hi, env[0][1])]
+
+
+def axial_to_wcs(bbox, setup: dict, coord: float, radius: float = 0.0) -> float:
+    """A model coordinate along the spindle axis (what Start / End store) as WCS Z."""
+    i = AXES[setup["axis"]]
+    sign = 1.0 if setup["front"] == "+" else -1.0
+    return (coord - wcs(bbox, setup, radius)["origin"][i]) * sign
+
+
+def toolpath_limits(bbox, setup: dict, op: dict, radius: float = 0.0) -> tuple:
+    """(z_end, z_start) in WCS for a turning rough / contour: Start = the picked spot (or the part's
+    front face) + Extend start; End = the picked spot (or the part's back end) + Extend end."""
+    w = wcs(bbox, setup, radius)
+    i, _center, (back, front) = turning_frame(bbox, setup)
+    start = op.get("start_at")
+    end = op.get("end_at")
+    z_hi = axial_to_wcs(bbox, setup, front if start is None else start, radius) + op.get("start_ext", 0.0)
+    z_lo = axial_to_wcs(bbox, setup, back if end is None else end, radius) - op["past_back"]
+    return z_lo, z_hi
 
 
 def rough_toolpath(bbox, setup: dict, op: dict, profile, radius: float = 0.0) -> list[tuple]:
@@ -500,6 +533,8 @@ def rough_toolpath(bbox, setup: dict, op: dict, profile, radius: float = 0.0) ->
     x_out = c["r"] + op["clearance"]
     lx, lz, rt = op["leave_x"], op["leave_z"], op["retract"]
     prof = [(z + lz, r + lx) for z, r in rough_contour(bbox, setup, op, profile, radius)]
+    if op.get("start_at") is not None:                       # a picked Start: come in just ahead of it
+        z_start = prof[0][0] + op["clearance"]
     z_front = prof[0][0]
     r_min = prof[0][1]
     moves = [("rapid", (x_out, 0.0, z_start))]
@@ -544,6 +579,8 @@ def finish_toolpath(bbox, setup: dict, op: dict, profile, radius: float = 0.0) -
     z_start = (c["front"][i] - w["origin"][i]) * sign + op["clearance"]
     x_out = c["r"] + op["clearance"]
     prof = [(z + op["leave_z"], r + op["leave_x"]) for z, r in rough_contour(bbox, setup, op, profile, radius)]
+    if op.get("start_at") is not None:
+        z_start = prof[0][0] + op["clearance"]
     return [("rapid", (x_out, 0.0, z_start))] + _profile_pass(prof, op["retract"], x_out, z_start)
 
 

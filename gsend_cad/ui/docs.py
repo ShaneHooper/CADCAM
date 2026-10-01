@@ -315,8 +315,11 @@ F2 to rename. Clicking an operation shows its path bright; the setup's other pat
 <ol>
 <li>CAM → Turning tab → <b>OD Rough</b>.</li>
 <li><b>Depth of cut (side)</b> per pass (radius), <b>Stock to leave X</b> (per side) and <b>Z</b> (on shoulders),
-<b>Past part back (Z)</b> to run further toward the chuck, <b>Pull-off</b> (the 45° lift at the end of each
+<b>Extend end</b> to run further toward the chuck, <b>Pull-off</b> (the 45° lift at the end of each
 pass), surface speed SFM, feed in/rev, max RPM.</li>
+<li><b>Start</b> / <b>End</b>: click <b>PICK</b>, then click an edge or end point of the part. The toolpath starts
+(or stops) at that Z; white rings in the view show where. <b>×</b> puts it back to the part's front face /
+back end. <b>Extend start</b> / <b>Extend end</b> run it further past them. Same on turning <b>Contour</b>.</li>
 <li>Passes run along Z toward the chuck at falling diameters, each stopping where it meets the part
 (plus stock to leave), then a last pass follows the profile to take off the steps. Grooves and
 undercuts are skipped: an OD tool can't reach into them.</li>
@@ -330,10 +333,11 @@ finished contour in N-blocks (Haas: one line with D; Fanuc: two G71 lines). U / 
 OD Rough. Needs a Turning setup.</p>
 <ol>
 <li>CAM → Turning tab → <b>Contour</b>. Set the tool, <b>Stock to leave X / Z</b> (0 = finished size; set
-some to use it as a semi-finish), <b>Past part back (Z)</b>, pull-off, SFM, feed in/rev and max RPM.</li>
+some to use it as a semi-finish), <b>Start</b> / <b>End</b> (PICK on the part) with <b>Extend start / end</b>,
+pull-off, SFM, feed in/rev and max RPM.</li>
 <li><b>Use G70 cycle</b> ticked: the post writes <b>G70 P Q</b> over the contour blocks of an OD Rough with
 G71 output earlier in the same setup (the usual rough-then-finish program, with its own tool
-change). The rough and the Contour must cover the same profile (same Past part back). With no such
+change). The rough and the Contour must cover the same profile (same Start / End / Extend). With no such
 rough, Post Process says so.</li>
 <li>Unticked: every move is written line by line (G01).</li>
 </ol>

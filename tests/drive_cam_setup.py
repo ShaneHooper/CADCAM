@@ -205,6 +205,23 @@ check("rough stops at the shoulder + leave Z, never below the part + leave X",
       min(p[0] for p in feeds) >= 0.5 + 0.01 - 1e-6
       and all(p[0] >= 0.75 + 0.01 - 1e-6 for p in feeds if p[2] < -1.05 - 0.005 - 1e-6))
 check("rough preview counts passes", "roughing pass" in o.panel.info.text())
+check("rough has Start / End rows (Part front / Part back)", o.panel.ends["start"][1].text() == "Part front"
+      and o.panel.ends["end"][1].text() == "Part back" and o.panel.ends["start"][2].isVisible())
+o.panel.ends["end"][2].setChecked(True)
+pump()
+q = vp.project([(2.0, 0.0, 0.75)])[0]                  # the shoulder edge (Ø1.5 at x = 2)
+from PySide6.QtCore import QPoint as _QP
+QTest.mouseMove(vp.plotter, _QP(round(q[0]), round(q[1])))
+pump(60)
+QTest.mouseClick(vp.plotter, Qt.LeftButton, Qt.NoModifier, _QP(round(q[0]), round(q[1])))
+pump(150)
+check("picking the shoulder edge sets End there (Z-1.05)", abs(o.end_at - 2.0) < 1e-6
+      and o.panel.ends["end"][1].text() == "Z-1.0500" and not o.panel.ends["end"][2].isChecked())
+mv, _w = op_moves(win, o.current_setup(), o.op())
+check("rough now stops at the shoulder", min(p[2] for k, p in mv if k == "feed") >= -1.05 - 0.03)
+shot("cam_04a_rough_end")
+o.panel.ends["end"][2].parent().findChildren(type(o.panel.ends["end"][2]))[-1].click()
+check("× puts End back to Part back", o.end_at is None and o.panel.ends["end"][1].text() == "Part back")
 o.panel.output.setCurrentIndex(o.panel.output.findData("cycle"))
 shot("cam_04b_rough")
 key(Qt.Key_Return)

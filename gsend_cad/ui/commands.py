@@ -1091,6 +1091,32 @@ class EdgePanel(Panel):
         self.edges.style().polish(self.edges)
 
 
+def edge_at(vp, edges, pos, px: float = 8):
+    """(index, world point) of the edge under screen point `pos` (nearest in px, front-most on a
+    tie), or (None, None). The point is the spot on the edge nearest the cursor; within `px` of
+    one of the edge's ends it snaps to that end."""
+    best, hit, at = None, None, None
+    for i, e in enumerate(edges):
+        q = vp.project(e["pts"])
+        a, b = q[:-1], q[1:]
+        d = b[:, :2] - a[:, :2]
+        L = (d ** 2).sum(1)
+        t = np.clip(((pos.x() - a[:, 0]) * d[:, 0] + (pos.y() - a[:, 1]) * d[:, 1]) / np.where(L, L, 1), 0, 1)
+        dist = np.hypot(a[:, 0] + t * d[:, 0] - pos.x(), a[:, 1] + t * d[:, 1] - pos.y())
+        k = int(dist.argmin())
+        if dist[k] <= px:
+            depth = a[k, 2] + t[k] * (b[k, 2] - a[k, 2])
+            score = (round(dist[k] / 3), depth)
+            if best is None or score < best:
+                P = e["pts"]
+                w = P[k] + t[k] * (P[k + 1] - P[k])
+                for end, qe in ((P[0], q[0]), (P[-1], q[-1])):
+                    if math.hypot(qe[0] - pos.x(), qe[1] - pos.y()) <= px:
+                        w = end
+                best, hit, at = score, i, tuple(float(v) for v in w)
+    return hit, at
+
+
 class EdgeSession:
     """Click edges of the solid to round (fillet) or bevel (chamfer) them."""
     captures_left = False                   # left drag still orbits; a click picks
@@ -1115,24 +1141,7 @@ class EdgeSession:
 
     def pick(self, ev):
         """Index of the edge under the cursor (nearest in px; front-most on a tie)."""
-        pos = ev.position()
-        best, hit = None, None
-        for i, e in enumerate(self.edges):
-            q = self.vp.project(e["pts"])
-            a, b = q[:-1], q[1:]
-            d = b[:, :2] - a[:, :2]
-            L = (d ** 2).sum(1)
-            t = np.clip(((pos.x() - a[:, 0]) * d[:, 0] + (pos.y() - a[:, 1]) * d[:, 1]) / np.where(L, L, 1), 0, 1)
-            px = a[:, 0] + t * d[:, 0] - pos.x()
-            py = a[:, 1] + t * d[:, 1] - pos.y()
-            dist = np.hypot(px, py)
-            k = int(dist.argmin())
-            if dist[k] <= self.PICK_PX:
-                depth = a[k, 2] + t[k] * (b[k, 2] - a[k, 2])
-                score = (round(dist[k] / 3), depth)
-                if best is None or score < best:
-                    best, hit = score, i
-        return hit
+        return edge_at(self.vp, self.edges, ev.position(), self.PICK_PX)[0]
 
     def paint(self):
         self.vp.clear("edges", render=False)
@@ -1361,6 +1370,9 @@ class SetupPanel(Panel):
     def fit(self):
         self.layout().activate()
         self.resize(self.width(), self.sizeHint().height())
+        vp = self.parent()
+        if hasattr(vp, "_place"):
+            vp._place()                      # a tall panel moves up so OK / CANCEL stay on screen
 
 
 class SetupSession:
@@ -1692,11 +1704,13 @@ class OpPanel(Panel):
                                         ("plunge", "Plunge (in/min)", 2)]},
               "rough": {cam.TURNING: [("tool", "Tool number", 0), ("stepdown", "Depth of cut (side)", 4),
                                       ("leave_x", "Stock to leave X", 4), ("leave_z", "Stock to leave Z", 4),
-                                      ("past_back", "Past part back (Z)", 4), ("retract", "Pull-off", 4),
+                                      ("start_ext", "Extend start", 4), ("past_back", "Extend end", 4),
+                                      ("retract", "Pull-off", 4),
                                       ("sfm", "Surface speed SFM", 0), ("ipr", "Feed (in/rev)", 4),
                                       ("max_rpm", "Max RPM", 0)]},
               "finish": {cam.TURNING: [("tool", "Tool number", 0), ("leave_x", "Stock to leave X", 4),
-                                       ("leave_z", "Stock to leave Z", 4), ("past_back", "Past part back (Z)", 4),
+                                       ("leave_z", "Stock to leave Z", 4), ("start_ext", "Extend start", 4),
+                                       ("past_back", "Extend end", 4),
                                        ("retract", "Pull-off", 4), ("sfm", "Surface speed SFM", 0),
                                        ("ipr", "Feed (in/rev)", 4), ("max_rpm", "Max RPM", 0)]},
               "drill": {cam.MILLING: [("tool", "Tool number", 0), ("tool_dia", "Drill diameter", 4),
@@ -1741,6 +1755,30 @@ class OpPanel(Panel):
                 cb.addItem(cam.DRILL_CYCLES[k], k)
             cb.currentIndexChanged.connect(s.preview)
             self.cycles[stype] = cb
+        self.ends = {}                           # turning rough / contour: Start / End picked on the part
+        for which in ("start", "end"):
+            w = QWidget()
+            hl = QHBoxLayout(w)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.setSpacing(4)
+            val = QLabel("")
+            val.setStyleSheet(f"color:{theme.FG2};")
+            pick = QPushButton("PICK")
+            pick.setObjectName("dlgBtn")
+            pick.setCheckable(True)
+            pick.setToolTip(f"Click an edge or end point of the part: the toolpath {'starts' if which == 'start' else 'ends'}"
+                            " at that Z")
+            pick.toggled.connect(partial(s.set_picking, which))
+            clear = QPushButton("×")
+            clear.setObjectName("dlgBtn")
+            clear.setFixedWidth(26)
+            clear.setStyleSheet("padding:0px;")
+            clear.setToolTip("Back to the part's " + ("front face" if which == "start" else "back end"))
+            clear.clicked.connect(partial(s.clear_end, which))
+            hl.addWidget(val)
+            hl.addWidget(pick)
+            hl.addWidget(clear)
+            self.ends[which] = (w, val, pick)
         self.holes = QComboBox()                 # Drill (mill): which hole size, found in the model
         self.holes.currentIndexChanged.connect(s.holes_changed)
         for stype, fields in self.FIELDS[kind].items():
@@ -1765,6 +1803,8 @@ class OpPanel(Panel):
                 items.append(("Output", self.output))
             elif kind == "finish":
                 items.append(("Use G70 cycle", self.g70))
+            if kind in ("rough", "finish"):
+                items[1:1] = [("Start", self.ends["start"][0]), ("End", self.ends["end"][0])]
             for label, w in items:
                 r = QWidget()
                 r.setObjectName("panelRow")
@@ -1820,6 +1860,9 @@ class OpSession:
                 box.setValue(op[key])
         if "direction" in op:
             p.direction.setCurrentIndex(max(0, p.direction.findData(op["direction"])))
+        self.start_at, self.end_at = op.get("start_at"), op.get("end_at")
+        if self.kind in ("rough", "finish"):
+            self.show_ends()
         if self.kind == "drill":
             cb = p.cycles[st["type"]]
             cb.setCurrentIndex(max(0, cb.findData(op["cycle"])))
@@ -1861,6 +1904,8 @@ class OpSession:
             o["output"] = p.output.currentData()
         elif self.kind == "finish":
             o["output"] = "cycle" if p.g70.isChecked() else "lines"
+        if self.kind in ("rough", "finish"):
+            o["start_at"], o["end_at"] = self.start_at, self.end_at
         if self.kind == "drill":
             o["cycle"] = p.cycles[st["type"]].currentData()
             o["hole_dia"] = (p.holes.currentData() or 0.0) if st["type"] == cam.MILLING else 0.0
@@ -1887,6 +1932,8 @@ class OpSession:
             self.vp.render()
             return
         draw_toolpath(self.vp, world, "op")
+        if self.kind in ("rough", "finish"):
+            self.draw_ends(st, self.op())
         zs = {round(p[2], 6) for k, p in moves if k == "feed"} if st["type"] == cam.MILLING else \
             {i for i, (k, _p) in enumerate(moves) if k == "feed" and moves[i - 1][0] == "rapid"}   # facing cuts
         t = cam.cycle_time(moves, st, self.op())
@@ -1915,18 +1962,109 @@ class OpSession:
             return
         self.win.commit_op(st["id"], self.op(), self.edit_id)
 
+    def draw_ends(self, st, op):
+        """A ring around the bar at the Start and End (with their extensions): where the path runs."""
+        bodies = setup_bodies(self.win, st)
+        if not bodies:
+            return
+        bb = bodies_bbox(bodies)
+        rad = turning_radius(self.win, st, bodies)
+        i, center, _ = cam.turning_frame(bb, st)
+        r = cam.stock_cylinder(bb, rad, st)["r"] + 0.08
+        w = cam.wcs(bb, st, rad)
+        sign = 1.0 if st["front"] == "+" else -1.0
+        u, v = [k for k in range(3) if k != i]
+        rings = []
+        for z in cam.toolpath_limits(bb, st, op, rad):
+            a = w["origin"][i] + z * sign
+            ring = []
+            for k in range(49):
+                p = list(center)
+                p[i] = a
+                p[u] += r * math.cos(k * math.pi / 24)
+                p[v] += r * math.sin(k * math.pi / 24)
+                ring.append(p)
+            rings.append(ring)
+        self.vp.add_lines("op", rings, theme.FG, 1.6, opacity=0.9)
+
+    # ---- turning Start / End: pick an edge or end point of the part
+    picking = None
+
+    def show_ends(self):
+        st = self.current_setup()
+        bodies = setup_bodies(self.win, st)
+        for which in ("start", "end"):
+            v = self.start_at if which == "start" else self.end_at
+            _w, lab, _p = self.panel.ends[which]
+            if v is None or not bodies:
+                lab.setText("Part front" if which == "start" else "Part back")
+            else:
+                bb = bodies_bbox(bodies)
+                lab.setText(f"Z{cam.axial_to_wcs(bb, st, v, turning_radius(self.win, st, bodies)):.4f}")
+
+    def set_picking(self, which, on: bool):
+        if on:
+            other = self.panel.ends["end" if which == "start" else "start"][2]
+            other.blockSignals(True)
+            other.setChecked(False)
+            other.blockSignals(False)
+            self.edges = edge_list(setup_bodies(self.win, self.current_setup()))
+            self.picking = which
+            self.win.message(f"PICK {which.upper()}: click an edge or end point of the part · Esc stops picking")
+        elif self.picking == which:
+            self.picking = None
+            self.vp.clear("pick")
+            self.vp.dim.hide()
+        self.panel.ends[which][2].setText("PICKING…" if on else "PICK")
+
+    def clear_end(self, which, *_):
+        setattr(self, "start_at" if which == "start" else "end_at", None)
+        self.show_ends()
+        self.preview()
+
+    def _axial(self, ev):
+        """(edge index, model coordinate along the spindle axis) under the cursor."""
+        i, w = edge_at(self.vp, self.edges, ev.position(), 8)
+        if i is None:
+            return None, None
+        return i, w[cam.AXES[self.current_setup()["axis"]]]
+
     def on_move(self, w, ev):
-        pass
+        if not self.picking or ev.buttons():
+            return
+        i, a = self._axial(ev)
+        self.vp.clear("pick", render=False)
+        if i is not None:
+            self.vp.add_lines("pick", [self.edges[i]["pts"]], theme.FG, 3.0)
+            st = self.current_setup()
+            bodies = setup_bodies(self.win, st)
+            z = cam.axial_to_wcs(bodies_bbox(bodies), st, a, turning_radius(self.win, st, bodies))
+            self.vp.show_dim(f"{self.picking.upper()} Z{z:.4f}", ev.position().toPoint())
+        else:
+            self.vp.dim.hide()
+        self.vp.render()
 
     def on_click(self, w, ev):
-        pass
+        if not self.picking:
+            return
+        i, a = self._axial(ev)
+        if i is None:
+            return
+        which = self.picking
+        setattr(self, "start_at" if which == "start" else "end_at", a)
+        self.panel.ends[which][2].setChecked(False)
+        self.show_ends()
+        self.preview()
 
     def on_key(self, ev) -> bool:
         if ev.key() in (Qt.Key_Return, Qt.Key_Enter):
             self.commit()
             return True
         if ev.key() == Qt.Key_Escape:
-            self.win.cancel_command()
+            if self.picking:
+                self.panel.ends[self.picking][2].setChecked(False)
+            else:
+                self.win.cancel_command()
             return True
         return False
 
@@ -1936,6 +2074,8 @@ class OpSession:
 
     def close(self):
         self.vp.clear("op", render=False)
+        self.vp.clear("pick", render=False)
+        self.vp.dim.hide()
 
 
 # ------------------------------------------------------------------ simulate

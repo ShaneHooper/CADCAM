@@ -518,10 +518,15 @@ class Viewport(QWidget):
         self.navbar.move((W - self.navbar.width()) // 2, H - self.navbar.height() - 10)
         self.toast.move((W - self.toast.width()) // 2, 10)
         self.banner.move((W - self.banner.width()) // 2, 8)
-        if self.side is not None:
-            self.side.move(W - self.side.width() - 14, 104)
         for w in (self.hud, self.cube, self.navbar):
             w.raise_()
+        if self.side is not None:
+            # below the view cube; a panel too tall for that moves up (over the cube) so its
+            # OK / CANCEL never fall off the bottom
+            y = 104 if self.side.height() <= H - 104 - 10 else max(8, H - self.side.height() - 10)
+            self.side.move(W - self.side.width() - 14, y)
+            if y < 104:
+                self.side.raise_()
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
