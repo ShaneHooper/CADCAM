@@ -171,6 +171,15 @@ check("turning Fixed size: bar Ø and length filled (Ø1.6 -> 1.625)",
       s.panel.dia.isVisible() and s.panel.dia.value() == 1.625 and not s.panel.od.isVisible())
 key(Qt.Key_Escape)
 check("turning setup saved", t["type"] == "turning" and t["axis"] == "x" and t["wcs"] == "stock-face")
+win.select_tab("milling")
+win.run_tool("Setup")
+QTest.mouseClick(win.session.panel.type_btn["turning"], Qt.LeftButton)
+pump()
+key(Qt.Key_Return)
+check("a Turning setup made from the Milling tab switches the ribbon to the Turning toolpaths",
+      win.ribbon.current == "turning" and win.doc.setups[-1]["type"] == "turning")
+win.undo()
+check("(undo removes that extra setup)", len(win.doc.setups) == 1)
 from gsend_cad.core import cam
 from gsend_cad.kernel import bodies_bbox, max_radius
 bb = bodies_bbox(win.model.bodies)

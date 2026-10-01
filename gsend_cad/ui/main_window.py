@@ -246,6 +246,7 @@ class MainWindow(QMainWindow):
             self.viewport.show_toast(str(exc), bad=True)
             return
         self.cam_setup = s["id"]
+        self.show_cam_tab(s)
         self.document_changed.emit()
         self.rebuild()
         self.viewport.show_toast(f"{s['name']} · {s['type'].capitalize()}")
@@ -473,6 +474,11 @@ class MainWindow(QMainWindow):
         t.start()
 
     # ---------------------------------------------------------- tools
+    def show_cam_tab(self, setup):
+        """A lathe setup shows the Turning toolpaths, a mill setup the Milling ones (CAM mode only)."""
+        if setup and self.ribbon.switch.mode == "cam" and self.ribbon.current != setup["type"]:
+            self.ribbon.show_tab(setup["type"])
+
     def select_tab(self, key):
         if isinstance(self.session, SketchSession) and key != "sketch":
             self.viewport.show_toast("Finish the sketch first")
@@ -494,8 +500,11 @@ class MainWindow(QMainWindow):
                                      else "Finish the command first")
             return
         self.ribbon.show_mode(mode)
+        if mode == "cam":
+            self.show_cam_tab(self.doc.setup(getattr(self, "cam_setup", None)) or
+                              (self.doc.setups[-1] if self.doc.setups else None))
         self.draw_cam()
-        self.message("CAM: toolpath tools (coming next). Your model stays as it is; flip back to CAD to edit it."
+        self.message("CAM: pick a Setup, then its toolpaths. Your model stays as it is; flip back to CAD to edit it."
                      if mode == "cam" else DEFAULT_MSG)
 
     def run_tool(self, label: str):
@@ -764,6 +773,7 @@ class MainWindow(QMainWindow):
         if nid in b.setup_ids:
             st, o = self.doc.op(nid)
             self.cam_setup, self.cam_op = (st["id"], nid) if o else (nid, None)
+            self.show_cam_tab(st if o else self.doc.setup(nid))
             self.draw_cam()
         if nid.startswith("body"):
             self.selected = nid
