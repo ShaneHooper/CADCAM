@@ -550,7 +550,8 @@ class Viewport(QWidget):
         nl.setSpacing(2)
         self.nav_buttons = {}
         for name, tip in (("orbit", "Orbit (left drag)"), ("view", "Look at"), ("pan", "Pan (right drag)"),
-                          ("zoom", "Zoom (wheel)"), ("fit", "Fit"), ("disp", "Display mode")):
+                          ("zoom", "Zoom (wheel)"), ("fit", "Fit"), ("disp", "Display mode"),
+                          ("trash", "Deselect: drop everything selected / picked")):
             b = QToolButton()
             b.setToolTip(tip)
             b.setIcon(icons.icon(name, theme.FG2, theme.ACCENT, 15))

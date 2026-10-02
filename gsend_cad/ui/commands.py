@@ -832,9 +832,9 @@ class SketchSession:
         pos = ev.position().toPoint()
         if self.tool in XFORM_TOOLS:
             if self.xpick == "center":
-                p = self._snap(w, ev)
+                p, what = self._center_pick(w, ev)
                 self._mark_snap(p, pos)
-                self.vp.show_dim(f"CENTER X {sk.fmt(p[0])}  Y {sk.fmt(p[1])}", pos)
+                self.vp.show_dim(f"CENTER{what} X {sk.fmt(p[0])}  Y {sk.fmt(p[1])}", pos)
             else:
                 self.vp.show_dim("click the mirror line" if self.xpick == "line" else
                                  f"{len(self.picked)} picked · click a shape to add / drop it", pos)
@@ -1073,6 +1073,26 @@ class SketchSession:
     def set_xpick(self, what):
         self.xpick = what
 
+    def _center_pick(self, w, ev):
+        """Where a center pick lands: on a circle / arc / polygon, ITS center (Shane: clicking the
+        circle means turn about its middle, not the spot clicked); else the usual snap."""
+        i = sk.nearest(self.ents, w, 8 * self.vp.pixel_size(ev.position().toPoint()))
+        if i is not None and self.ents[i]["type"] in ("circle", "arc", "polygon"):
+            e = self.ents[i]
+            c = e["c"] if "c" in e else sk.params(e)
+            c = [c["x"], c["y"]] if isinstance(c, dict) else list(c)
+            return c, f" OF {sk.entity_label(e)[0].upper()}"
+        return self._snap(w, ev), ""
+
+    def clear_selection(self):
+        """The view bar's trash button: drop what's selected / picked (shapes stay)."""
+        if self.xpanel is not None:
+            self.picked = []
+            self.xform_preview()
+        self.multi = []
+        self.select(None)
+        self.redraw()
+
     def mirror_about_changed(self):
         self.xpanel.show_rows()
         if self.xpanel.about.currentData() == "line" and self.mirror_line is None:
@@ -1083,7 +1103,7 @@ class SketchSession:
         pos = ev.position().toPoint()
         p = self.xpanel
         if self.xpick == "center":
-            q = self._snap(w, ev)
+            q, _what = self._center_pick(w, ev)
             p.cx.setValue(q[0])
             p.cy.setValue(q[1])
             p.center_btn.setChecked(False)

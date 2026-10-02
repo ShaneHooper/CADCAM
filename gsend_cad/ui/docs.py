@@ -26,6 +26,8 @@ bottom, so you can go back and change it.</p>
 </table>
 <p><b>Panels</b> (Rotate, a toolpath, the Sketch Palette...): drag the blue title bar to move one out of the
 way. It stays there, and a panel with the same name opens there again until the app is closed.</p>
+<p>The <b>trash can</b> on the view bar at the bottom drops whatever is selected or picked (nothing is
+deleted).</p>
 <h3>Moving the view</h3>
 <table>
 <tr><td class="k">Left drag</td><td>Selection box. Left to right picks what's wholly inside (solid box); right
@@ -151,7 +153,7 @@ sides, center X / Y and angle. Its dimensions show AF and AC; right-click one to
 drop one). A shape that was selected is picked already. The result shows faintly; <b>OK</b> or Enter applies,
 <b>CANCEL</b> or Esc puts the tool down. Each one is a single Ctrl+Z.</li>
 <li><b>Rotate</b>: angle (counter-clockwise +), center (type X / Y or click the arrow then a point in the
-sketch; it snaps to ends and centers). <b>Keep original</b> makes a turned copy instead.</li>
+sketch; it snaps to ends and centers; clicking a circle, arc or polygon takes its center). <b>Keep original</b> makes a turned copy instead.</li>
 <li><b>Mirror</b>: across the Y axis, the X axis or a line in the sketch (click the arrow, then the line).
 Keeps the original by default.</li>
 <li><b>Pattern</b>: <b>Circular</b> = count and angle about a center (360 = evenly all the way round, e.g. a bolt

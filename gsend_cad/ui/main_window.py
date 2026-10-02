@@ -115,6 +115,7 @@ class MainWindow(QMainWindow):
         self.viewport.click_cb = self.click_select
         nb = self.viewport.nav_buttons
         nb["fit"].clicked.connect(lambda: self.viewport.set_view("home"))
+        nb["trash"].clicked.connect(self.deselect_all)
         nb["disp"].clicked.connect(self.cycle_display)
         for k in ("orbit", "view", "pan", "zoom"):
             nb[k].clicked.connect(lambda _=False, k=k: self.message(
@@ -797,6 +798,14 @@ class MainWindow(QMainWindow):
             self.viewport.show_bodies(self.model.bodies, nid)
             self.refresh_props()
         self.status.sel.setText("SEL: " + (nid.upper() if nid else "—"))
+
+    def deselect_all(self):
+        """The view bar's trash button: nothing selected (sketch shapes, picks, bodies)."""
+        if self.session is not None and hasattr(self.session, "clear_selection"):
+            self.session.clear_selection()
+        else:
+            self._pick_bodies([])
+        self.viewport.show_toast("Selection cleared")
 
     def _shown_sel(self):
         return set(self.sel_bodies or [self.selected]) if self.paint_sel else None
