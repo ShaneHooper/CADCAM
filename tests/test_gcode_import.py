@@ -33,6 +33,11 @@ def test_g0_is_a_rapid_and_g1_a_feed_with_x_as_diameter():
     assert m.feed == 0.01 and m.line == 4
 
 
+def test_a_facing_pass_past_centre_keeps_its_negative_x():
+    m = cuts(HEAD + "G1 Z0 F.01\nX-.0625\n")[1]
+    assert ends(m) == (0.0, -0.0625)                    # not clamped to X0: that is what clears the centre nub
+
+
 def test_modal_motion_carries_to_bare_axis_lines():
     m = cuts(HEAD + "G1 Z-1. F.01\nX2.5\n")
     assert [x.code for x in m] == ["G1", "G1"] and ends(m[1]) == (-1.0, 2.5)

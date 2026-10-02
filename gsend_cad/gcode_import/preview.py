@@ -19,14 +19,16 @@ class Preview(QWidget):
         self.note = ""
         self.highlight = None       # move indices drawn bright (the rest dim), or None = all bright
         self.caption = ""
+        self.profile = None         # reconstructed outline edges (EXACT / ASSUMED / STOCK / AXIS), or None
+        self.show_toolpath = True
 
     def show_highlight(self, indices, caption=""):
         self.highlight = None if indices is None else set(indices)
         self.caption = caption
         self.update()
 
-    def show_setup(self, moves, stock, note=""):
-        self.moves, self.stock, self.note = moves, stock, note
+    def show_setup(self, moves, stock, note="", profile=None):
+        self.moves, self.stock, self.note, self.profile = moves, stock, note, profile
         self.update()
 
     def _bounds(self):
@@ -80,18 +82,31 @@ class Preview(QWidget):
         p.setPen(QPen(QColor(theme.OK), 1))
         p.drawLine(pt(0.0, r1 * 2.0), pt(0.0, r0 * 2.0))
         p.drawText(pt(0.0, r1 * 2.0) + QPointF(4, 12), "Z0")
-        # toolpath: rapids under, feeds over
         clip = QRectF(1, 1, self.width() - 2, self.height() - 2)
         p.setClipRect(clip)
+        if self.profile:
+            # the part: exact edges solid accent, assumed edges dashed orange, uncut stock dashed gray
+            pens = {"EXACT": QPen(QColor(theme.ACCENT), 2.0), "ASSUMED": QPen(QColor(theme.WARN), 2.0, Qt.DashLine),
+                    "STOCK": QPen(QColor(theme.FG2), 1.4, Qt.DashLine)}
+            for tag in ("STOCK", "EXACT", "ASSUMED"):
+                p.setPen(pens[tag])
+                for e in self.profile:
+                    if e.tag == tag:
+                        p.drawLine(pt(e.z0, e.x0), pt(e.z1, e.x1))
+        # toolpath: rapids under, feeds over. Over a profile it is drawn thin, so the part reads first.
         rapid = QPen(QColor(theme.FG3), 1, Qt.DashLine)
-        feed = QPen(QColor(theme.ACCENT), 1.4)
+        feed = QPen(QColor(theme.OK if self.profile else theme.ACCENT), 1.0 if self.profile else 1.4)
         dim = QPen(QColor(theme.LINE2), 1)
-        lit = self.highlight
+        lit = self.highlight if self.show_toolpath else set()
+        if self.profile and not self.show_toolpath and self.highlight is not None:
+            lit = self.highlight                        # a selected operation still shows over the profile
         # rapids under, then the dimmed feeds, then the bright ones on top
         for layer in ("rapid", "dim", "feed"):
             p.setPen({"rapid": rapid, "dim": dim, "feed": feed}[layer])
             for i, m in enumerate(self.moves):
                 bright = lit is None or i in lit
+                if self.profile and not bright:
+                    continue                            # over a profile, only the lit moves are drawn
                 if m.kind == "rapid":
                     if layer != "rapid" or not bright:
                         continue
@@ -105,5 +120,6 @@ class Preview(QWidget):
             p.setPen(QColor(theme.ACCENT))
             p.drawText(self.rect().adjusted(10, 8, -8, 0), Qt.AlignTop | Qt.AlignLeft, self.caption)
         p.setPen(QColor(theme.FG3))
-        p.drawText(self.rect().adjusted(8, 0, -8, -6), Qt.AlignBottom | Qt.AlignRight,
-                   "FEED ——   RAPID - - -   STOCK - - -   +Z →   +X ↑")
+        legend = ("EXACT ——   ASSUMED - - -   STOCK - - -   +Z →   +X ↑" if self.profile else
+                  "FEED ——   RAPID - - -   STOCK - - -   +Z →   +X ↑")
+        p.drawText(self.rect().adjusted(8, 0, -8, -6), Qt.AlignBottom | Qt.AlignRight, legend)

@@ -10,6 +10,7 @@ from ..ui import theme
 from . import keywords as kw
 from . import operations
 from .preview import Preview
+from .recon_page import profile_summary
 from .stock import stock_z_range
 from .widgets import MONO_CSS, STATUS_COLOUR, TABLE_CSS, head
 
@@ -17,10 +18,14 @@ COLUMNS = ("#", "TOOL", "COMMENT", "LINES", "FOUND BY", "TYPE", "CONFIDENCE")
 NO_TYPE = "— pick a type —"
 
 
-def summary_text(s: dict) -> str:
+def summary_text(s: dict, rec=None) -> str:
+    """Operations first, then the profile's own numbers once it has been reconstructed."""
+    rows = [("OPERATIONS", f"{s['operations']}" + (f"  ({s['skipped']} skipped)" if s["skipped"] else ""))]
+    text = "\n".join(f"{k:<16} {v}" for k, v in rows)
+    if rec is not None:
+        return text + "\n" + profile_summary(rec, s["needs_type"])
     z = s["cut_z"]
     rows = [
-        ("OPERATIONS", f"{s['operations']}" + (f"  ({s['skipped']} skipped)" if s["skipped"] else "")),
         ("NEED A TYPE", str(s["needs_type"])),
         ("STOCK Ø", f"{s['stock_od']:.4f}"),
         ("CUTS SPAN Z", f"{z[0]:.4f} to {z[1]:.4f}  ({z[1] - z[0]:.4f} long)" if z else "no cuts"),
@@ -28,8 +33,7 @@ def summary_text(s: dict) -> str:
         ("THREADS", "none" if not s["threads"] else s["threads"][0]),
     ]
     rows += [("", t) for t in s["threads"][1:]]
-    rows += [("LINES / ARCS", "after Step 4"), ("MAX Ø / LENGTH", "after Step 4"), ("ASSUMED EDGES", "after Step 4")]
-    return "\n".join(f"{k:<15} {v}" for k, v in rows)
+    return text + "\n" + "\n".join(f"{k:<16} {v}" for k, v in rows)
 
 
 class OpsPage(QWidget):
@@ -112,8 +116,13 @@ class OpsPage(QWidget):
             "&nbsp;&nbsp;&nbsp;" + "&nbsp;&nbsp;&nbsp;".join(
                 f"<span style='color:{STATUS_COLOUR[c]}'>{c} {n[c]}</span>" for c in operations.CONFIDENCES))
         zb, zf = stock_z_range(stock["z0"], stock["length"], stock["front"])
-        self.preview.show_setup(wiz.program.moves, (zb, zf, stock["od"], stock["id"]))
-        self.summary.setText(summary_text(operations.summary(wiz.program, self.ops, wiz.tools_page.tools, stock)))
+        wiz.invalidate()
+        rec = wiz.reconstruction()                      # live: the profile follows every change
+        self.preview.show_toolpath = False              # only the selected operation's moves, over the part
+        self.preview.show_setup(wiz.program.moves, (zb, zf, stock["od"], stock["id"]),
+                                profile=rec.edges if rec.ok else None)
+        self.summary.setText(summary_text(operations.summary(wiz.program, self.ops, wiz.tools_page.tools, stock),
+                                          rec))
         self._loading = False
         if self.ops:
             row = keep if 0 <= keep < len(self.ops) else 0

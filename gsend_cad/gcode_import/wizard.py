@@ -22,6 +22,8 @@ from .keywords_page import KeywordsDialog
 from .ops_page import OpsPage
 from .parser import parse_program
 from .preview import Preview
+from .recon_page import ReconPage
+from .reconstruct import reconstruct
 from .stock import Z0_CHOICES, Z0_LABELS, guess_stock, stock_z_range
 from .tools_page import ToolsPage
 from .widgets import C_GUESS, C_YOU, Num, Tag, button
@@ -82,6 +84,8 @@ class ImportWizard(QDialog):
         self.table = kw.load(self.keywords_file)        # keyword table (Settings > Keywords)
         self.overrides = {}                             # tool number -> Tool the user defined in Step 2
         self.op_overrides = {}                          # operation key -> type the user picked in Step 3
+        self.nose_center = False                        # per-import: X / Z point at the nose centre, not the tip
+        self._recon = None                              # cached reconstruction (cleared on any change)
         self._loading = True
         self.setWindowTitle(f"Import G-code · {Path(path).name}")
         self.resize(1200, 720)
@@ -110,7 +114,9 @@ class ImportWizard(QDialog):
         self.pages.addWidget(self.tools_page)
         self.ops_page = OpsPage(self)
         self.pages.addWidget(self.ops_page)
-        self.pages.addWidget(self._placeholder(4, STEPS[3]))
+        self.recon_page = ReconPage(self)
+        self.pages.addWidget(self.recon_page)
+        self.ops_page.changed.connect(self.recon_page.reload)       # any change re-runs the reconstruction
         self.tools_page.changed.connect(self.ops_page.reload)       # tools decide sides and drill types
         v.addWidget(self.pages, 1)
 
@@ -133,15 +139,6 @@ class ImportWizard(QDialog):
         self.refresh()
 
     # ---- pages ----
-    def _placeholder(self, number: int, name: str) -> QWidget:
-        w = QWidget()
-        lay = QVBoxLayout(w)
-        lab = QLabel(f"STEP {number} · {name}\n\nNOT BUILT YET (PHASE {number if number < 4 else '4-6'})")
-        lab.setAlignment(Qt.AlignCenter)
-        lab.setStyleSheet(f"color:{theme.FG3};font-family:'{theme.HEAD[0]}';font-size:16px;letter-spacing:2px;")
-        lay.addWidget(lab)
-        return w
-
     def _setup_page(self) -> QWidget:
         page = QWidget()
         row = QHBoxLayout(page)
@@ -303,6 +300,21 @@ class ImportWizard(QDialog):
         self.status.setText(f"{Path(self.path).name}  ·  {len(self.program.lines)} lines  ·  "
                             f"{len(self.program.moves)} moves ({cuts} cutting){metric}")
         self.next.setEnabled(lathe and self.pages.currentIndex() < len(STEPS) - 1)
+
+    # ---- reconstruction ----
+    def invalidate(self):
+        self._recon = None
+
+    def reconstruction(self):
+        """The part as it stands now. Re-run whenever a tool, an operation or the stock changes."""
+        if self._recon is None:
+            try:
+                self._recon = reconstruct(self.program, self.tools_page.tools, self.ops_page.ops, self.settings(),
+                                          self.nose_center)
+            except Exception as exc:                    # a bad program must not take the window down
+                from .reconstruct import Reconstruction
+                self._recon = Reconstruction(ok=False, error=f"{type(exc).__name__}: {exc}")
+        return self._recon
 
     # ---- keywords ----
     def open_keywords(self):

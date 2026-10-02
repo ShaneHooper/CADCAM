@@ -141,7 +141,9 @@ check("each row says how it was found and how sure",
 check("the header counts each confidence", all(x in op.counts.text() for x in ("HIGH 3", "MED 3", "NEEDS TYPE 0",
                                                                                "SET BY YOU 0")))
 check("the summary lists the bore and the thread callout",
-      "Ø0.7500" in op.summary.text() and "16 TPI" in op.summary.text() and "after Step 4" in op.summary.text())
+      "Ø0.7500" in op.summary.text() and "16 TPI" in op.summary.text() and "MAX Ø" in op.summary.text())
+check("the preview shows the reconstructed profile, exact and uncut edges",
+      op.preview.profile and {e.tag for e in op.preview.profile} >= {"EXACT", "STOCK"})
 op.table.setCurrentCell(3, 0)
 check("selecting a row lights up its moves in the preview",
       op.preview.highlight == set(op.ops[3].moves) and "#4" in op.preview.caption)
@@ -160,6 +162,36 @@ check("operations follow Setup: with a 1.6 tube ID the 1.5 turn is inside the bo
       and op.ops[3].side == "ID" and op.preview.stock[3] == 1.6)
 dlg.go(0)
 dlg.round_btn.click()
+dlg.go(2)
+
+# ---- Step 4 RECONSTRUCT ----
+dlg.go(3)
+rp = dlg.recon_page
+QTest.qWait(300)
+rec = dlg.reconstruction()
+check("the reconstruction ran: a 1.5 turned diameter, a 0.75 bore, a thread callout",
+      rec.ok and abs(rec.diameter_at(-0.2) - 1.5) < 0.005 and abs(rec.bore - 0.75) < 0.005 and len(rec.threads) == 1)
+check("the page shows the profile and its numbers",
+      rp.preview.profile == rec.edges and "MAX Ø" in rp.summary.text() and "16 TPI" in rp.summary.text())
+shot(dlg, "gcode_import_reconstruct")
+area = rec.area
+rp.centre_btn.click()
+check("NOSE CENTER re-runs the reconstruction", dlg.nose_center and dlg.reconstruction().area != area)
+rp.tip_btn.click()
+check("back to IMAGINARY TIP gives the first result again", abs(dlg.reconstruction().area - area) < 1e-9)
+rp.show_path.setChecked(True)
+check("SHOW TOOLPATH draws the moves over the profile", rp.preview.show_toolpath)
+shot(dlg, "gcode_import_reconstruct_toolpath")
+rp.show_path.setChecked(False)
+dlg.go(1)
+tp.table.setCurrentCell(3, 0)
+tp.size.setValue(0.25)
+tp.apply_btn.click()
+check("changing a tool definition re-runs the reconstruction (wider groove blade)",
+      abs(dlg.reconstruction().area - area) > 1e-4)
+tp.table.setCurrentCell(3, 0)
+tp.size.setValue(0.125)
+tp.apply_btn.click()
 dlg.go(2)
 
 kd = KeywordsDialog(dlg, dlg.keywords_file, dlg.table)

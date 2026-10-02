@@ -56,7 +56,7 @@ class Tool:
             return (f"Nose radius {self.nose_radius:.4f} is a default, not read from the program. "
                     "Corners and tapers this tool cuts are marked ASSUMED.")
         if self.type in SIZED and self.size is None:
-            return f"No {SIZED[self.type].lower()} found - taken from the tool's moves, marked ASSUMED."
+            return f"No {SIZED[self.type].lower()} found - this tool's cuts are left out until you type one."
         return "Nothing assumed."
 
     @property

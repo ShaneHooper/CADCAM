@@ -10,6 +10,7 @@ what was changed here, on purpose:
   * a one- or two-digit T word (T3, T12) is a tool with no offset, not tool 00;
   * G92 threading has its own branch (in REV 5 it is nested under the G70 test and never
     runs), and a two-line G76 applies its data line's F, so thread moves carry the lead;
+  * X is not clamped at the centerline: a facing pass to X-0.0625 keeps its negative X;
   * G81/G82/G83/G84 and G74 (Z peck) are read as one drilling pass instead of being
     drawn with whatever motion was last active;
   * the result is converted to the canonical list at the bottom (parse_program).
@@ -623,7 +624,7 @@ def _target(line: _ParsedLine, state: MachineState) -> tuple[float, float]:
         x += _x_dia_to_radius(sign * u_word, state.units)
     if w_word is not None:
         z += _dim(w_word, state.units)
-    return max(0.0, x), z
+    return x, z
 
 
 def _line_move(line: _ParsedLine, state: MachineState, x1: float, z1: float, kind: str, code: str) -> Move:
@@ -705,7 +706,7 @@ def _expand_g76(param_line: _ParsedLine, data_line: _ParsedLine, state: MachineS
 
 
 def _raw_move(line: _ParsedLine, x0: float, z0: float, x1: float, z1: float, kind: str, code: str, state: MachineState) -> Move:
-    return Move(line.index, line.raw, kind, code, ((max(0.0, x0), z0), (max(0.0, x1), z1)), state, n=line.n)
+    return Move(line.index, line.raw, kind, code, ((x0, z0), (x1, z1)), state, n=line.n)
 
 
 def _arc_move(line: _ParsedLine, state: MachineState, x1: float, z1: float, clockwise: bool) -> Move:
@@ -869,8 +870,8 @@ def _arc_points(x0: float, z0: float, x1: float, z1: float, cx: float, cz: float
     for index in range(segments + 1):
         t = index / segments
         angle = a0 + sweep * t
-        points.append((max(0.0, cx + math.cos(angle) * radius), cz + math.sin(angle) * radius))
-    points[-1] = (max(0.0, x1), z1)
+        points.append((cx + math.cos(angle) * radius, cz + math.sin(angle) * radius))
+    points[-1] = (x1, z1)
     return points
 
 
