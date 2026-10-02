@@ -508,6 +508,21 @@ M09 M05 · G28 G91 Z0. then Y0. (Haas) or X0. Y0. (Fanuc) · M30.</li>
 <li>Inch, absolute, only changed words written (modal). Always prove out a new program: single block,
 rapid override down, and check it in G-SEND.IO's simulator first.</li>
 </ul>
+<h3>Cutter comp (lathe Contour)</h3>
+<p>A round tool nose sits back from the sharp tip the program steers, so angles and radii cut a little off.
+Axis-only moves (a plain face, a straight diameter) don't care. The <b>Cutter comp</b> box in the Post Process
+window picks how a turning <b>Contour</b> deals with it:</p>
+<ul>
+<li><b>Off</b>: the part line, point to point. No G41 / G42, no nose radius used.</li>
+<li><b>Machine (G41 / G42)</b>: the same points, plus <b>G42</b> (OD) or <b>G41</b> (ID) on the approach move and
+<b>G40</b> on the first move away. The control compensates, so the tool's nose radius and tip direction must be
+set in its offset (the program says so in a comment).</li>
+<li><b>Computer (in the code)</b>: no G41 / G42 / G40. The program carries the points that make the tool's nose
+radius cut the part line (the way the Haas ST/TL workbook does it by hand: for a .031 nose radius, a 45° chamfer
+moves .0183 in Z and .0366 on the diameter). The nose radius comes from the tool in the Tool Library.</li>
+</ul>
+<p>With Machine or Computer the Contour is posted line by line, not as a G70 cycle. Other operations ignore the
+setting, and it is greyed out on a Milling setup.</p>
 """),
     ("timeline", "Timeline, Undo, Files", """
 <h1>Timeline, Undo and Files</h1>

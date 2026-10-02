@@ -3436,8 +3436,14 @@ class PostDialog(QDialog):
         self.offset = QComboBox()
         self.offset.addItems(post.OFFSETS)
         self.coolant = QCheckBox("Coolant (M08)")
+        self.comp = QComboBox()                         # cutter comp for a lathe Contour: off / machine / computer
+        for k, label in post.COMPS.items():
+            self.comp.addItem(label, k)
+        self.comp.setToolTip("Lathe Contour only.\nOff: the part line point to point.\nMachine: the same points with "
+                             "G41 / G42 and G40, the control compensates.\nComputer: no G41 / G42 / G40; the points "
+                             "carry the tool nose radius.")
         for label, w in (("Setup", self.setup), ("Control", self.control), ("Program", self.program),
-                         ("Work offset", self.offset)):
+                         ("Work offset", self.offset), ("Cutter comp", self.comp)):
             top.addWidget(QLabel(label))
             top.addWidget(w)
         top.addWidget(self.coolant)
@@ -3462,7 +3468,7 @@ class PostDialog(QDialog):
         save.clicked.connect(self.save)
         v.addLayout(foot)
         self.setup.currentIndexChanged.connect(self.load_settings)
-        for w in (self.control, self.offset):
+        for w in (self.control, self.offset, self.comp):
             w.currentIndexChanged.connect(self.refresh)
         self.program.valueChanged.connect(self.refresh)
         self.coolant.toggled.connect(self.refresh)
@@ -3476,19 +3482,22 @@ class PostDialog(QDialog):
         st = self.current()
         i = self.win.doc.setups.index(st)
         ps = st.get("post", {"controller": "haas", "program": 1000 + i, "offset": "G54", "coolant": True})
-        for w in (self.control, self.offset, self.program, self.coolant):
+        for w in (self.control, self.offset, self.program, self.coolant, self.comp):
             w.blockSignals(True)
         self.control.setCurrentIndex(max(0, self.control.findData(ps["controller"])))
         self.offset.setCurrentText(ps["offset"])
         self.program.setValue(int(ps["program"]))
         self.coolant.setChecked(bool(ps["coolant"]))
-        for w in (self.control, self.offset, self.program, self.coolant):
+        self.comp.setCurrentIndex(max(0, self.comp.findData(ps.get("comp", "off"))))
+        self.comp.setEnabled(st["type"] == cam.TURNING)       # a lathe thing: greyed out (not hidden) on a mill
+        for w in (self.control, self.offset, self.program, self.coolant, self.comp):
             w.blockSignals(False)
         self.refresh()
 
     def settings(self) -> dict:
         return {"controller": self.control.currentData(), "program": self.program.value(),
-                "offset": self.offset.currentText(), "coolant": self.coolant.isChecked()}
+                "offset": self.offset.currentText(), "coolant": self.coolant.isChecked(),
+                "comp": self.comp.currentData() if self.comp.isEnabled() else "off"}
 
     def gcode(self) -> str:
         """The setup's program. An op that can't make a toolpath (a Groove with no groove on
@@ -3502,6 +3511,9 @@ class PostDialog(QDialog):
             except ValueError as exc:
                 self.skipped.append(f"{o.get('name', 'op')}: {exc}")
                 continue
+            if o.get("type") == "finish" and "nose_r" not in o:      # an older op: the library's nose radius
+                t = tools.find(self.win.tool_lib, o, st["type"], "finish")
+                o = {**o, "nose_r": t["nose_r"] if t else 0.0}
             ops.append((o, mv))
             self.minutes += cam.cycle_time(mv, st, o)
         if not ops:
@@ -3509,7 +3521,7 @@ class PostDialog(QDialog):
                                                      "this setup has no toolpaths yet"))
         ps = self.settings()
         g = post.post_setup(st, ops, ps["controller"], ps["program"], ps["offset"], ps["coolant"],
-                            self.win.doc.name)
+                            self.win.doc.name, ps["comp"])
         if self.skipped:                              # say so at the top of the program too
             lines = g.splitlines()
             note = [post._comment("NOT POSTED - " + s) for s in self.skipped]
