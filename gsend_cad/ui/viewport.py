@@ -12,6 +12,7 @@ from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QToolButton, QVBoxLayout,
                                QWidget)
 from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
+from vtkmodules.vtkCommonMath import vtkMatrix4x4
 from vtkmodules.vtkRenderingCore import vtkBillboardTextActor3D, vtkCellPicker, vtkMapper, vtkRenderer
 
 from ..core import plane as pl
@@ -113,9 +114,11 @@ class Viewport(QWidget):
     @plane_z.setter
     def plane_z(self, z: float):
         self.frame = pl.xy(float(z))
+        self._sync_grid()
 
     def set_frame(self, frame: dict):
         self.frame = frame
+        self._sync_grid()
 
     def look_at(self, frame: dict, dist: float = 10.0):
         """Camera square on to a sketch plane: looking along -n with the plane's y up, so the
@@ -157,15 +160,57 @@ class Viewport(QWidget):
 
     # ---------- scene ----------
     def _build_grid(self):
+        """The grid is drawn once in the sketch plane's own axes (u, v, 0) and moved onto the plane being
+        sketched on (`_place_grid`); it is only shown while a sketch is open (`_sync_grid`). The red / green /
+        blue axes at the world origin are always there."""
         size, minor = 8, 0.25
         m1, m2 = [], []
         for i in np.arange(-size, size + 1e-9, minor):
             major = abs(i - round(i)) < 1e-6
             (m2 if major else m1).extend([[(i, -size, 0), (i, size, 0)], [(-size, i, 0), (size, i, 0)]])
-        self.plotter.add_mesh(polyline_mesh(m1), color="#1f1f1f", line_width=1, pickable=False, lighting=False)
-        self.plotter.add_mesh(polyline_mesh(m2), color="#333333", line_width=1, pickable=False, lighting=False)
+        self._grid_actors = [
+            self.plotter.add_mesh(polyline_mesh(m1), color="#1f1f1f", line_width=1, pickable=False, lighting=False),
+            self.plotter.add_mesh(polyline_mesh(m2), color="#333333", line_width=1, pickable=False, lighting=False)]
         for d, c in (((1.5, 0, 0), theme.BAD), ((0, 1.5, 0), theme.OK), ((0, 0, 1.5), "#3b8cff")):
             self.plotter.add_mesh(polyline_mesh([[(0, 0, 0), d]]), color=c, line_width=1.5, lighting=False)
+        self._sync_grid(render=False)
+
+    GRID_LIFT = 0.003                        # the grid floats this far above the face it lies on (no flicker)
+
+    @property
+    def handler(self):
+        return self._handler
+
+    @handler.setter
+    def handler(self, h):
+        self._handler = h
+        self._sync_grid()
+
+    def _sync_grid(self, render: bool = True):
+        """Show the grid on the sketch plane while a sketch is open, hide it otherwise (a plain 3D model needs
+        no grid). Anything that sketches says so with `shows_grid`."""
+        actors = getattr(self, "_grid_actors", None)
+        if not actors:
+            return                           # not built yet (the handler is first set before the scene exists)
+        show = bool(getattr(self._handler, "shows_grid", False))
+        for a in actors:
+            a.SetVisibility(show)
+        if show:
+            self._place_grid()
+        if render:
+            self.plotter.render()
+
+    def _place_grid(self):
+        """Lay the grid on the current sketch plane: its x / y axes, its normal, its origin, lifted a hair."""
+        fr = self.frame
+        m = vtkMatrix4x4()
+        for r in range(3):
+            m.SetElement(r, 0, fr["x"][r])
+            m.SetElement(r, 1, fr["y"][r])
+            m.SetElement(r, 2, fr["n"][r])
+            m.SetElement(r, 3, fr["origin"][r] + fr["n"][r] * self.GRID_LIFT)
+        for a in self._grid_actors:
+            a.SetUserMatrix(m)
 
     def show_bodies(self, bodies, selected: str | None = None):
         """bodies: kernel Body objects. Rebuilds the solid actors."""

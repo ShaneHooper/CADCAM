@@ -101,7 +101,8 @@ def _vtk_log_to_file():
 def launch(document: Document | str | None = None, block: bool | None = None):
     """Open a CAD window and return it.
 
-    document: a Document, a path to a .gcad file, or None for the demo Bracket Plate.
+    document: a Document, a path to a .gcad file, or None for the demo Bracket Plate (what the tests and a host
+              app get). The standalone app - main() - opens a new, empty part instead.
     block:    run the Qt event loop until the window closes. Defaults to True only when this
               call had to create the QApplication (standalone use); a host app that already
               runs Qt gets the window back immediately.
@@ -312,7 +313,8 @@ def main(argv=None):
         sys.exit(selftest(args.selftest))
     _start_logs()
     try:
-        launch(args.file, block=True)
+        # the app opens as a new, empty file (Shane 10/2/26); only a .gcad given on the command line is opened
+        launch(args.file or Document("Untitled"), block=True)
     except Exception:
         # the windowed .exe has no console: keep the error and show where it went
         import traceback
