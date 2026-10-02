@@ -1,19 +1,28 @@
-"""Step 4 RECONSTRUCT: the part the program cuts, exact and assumed edges, warnings and checks."""
+"""Step 4 RECONSTRUCT: the part the program cuts, exact and assumed edges, warnings and checks,
+and BUILD PART (Phase 5: the fitted sketch + revolve, made as a new part in the app)."""
 from __future__ import annotations
 
 from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QVBoxLayout, QWidget
 
 from ..ui import theme
+from .fit import fit_outline
 from .preview import Preview
 from .stock import stock_z_range
-from .widgets import MONO_CSS, head, toggle
+from .widgets import MONO_CSS, button, head, toggle
 
 
-def profile_summary(rec, needs_type: int = 0) -> str:
+def fit_text(rec, fit) -> str:
+    if fit is None or not fit.ok:
+        return f"{len(rec.edges)} segments" + (f"  (NOT FITTED: {fit.error})" if fit is not None else "")
+    return (f"{fit.segments} segments fitted to {fit.count('line')} line{'s' if fit.count('line') != 1 else ''} + "
+            f"{fit.count('arc')} arc{'s' if fit.count('arc') != 1 else ''}  (worst fit {fit.max_dev:.5f})")
+
+
+def profile_summary(rec, needs_type: int = 0, fit=None) -> str:
     if not rec.ok:
         return f"NO PROFILE: {rec.error}"
     rows = [
-        ("OUTLINE", f"{len(rec.edges)} segments  (fitted to lines and arcs in Step 5)"),
+        ("OUTLINE", fit_text(rec, fit)),
         ("EXACT / ASSUMED", f"{rec.count('EXACT')} exact, {rec.count('ASSUMED')} assumed in {rec.assumed_runs} "
                             f"stretch{'es' if rec.assumed_runs != 1 else ''}, {rec.count('STOCK')} uncut stock"),
         ("MAX Ø", f"{rec.max_dia:.4f}"),
@@ -79,9 +88,14 @@ class ReconPage(QWidget):
         self.notes.setStyleSheet(f"{MONO_CSS}font-size:11px;background:{theme.BG};color:{theme.FG};"
                                  f"border:1px solid {theme.LINE};")
         col.addWidget(self.notes, 1)
-        nxt = QLabel("SKETCH + REVOLVED SOLID: NOT BUILT YET (PHASE 5)")
-        nxt.setStyleSheet(f"color:{theme.FG3};font-family:'{theme.HEAD[0]}';letter-spacing:1px;")
-        col.addWidget(nxt)
+        self.build_btn = button("BUILD PART", ok=True)
+        self.build_btn.clicked.connect(self.wiz.build_part)
+        col.addWidget(self.build_btn)
+        build_hint = QLabel("Makes a new part in the app: the outline as a fitted sketch (lines and arcs), "
+                            "revolved about the spindle axis. Asks to save the current part first.")
+        build_hint.setWordWrap(True)
+        build_hint.setStyleSheet(f"color:{theme.FG3};font-size:11px;")
+        col.addWidget(build_hint)
         row.addWidget(box)
 
     def set_nose_center(self, on: bool):
@@ -104,7 +118,9 @@ class ReconPage(QWidget):
         self.preview.show_setup(wiz.program.moves, (zb, zf, s["od"], s["id"]),
                                 "" if rec.ok else f"NO PROFILE\n{rec.error}", profile=rec.edges if rec.ok else None)
         needs = sum(1 for o in wiz.ops_page.ops if o.confidence == "NEEDS TYPE")
-        self.summary.setText(profile_summary(rec, needs))
+        fit = fit_outline(rec.edges) if rec.ok else None
+        self.summary.setText(profile_summary(rec, needs, fit))
+        self.build_btn.setEnabled(bool(rec.ok and fit is not None and fit.ok))
         self.notes.setPlainText(notes_text(rec) if rec.ok else rec.error)
         n = len(rec.flags) if rec.ok else 0
         self.notes_head.setText(f"WARNINGS AND CHECKS · {n} WARNING{'S' if n != 1 else ''}")

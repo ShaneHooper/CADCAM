@@ -1,4 +1,4 @@
-"""Drive File > Import G-code... (Steps 1-3, Settings > Keywords) in the real window.
+"""Drive File > Import G-code... (Steps 1-4, BUILD PART, Settings > Keywords) in the real window.
 
     python tests/drive_gcode_import.py OUTDIR
     (Linux: xvfb-run -a -s "-screen 0 1600x1000x24" python tests/drive_gcode_import.py OUTDIR)
@@ -210,7 +210,24 @@ n = len(kd.rows)
 kd.delete("WIPER")
 check("DELETE removes it", len(kd.rows) == n - 1 and kd.table.item(0, 0).text() == "PARTING BLADE")
 kd.close()
-dlg.close()
+
+# ---- Step 4 BUILD PART (Phase 5) ----
+dlg.go(3)
+QTest.qWait(300)
+check("the page says how the outline was fitted", "fitted to" in rp.summary.text() and "arc" in rp.summary.text())
+check("BUILD PART is on once there is a profile", rp.build_btn.isEnabled())
+shot(dlg, "gcode_import_build")
+win.dirty = False                                       # nothing to save in the app: no prompt over the build
+dlg.build_part()
+kinds = [f["kind"] for f in win.doc.features]
+check("BUILD PART replaced the part with a Profile sketch and a Revolve1", kinds == ["sketch", "revolve"]
+      and win.doc.features[0]["name"] == "Profile" and win.doc.features[1]["name"] == "Revolve1")
+check("the profile is lines and arcs, tagged for Phase 6", {e["type"] for e in win.doc.features[0]["ents"]} == {"line", "arc"}
+      and all("src" in e for e in win.doc.features[0]["ents"]))
+check("the app made one solid from it, no errors", len(win.model.bodies) == 1 and not win.model.errors)
+check("it is unsaved work, named for the program, and the window closed", win.dirty and win.doc.name == MULTI.stem
+      and not dlg.isVisible())
+shot(win, "gcode_import_built_part")
 
 print("FAILED: " + ", ".join(failures) if failures else "ALL OK")
 win.dirty = False

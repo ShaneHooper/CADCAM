@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog, QFrame, QGridLay
 
 from ..ui import theme
 from . import keywords as kw
+from .build import build_document
 from .detect import detect_machine
 from .keywords_page import KeywordsDialog
 from .ops_page import OpsPage
@@ -315,6 +316,25 @@ class ImportWizard(QDialog):
                 from .reconstruct import Reconstruction
                 self._recon = Reconstruction(ok=False, error=f"{type(exc).__name__}: {exc}")
         return self._recon
+
+    # ---- Phase 5: the part ----
+    def build_part(self):
+        """BUILD PART: the fitted outline as a sketch + a revolve, as a new part in the main window."""
+        built = build_document(self.reconstruction(), Path(self.path).stem)
+        if not built.ok:
+            QMessageBox.warning(self, "Import G-code", built.error)
+            return
+        win = self.win
+        win.cancel_command()
+        if not win._maybe_save():                       # the user kept the current part
+            return
+        win._set_doc(built.doc, None)
+        win.dirty = True                                # an import is unsaved work until it is saved
+        f = built.fit
+        win.viewport.show_toast(f"{built.doc.name} · {f.count('line')} lines + {f.count('arc')} arcs, revolved")
+        win.message(f"Built from {Path(self.path).name}: sketch Profile ({f.count('line')} lines, {f.count('arc')} arcs, "
+                    "worst fit {:.5f}) + Revolve1. Switch to CAM and add a Turning setup to program it.".format(f.max_dev))
+        self.accept()
 
     # ---- keywords ----
     def open_keywords(self):
