@@ -185,6 +185,8 @@ def _pq_final(program: Program, op: Operation):
     w = _words(program.lines[prof[0].line - 1])
     k = 1.0 / 25.4 if program.units == "mm" else 1.0
     du, dw = w.get("U", 0.0) * k, w.get("W", 0.0) * k
+    if program.x_inverted:                              # U is written for the negative-X side: mirror it too
+        du = -du
     runs, run = [], []
     for m in prof:                                      # split where a rapid broke the contour
         p = [(z - dw, (x - du) / 2.0) for z, x in m.points]

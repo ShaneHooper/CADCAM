@@ -11,7 +11,10 @@ import math
 
 from .parser import Program
 
-STEP = 0.250                    # stock OD and length round up to this
+STEP = 0.250                    # stock sizes come in these increments
+SNAP = 0.020                    # an X this far BELOW a step counts as that step (X1.99 is a 2.000 bar)
+ADD_LENGTH = 1.0                # the bar runs this far past the deepest cut: a first guess, the user types the real one
+_CANNED = ("G70", "G71", "G72", "G73", "G74", "G75", "G76")
 Z0_CHOICES = ("finished", "stock", "back")
 Z0_LABELS = {"finished": "FINISHED FRONT FACE", "stock": "STOCK FACE", "back": "BACK FACE"}
 _FLAT = 0.002                   # a facing pass holds Z within this
@@ -35,8 +38,35 @@ def round_up(value: float, step: float = STEP) -> float:
     return round(math.ceil(value / step - 1e-6) * step, 6)
 
 
+def round_down(value: float, step: float = STEP, snap: float = SNAP) -> float:
+    """Down to the nearest multiple of step, unless the value is within `snap` below the next one."""
+    k = math.floor(value / step + 1e-6)
+    if (k + 1) * step - value <= snap:
+        k += 1
+    return round(k * step, 6)
+
+
 def cutting(program: Program):
     return [m for m in program.moves if m.kind != "rapid"]
+
+
+def work_diameters(program: Program) -> list[float]:
+    """The size of every X the program works at: the points of every cutting move, plus the rapid that
+    positions a cut (a facing pass or a G71 / G72 cycle starts from the clearance diameter just outside the
+    bar). A tool-change retract (G28, or any rapid that does not lead into a cut) says nothing about the stock.
+
+    Size, not sign: some machines (Mori Seiki) program the OD as X-3.5, so only |X| says how big it is."""
+    out: list[float] = []
+    mv = program.moves
+    for i, m in enumerate(mv):
+        if m.kind != "rapid":
+            out += [abs(p[1]) for p in m.points]
+        elif m.code != "G28" and i + 1 < len(mv):
+            nxt = mv[i + 1]
+            leads_in = nxt.kind != "rapid" or nxt.code[:3] in _CANNED
+            if leads_in and abs(nxt.z0 - m.z1) + abs(nxt.x0 - m.x1) <= 1e-6:
+                out.append(abs(m.x1))
+    return out
 
 
 def facing_passes(program: Program):
@@ -58,10 +88,11 @@ def guess_stock(program: Program) -> StockGuess:
             g.reasons[k] = "no cutting moves were read - placeholder value"
         return g
     zs = [p[0] for m in cuts for p in m.points]
-    xs = [p[1] for m in cuts for p in m.points]
-    g.z_min, g.z_max, g.max_cut_dia = min(zs), max(zs), max(xs)
-    g.od = max(STEP, round_up(g.max_cut_dia))
-    g.reasons["od"] = f"largest cut diameter {g.max_cut_dia:.4f}, rounded up to the next {STEP:.3f}"
+    g.z_min, g.z_max = min(zs), max(zs)
+    g.max_cut_dia = max(work_diameters(program))
+    g.od = max(STEP, round_down(g.max_cut_dia))
+    g.reasons["od"] = (f"largest diameter the program works at, X{g.max_cut_dia:.4f} (a cut, or the approach to one), "
+                       f"rounded down to the nearest {STEP:.3f} - the first pass starts outside the bar")
 
     face = first_facing_pass(program)
     if g.z_min >= -1e-6 and g.z_max > _FLAT:
@@ -95,12 +126,12 @@ def guess_stock(program: Program) -> StockGuess:
     if g.z0 == "back":
         span = face_top if face_top is not None else g.z_max
         g.reasons["length"] = (f"Z0 to the highest {'facing pass' if face_top is not None else 'cut'} "
-                               f"(Z{span:.4f}), rounded up to the next {STEP:.3f}")
+                               f"(Z{span:.4f}) plus {ADD_LENGTH:.3f} more, rounded up to the next {STEP:.3f}")
     else:
         span = g.front - g.z_min
         g.reasons["length"] = (f"stock face to the lowest cut (Z{g.z_min:.4f}; the cutoff's far side, if "
-                               f"there is one), rounded up to the next {STEP:.3f}")
-    g.length = max(STEP, round_up(span))
+                               f"there is one) plus {ADD_LENGTH:.3f} more, rounded up to the next {STEP:.3f}")
+    g.length = max(STEP, round_up(span + ADD_LENGTH))
     return g
 
 

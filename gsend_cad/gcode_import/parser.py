@@ -1140,6 +1140,7 @@ class Program:
     moves: list[CMove]
     flags: list[Flag]
     units: str                      # "inch" or "mm": what the SOURCE was written in
+    x_inverted: bool = False        # the source commands negative X diameters; every X here is already mirrored
 
 
 _KNOWN_G = {0, 1, 2, 3, 4, 17, 18, 19, 20, 21, 28, 32, 40, 41, 42, 50, 53, 54, 55, 56, 57, 58, 59,
@@ -1186,8 +1187,38 @@ def detect_units(lines: list[str]) -> str:
     return "inch"
 
 
-def parse_program(text: str, invert_x: bool = False) -> Program:
-    """Parse a lathe program into the canonical move list (inches, X diameter)."""
+def looks_x_negative(program: Program) -> bool:
+    """True when the cutting happens at negative X (rear-turret lathes, e.g. Mori Seiki: OD = X-3.5).
+
+    Weighted by size, so the few points where a facing pass crosses the centerline (X+0.0625) do not
+    outvote the hundreds at X-3.5. Rapids are left out: a G28 home position says nothing about the part."""
+    neg = pos = 0.0
+    for m in program.moves:
+        if m.kind == "rapid":
+            continue
+        for _z, x in m.points:
+            if x < 0:
+                neg -= x
+            else:
+                pos += x
+    return neg > 0.0 and neg >= 0.9 * (neg + pos)
+
+
+def parse_program(text: str, invert_x: bool | None = None) -> Program:
+    """Parse a lathe program into the canonical move list (inches, X diameter).
+
+    invert_x: None (the default) reads the program and mirrors X when it is written with negative
+    diameters; True / False force it. Nothing downstream cares about the sign - the part is turned
+    about the centerline - so every consumer sees ordinary positive diameters."""
+    if invert_x is None:
+        first = _parse_program(text, False)
+        if not looks_x_negative(first):
+            return first
+        invert_x = True
+    return _parse_program(text, invert_x)
+
+
+def _parse_program(text: str, invert_x: bool) -> Program:
     raw = parse_gcode(text, "inch", invert_x)
     units = detect_units(raw.lines)
     k = 1.0 / MM_PER_INCH
@@ -1211,4 +1242,8 @@ def parse_program(text: str, invert_x: bool = False) -> Program:
             speed_mode=st.speed_mode, spindle=st.spindle, max_rpm=st.max_rpm,
             comp=st.comp, comment=st.comment, n=m.n, line=m.line_index + 1,
         ))
-    return Program(raw.lines, moves, _flags(raw.lines, raw.warnings), units)
+    flags = _flags(raw.lines, raw.warnings)
+    if invert_x:
+        flags.insert(0, Flag(0, "info", "X is programmed as negative diameters (a rear-turret lathe): read as "
+                                        "positive, since the part is turned about the centerline either way"))
+    return Program(raw.lines, moves, flags, units, bool(invert_x))

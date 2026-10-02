@@ -42,29 +42,35 @@ check("File menu has Import G-code… above the exports",
 dlg = ImportWizard(win, str(FIXTURE), FIXTURE.read_text())
 dlg.show()
 QTest.qWait(300)
+mg = win.geometry()
+check("opens large, about 98% x 94% of the main window, centred on it",
+      abs(dlg.width() - 0.98 * mg.width()) <= 2 and abs(dlg.height() - 0.94 * mg.height()) <= 2
+      and abs((dlg.x() + dlg.width() / 2) - (mg.x() + mg.width() / 2)) <= 3)
 check("auto-detected a lathe, with the reasons shown",
       dlg.machine == "lathe" and dlg.lathe_btn.isChecked() and "point to lathe" in dlg.reason.text())
 check("stock prefilled from the program and tagged AUTO",
-      dlg.od.value() == 2.25 and dlg.length.value() == 1.25 and dlg.tags["od"].text() == "AUTO"
-      and dlg.tags["length"].text() == "AUTO")
-check("AUTO tags say where the value came from", "largest cut diameter" in dlg.tags["od"].toolTip())
+      dlg.od.value() == 2.0 and dlg.length.value() == 2.25 and dlg.tags["od"].text() == "AUTO"
+      and dlg.tags["length"].text() == "AUTO")        # faces from X2.1 -> a 2.000 bar; 1.05 of cuts + 1.000 -> 2.25
+check("AUTO tags say where the value came from", "largest diameter the program works at" in dlg.tags["od"].toolTip()
+      and "plus 1.000 more" in dlg.tags["length"].toolTip())
 check("Z0 prefilled as the finished front face, 0.05 of stock in front",
       dlg.z0.currentData() == "finished" and abs(dlg.front.value() - 0.05) < 1e-9)
 check("the G50 line is listed in the flags with its line number", "LINE 6" in dlg.flags.toPlainText())
 check("preview holds the stock and the toolpath",
-      dlg.preview.stock == (-1.2, 0.05, 2.25, 0.0) and len(dlg.preview.moves) == len(dlg.program.moves))
+      dlg.preview.stock == (-2.2, 0.05, 2.0, 0.0) and len(dlg.preview.moves) == len(dlg.program.moves))
 shot(dlg, "gcode_import_setup")
 
-dlg.od.setValue(2.0)
+dlg.od.setValue(2.5)
 check("typing a stock OD flips its tag to SET BY YOU and redraws",
-      dlg.tags["od"].text() == "SET BY YOU" and dlg.preview.stock[2] == 2.0 and dlg.tags["length"].text() == "AUTO")
+      dlg.tags["od"].text() == "SET BY YOU" and dlg.preview.stock[2] == 2.5 and dlg.tags["length"].text() == "AUTO")
+dlg.od.setValue(2.0)                                    # back to the 2.000 bar the later checks are built on
 dlg.tube_btn.click()
 dlg.bore.setValue(0.5)
 check("TUBE shows the ID field and the bore reaches the preview",
       dlg.bore.isVisible() and dlg.preview.stock[3] == 0.5 and dlg.settings()["id"] == 0.5)
 dlg.z0.setCurrentIndex(1)
 check("Z0 = STOCK FACE puts the bar behind Z0 and locks stock-in-front",
-      dlg.preview.stock[:2] == (-1.25, 0.0) and not dlg.front.isEnabled())
+      dlg.preview.stock[:2] == (-2.25, 0.0) and not dlg.front.isEnabled())
 shot(dlg, "gcode_import_setup_edited")
 
 dlg.mill_btn.click()

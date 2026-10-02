@@ -33,6 +33,7 @@ from .widgets import toggle as _toggle
 
 FILE_FILTER = "G-code (*.nc *.tap *.cnc *.ngc *.gcode *.eia *.min *.txt);;All files (*)"
 STEPS = ("SETUP", "TOOLS", "OPERATIONS", "RECONSTRUCT")
+OPEN_WIDTH, OPEN_HEIGHT = 0.98, 0.94                # the import window's size as a share of the main window's
 
 
 def keywords_path(win) -> Path:
@@ -89,7 +90,7 @@ class ImportWizard(QDialog):
         self._recon = None                              # cached reconstruction (cleared on any change)
         self._loading = True
         self.setWindowTitle(f"Import G-code · {Path(path).name}")
-        self.resize(1200, 720)
+        self._open_large()
         self.setStyleSheet(f"QDialog{{background:{theme.BG};}} QLabel{{color:{theme.FG};}}")
         v = QVBoxLayout(self)
         v.setContentsMargins(12, 10, 12, 10)
@@ -138,6 +139,17 @@ class ImportWizard(QDialog):
         self.tools_page.reload()
         self.go(0)
         self.refresh()
+
+    def _open_large(self):
+        """Open at WIDTH x HEIGHT of the main window it was opened over, centred on it (the backplot and the
+        tables need the room). A main window too small to say falls back to a fixed size."""
+        g = self.win.geometry()
+        if g.width() < 800 or g.height() < 500:
+            self.resize(1200, 720)
+            return
+        w, h = int(g.width() * OPEN_WIDTH), int(g.height() * OPEN_HEIGHT)
+        self.resize(w, h)
+        self.move(g.x() + (g.width() - w) // 2, g.y() + (g.height() - h) // 2)
 
     # ---- pages ----
     def _setup_page(self) -> QWidget:

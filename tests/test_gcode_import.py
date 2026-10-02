@@ -10,7 +10,7 @@ import sys
 import pytest
 
 from gsend_cad.gcode_import import detect_machine, guess_stock, parse_program, stock_z_range
-from gsend_cad.gcode_import.stock import first_facing_pass, round_up
+from gsend_cad.gcode_import.stock import first_facing_pass, round_down, round_up
 
 FIXTURES = Path(__file__).parent / "fixtures" / "gcode"
 HEAD = "G20 G40 G99\nT0101\nG0 X2. Z.1\n"
@@ -219,14 +219,49 @@ def test_round_up_goes_to_the_next_quarter_and_leaves_an_exact_one():
     assert round_up(2.1) == 2.25 and round_up(2.0) == 2.0 and round_up(0.01) == 0.25
 
 
+def test_round_down_goes_to_the_quarter_below_unless_just_under_the_next():
+    assert round_down(2.1) == 2.0 and round_down(1.75) == 1.75 and round_down(3.57) == 3.5
+    assert round_down(1.99) == 2.0 and round_down(1.97) == 1.75         # 0.020 below a step still counts as the step
+
+
+def test_a_facing_pass_starting_at_x2_1_means_a_2_inch_bar():
+    g = guess_stock(parse_program(HEAD + "G0 X2.1 Z.1\nG1 Z0 F.01\nX-.03\nG0 Z.1\nX1.5\nG1 Z-1.\n"))
+    assert g.od == 2.0 and "X2.1000" in g.reasons["od"]
+
+
+def test_a_g71_cycle_starting_at_x1_75_means_a_1_75_bar_even_though_the_cuts_are_smaller():
+    g = guess_stock(parse_program("G20\nT0101\nG0 X1.75 Z.1\nG71 U.1 R.05\nG71 P10 Q20 U.02 W.005 F.01\n"
+                                  "N10 G0 X1.\nG1 Z-1.\nX1.5\nN20 Z-1.5\nG0 X1.75 Z.1\nG28 U0 W0\nM30\n"))
+    assert g.od == 1.75
+
+
+def test_a_negative_x_program_is_sized_by_the_size_of_x_not_its_sign():
+    """Mori Seiki style: the OD is X-3.5 and the facing cut ends just past centre at X+0.0625."""
+    g = guess_stock(parse_program("G20\nT0101\nG0 X-3.57 Z1.5\nZ0.1\nG1 Z0 F.01\nX0.0625\nZ0.1\nG0 X-3.57 Z0.125\n"
+                                  "G1 Z-.55\nG0 X-3.57 Z1.5\nG28 U0.\nM30\n"))
+    assert g.od == 3.5 and g.max_cut_dia == pytest.approx(3.57)
+
+
+def test_a_tool_change_retract_does_not_make_the_bar_huge():
+    g = guess_stock(parse_program(HEAD + "G1 Z0 F.01\nX-.03\nG0 X1.6 Z.1\nG1 Z-1.\nG0 X1.7 Z.1\n"
+                                  "G28 U0 W0\nG0 X20. Z12.\nM30\n"))
+    assert g.od == 2.0 and g.max_cut_dia == pytest.approx(2.0)      # the X2. approach in HEAD; the G0 X20 / G28 parking
+                                                                    # spot after the last cut is not the stock
+
+
+def test_the_bar_runs_an_inch_past_the_deepest_cut():
+    g = guess_stock(parse_program(HEAD + "G1 Z0 F.01\nX-.03\nG0 Z.1\nX1.5\nG1 Z-1.\n"))
+    assert g.length == 2.0 and "plus 1.000 more" in g.reasons["length"]
+
+
 def test_stock_guess_for_the_stepped_shaft():
     g = guess_stock(parse_program((FIXTURES / "stepped_shaft.nc").read_text()))
-    assert g.max_cut_dia == pytest.approx(2.1) and g.od == 2.25
+    assert g.max_cut_dia == pytest.approx(2.1) and g.od == 2.0          # faces from X2.1: the bar is 2.000 (down, not up)
     assert g.z0 == "finished" and "above Z0" in g.reasons["z0"]     # the FIRST face is the rough one at Z.05
     assert g.front == pytest.approx(0.05)
-    assert g.length == 1.25                             # 0.05 in front + 1.000 of cuts, up to the next 0.250
+    assert g.length == 2.25                             # 0.05 in front + 1.000 of cuts + 1.000 more, up to the next 0.250
     assert set(g.reasons) == {"od", "length", "front", "z0"}
-    assert stock_z_range(g.z0, g.length, g.front) == pytest.approx((-1.2, 0.05))
+    assert stock_z_range(g.z0, g.length, g.front) == pytest.approx((-2.2, 0.05))
 
 
 def test_z0_is_the_finished_face_when_the_first_facing_pass_ends_at_z0():
@@ -244,8 +279,8 @@ def test_z0_is_the_stock_face_when_facing_cuts_below_it():
 
 def test_z0_is_the_back_face_when_every_cut_is_above_it():
     g = guess_stock(parse_program("G20\nT0101\nG0 X2.1 Z2.\nG1 X-.03 F.01\nG0 X1.5 Z2.1\nG1 Z1.\n"))
-    assert g.z0 == "back" and g.length == 2.0
-    assert stock_z_range("back", g.length, 0.0) == (0.0, 2.0)
+    assert g.z0 == "back" and g.length == 3.0           # 2.000 of cuts + 1.000 more
+    assert stock_z_range("back", g.length, 0.0) == (0.0, 3.0)
 
 
 def test_no_cutting_moves_gives_placeholders_that_say_so():
