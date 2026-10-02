@@ -142,8 +142,19 @@ check("right-click on the X dimension line opens X", s.editor.isVisible() and s.
 QTest.keyClick(s.editor.box, Qt.Key_Escape)
 pump(60)
 check("Esc closes it and changes nothing", not s.editor.isVisible() and abs(s.ents[1]["c"][0] - 1.75) < 1e-9)
-rclick(4, 4)                                               # empty space: not ours
-check("right-click on nothing opens nothing", not s.editor.isVisible())
+from PySide6.QtCore import QTimer as _QT
+_menu = []
+
+
+def _close_popup():
+    m = QApplication.activePopupWidget()
+    _menu.append([a.text() for a in m.actions()] if m else None)
+    m and m.close()
+_QT.singleShot(400, _close_popup)
+rclick(4, 4)                                               # empty space, a drawing tool on: Done menu
+pump(500)
+check("right-click on nothing opens no value box (a drawing tool shows Done)", not s.editor.isVisible()
+      and (s.tool is None or (_menu and _menu[0] and _menu[0][0] == "Done")))
 check("and the view is not left panning", vp.plotter.iren.interactor.GetInteractorStyle().GetState() == 0)
 key(Qt.Key_Z, Qt.ControlModifier)
 check("Ctrl+Z undoes the right-click edit", abs(s.ents[1]["r"] - 0.375) < 1e-9)

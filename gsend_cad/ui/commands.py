@@ -52,7 +52,9 @@ def mesh_of(shape) -> pv.PolyData:
 
 
 class Panel(QFrame):
-    """The prototype's right-hand panel: blue header, label/value rows, optional footer."""
+    """The prototype's right-hand panel: blue header, label/value rows, optional footer. Drag its
+    blue title to move it; that spot is kept for panels of the same name while the app runs."""
+    spots: dict = {}
 
     def __init__(self, title: str, width=230):
         super().__init__()
@@ -73,6 +75,30 @@ class Panel(QFrame):
         hl.addStretch()
         hl.addWidget(self.count)
         self.v.addWidget(head)
+        head.setCursor(Qt.SizeAllCursor)          # drag the blue title to move the panel
+        head.setToolTip("Drag to move this panel")
+        head.installEventFilter(self)
+        self._drag = None
+        self.user_pos = Panel.spots.get(title.upper())   # where it was dragged to (kept, also next time)
+
+    def eventFilter(self, obj, ev):
+        t = ev.type()
+        if t == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton:
+            self._drag = ev.globalPosition().toPoint() - self.pos()
+            return True
+        if t == QEvent.MouseMove and self._drag is not None and ev.buttons() & Qt.LeftButton:
+            p = self.parentWidget()
+            q = ev.globalPosition().toPoint() - self._drag
+            if p is not None:                     # stays on the view
+                q = QPoint(min(max(q.x(), 0), max(p.width() - self.width(), 0)),
+                           min(max(q.y(), 0), max(p.height() - 40, 0)))
+            self.move(q)
+            self.user_pos = Panel.spots[self.title.text()] = q
+            return True
+        if t == QEvent.MouseButtonRelease and self._drag is not None:
+            self._drag = None
+            return True
+        return super().eventFilter(obj, ev)
 
     def row(self, label: str, widget: QWidget):
         r = QWidget()
@@ -573,10 +599,9 @@ class SketchSession:
         self.redo_stack.clear()
 
     def right_menu(self, gpos):
-        """Right-click (no drag) while sketching: Done puts the drawing tool down (back to Select);
-        with no tool, the view's usual menu (Direct View / Rotate View)."""
-        if not self.tool:
-            self.vp.context_menu(gpos)
+        """Right-click (no drag) while drawing: Done puts the drawing tool down (back to Select).
+        In Select it stays as before (nothing; a right drag pans)."""
+        if not self.tool or self.tool in XFORM_TOOLS:
             return
         m = QMenu(self.vp)
         m.addAction("Done", self._done_tool)    # ends a line chain and the tool, like Esc twice

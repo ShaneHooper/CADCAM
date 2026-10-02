@@ -24,6 +24,8 @@ bottom, so you can go back and change it.</p>
 <tr><td class="k">Status bar</td><td>Cursor X / Y / Z and a hint for what to do next. Read it when stuck.</td></tr>
 <tr><td class="k">Timeline (bottom)</td><td>Every sketch and feature, in order.</td></tr>
 </table>
+<p><b>Panels</b> (Rotate, a toolpath, the Sketch Palette...): drag the blue title bar to move one out of the
+way. It stays there, and a panel with the same name opens there again until the app is closed.</p>
 <h3>Moving the view</h3>
 <table>
 <tr><td class="k">Left drag</td><td>Selection box. Left to right picks what's wholly inside (solid box); right

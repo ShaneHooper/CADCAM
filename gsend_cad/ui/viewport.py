@@ -621,7 +621,10 @@ class Viewport(QWidget):
         self.banner.move((W - self.banner.width()) // 2, 8)
         for w in (self.hud, self.cube, self.navbar):
             w.raise_()
-        if self.side is not None:
+        if self.side is not None and getattr(self.side, "user_pos", None) is not None:
+            up = self.side.user_pos                 # dragged by its title: stay there (kept on the view)
+            self.side.move(min(max(up.x(), 0), max(W - self.side.width(), 0)), min(max(up.y(), 0), max(H - 40, 0)))
+        elif self.side is not None:
             # below the view cube; a panel too tall for that moves up (over the cube) so its
             # OK / CANCEL never fall off the bottom
             y = 104 if self.side.height() <= H - 104 - 10 else max(8, H - self.side.height() - 10)
