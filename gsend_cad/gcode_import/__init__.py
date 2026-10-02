@@ -10,7 +10,9 @@ starts - it just has no File > Import G-code... entry.
     keywords.py comment keywords: table, JSON, matching         (stdlib only)
     inserts.py  insert codes (ANSI / ISO) and sizes in comments (stdlib only)
     tooling.py  the tool list: READ / GUESSED / UNKNOWN / DEFINED (stdlib only)
-    wizard.py, tools_page.py, keywords_page.py, widgets.py    the import window
+    operations.py  the program cut into operations, each typed  (stdlib only)
+    wizard.py, tools_page.py, ops_page.py, keywords_page.py, preview.py, widgets.py
+                                                the import window
                                                 (Qt; imported only by register)
 
 The stdlib half never imports Qt, so G-SEND.IO's CAM side can use it headless.

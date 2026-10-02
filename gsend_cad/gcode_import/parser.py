@@ -5,7 +5,8 @@ a copy, not an import, so this module stands alone. Keep the two in step by hand
 what was changed here, on purpose:
   * REV 5's cycle-time and stock/simulator code is gone (nothing here needs it);
   * a Move now also carries the N number and, for G2/G3, the arc centre and direction;
-  * MachineState tracks cutter comp (G40/G41/G42) and the latest comment;
+  * MachineState tracks cutter comp (G40/G41/G42) and the latest comment (cleared at a
+    tool call that has none of its own);
   * a one- or two-digit T word (T3, T12) is a tool with no offset, not tool 00;
   * G92 threading has its own branch (in REV 5 it is nested under the G70 test and never
     runs), and a two-line G76 applies its data line's F, so thread moves carry the lead;
@@ -290,6 +291,7 @@ def parse_gcode(text: str, display_units: str = "inch", invert_x: bool = False) 
     # can abandon the expansion and still finish the main-line program.
     sequence, depths = _flatten_subprograms(parsed_lines, warnings)
     sub_capped = False
+    comment_at = -10        # line index of the comment now in state.comment
     position = 0
     while position < len(sequence):
         index = sequence[position]
@@ -307,6 +309,11 @@ def parse_gcode(text: str, display_units: str = "inch", invert_x: bool = False) 
         line = parsed_lines[index]
         if line.comment:
             state = replace(state, comment=line.comment)
+            comment_at = index
+        elif line.last("T") is not None and not 0 < index - comment_at <= 2:
+            # a tool call with no comment of its own (or just above it): the last tool's
+            # comment does not carry over to this one
+            state = replace(state, comment="")
         if not line.words or line.skip_profile:
             position += 1
             continue

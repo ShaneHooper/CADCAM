@@ -1,4 +1,4 @@
-"""Drive File > Import G-code... (Step 1 SETUP, Step 2 TOOLS, Settings > Keywords) in the real window.
+"""Drive File > Import G-code... (Steps 1-3, Settings > Keywords) in the real window.
 
     python tests/drive_gcode_import.py OUTDIR
     (Linux: xvfb-run -a -s "-screen 0 1600x1000x24" python tests/drive_gcode_import.py OUTDIR)
@@ -126,6 +126,41 @@ check("defining it with 'save as keyword' adds a USER keyword to the settings fi
       cell(5, 7) == "DEFINED" and dlg.table[0] == {"keyword": "PARTING BLADE", "tool": "CUTOFF", "op": None,
                                                     "source": "USER"} and os.path.exists(KEYWORDS))
 check("the header counts follow", "DEFINED 3" in tp.counts.text() and "UNKNOWN 0" in tp.counts.text())
+
+# ---- Step 3 OPERATIONS ----
+dlg.go(2)
+op = dlg.ops_page
+QTest.qWait(300)
+ocell = lambda r, c: op.table.item(r, c).text()
+types = lambda: [op.combo(r).currentText() for r in range(op.table.rowCount())]
+check("the program is cut into operations with a type each",
+      types() == ["FACE", "OD ROUGH", "DRILL", "ID ROUGH", "OD GROOVE", "THREAD"])
+check("each row says how it was found and how sure",
+      [ocell(r, 4) for r in range(6)] == ["MOTION", "KEYWORD", "KEYWORD", "MOTION", "MOTION", "G76"]
+      and [ocell(r, 6) for r in range(6)] == ["MED", "HIGH", "HIGH", "MED", "MED", "HIGH"])
+check("the header counts each confidence", all(x in op.counts.text() for x in ("HIGH 3", "MED 3", "NEEDS TYPE 0",
+                                                                               "SET BY YOU 0")))
+check("the summary lists the bore and the thread callout",
+      "Ø0.7500" in op.summary.text() and "16 TPI" in op.summary.text() and "after Step 4" in op.summary.text())
+op.table.setCurrentCell(3, 0)
+check("selecting a row lights up its moves in the preview",
+      op.preview.highlight == set(op.ops[3].moves) and "#4" in op.preview.caption)
+shot(dlg, "gcode_import_operations")
+op.combo(0).setCurrentText("SKIP")
+check("picking a type marks it SET BY YOU / found by YOU",
+      types()[0] == "SKIP" and ocell(0, 4) == "YOU" and ocell(0, 6) == "SET BY YOU" and "SET BY YOU 1" in op.counts.text()
+      and "1 skipped" in op.summary.text())
+op.combo(0).setCurrentIndex(0)
+check("picking nothing goes back to what the program says", types()[0] == "FACE" and ocell(0, 4) == "MOTION")
+dlg.go(0)
+dlg.tube_btn.click()
+dlg.bore.setValue(1.6)
+dlg.go(2)
+check("operations follow Setup: with a 1.6 tube ID the 1.5 turn is inside the bore", types()[1] == "OD ROUGH"
+      and op.ops[3].side == "ID" and op.preview.stock[3] == 1.6)
+dlg.go(0)
+dlg.round_btn.click()
+dlg.go(2)
 
 kd = KeywordsDialog(dlg, dlg.keywords_file, dlg.table)
 kd.show()
