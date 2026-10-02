@@ -82,7 +82,7 @@ def post_setup(setup: dict, ops: list[tuple[dict, list]], controller: str = "haa
 
 def _mill_op(setup, op, moves, offset, coolant):
     t = int(op.get("tool", 1))
-    what = {"face": "FACE MILL", "contour": "END MILL 2D CONTOUR"}.get(op.get("type", "face"), "")
+    what = {"face": "FACE MILL", "contour": "END MILL 2D CONTOUR", "rough": "END MILL ROUGHING"}.get(op.get("type", "face"), "")
     L = ["", _comment(f"{op['name']} T{t} D{num(op['tool_dia'])} {what}"),
          f"T{t} M06", f"{offset} G90", f"S{int(round(op['rpm']))} M03"]
     m = _Modal()

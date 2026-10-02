@@ -41,7 +41,7 @@ RIBBON = {
 # CAM mode (the CAD/CAM switch). Tools are placeholders until the toolpath side is built.
 RIBBON.update({
     "milling": [("Setup", [("setup", "Setup"), ("tools", "Tool Library")]),
-                ("2D", [("face", "Face"), ("adaptive", "2D Adaptive"), ("pocket", "2D Pocket"),
+                ("2D", [("face", "Face"), ("rough", "Roughing"), ("adaptive", "2D Adaptive"), ("pocket", "2D Pocket"),
                         ("contour", "2D Contour")]),
                 ("Drilling", [("drill", "Drill")]),
                 ("Actions", [("sim", "Simulate"), ("post", "Post Process")])],

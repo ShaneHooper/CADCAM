@@ -20,7 +20,7 @@ from ..core import cam, post, tools
 from ..core import plane as pl
 from ..core import sketch as sk
 from ..core.profiles import region_at, sketch_regions
-from ..kernel import (bodies_bbox, edge_list, max_radius, model_snap_points, outline_loops, turn_profile, turn_bore, turn_section, find_holes, extrude_tool, face_outline, planar_face_at, plane_edges, region_face, revolve_axis,
+from ..kernel import (bodies_bbox, edge_list, max_radius, model_snap_points, outline_loops, turn_profile, turn_bore, turn_section, find_holes, slice_chains, chain_face, grown_chain, clearing_passes, extrude_tool, face_outline, planar_face_at, plane_edges, region_face, revolve_axis,
                       revolve_tool, triangles)
 from . import icons, theme
 
@@ -2113,6 +2113,41 @@ def setup_holes(win, setup):
     return cache[key]
 
 
+def _mill_rough_layers(win, setup, op, bodies, bbox):
+    """[(z WCS, clearing passes)] for mill Roughing: each depth's passes round the islands that
+    stand there (kernel.clearing_passes), cached for the same islands / boundary / tool."""
+    import json
+    o = cam.validate_op(setup, op)
+    R, step = o["tool_dia"] / 2, o["tool_dia"] * o["stepover"] / 100
+    if o.get("boundary"):                        # the tool stays inside a picked shape
+        b = o["boundary"]
+        f = None if b.get("sketch") else chain_face(bodies, b)
+        boundary, grow_b = (f if f is not None else b["pts"]), -R
+    else:                                        # the whole stock: the outside pass just clears its edge
+        lo, hi = cam.stock_box(bbox, setup)
+        boundary, grow_b = [(lo[0], lo[1]), (hi[0], lo[1]), (hi[0], hi[1]), (lo[0], hi[1])], R - 0.05
+    cache = win.__dict__.setdefault("_radius_cache", {})
+    faces = []
+    for c in o["islands"]:
+        f = None if c.get("sketch") else chain_face(bodies, c)
+        faces.append(f if f is not None else c["pts"])
+    out = []
+    for z, act in cam.mill_rough_layers(bbox, setup, o):
+        key = ("rough", id(win.model), json.dumps([o["islands"][i] for i in act], sort_keys=True),
+               json.dumps(o.get("boundary"), sort_keys=True), round(R, 6), round(o["leave"], 6), round(step, 6),
+               json.dumps(cam.stock_box(bbox, setup)))
+        if key not in cache:
+            isl = [faces[i] if not isinstance(faces[i], list) else _poly(faces[i]) for i in act]
+            cache[key] = clearing_passes(boundary, grow_b, isl, R + o["leave"], step)
+        out.append((z, cache[key]))
+    return out
+
+
+def _poly(pts):
+    from build123d import Face, Wire
+    return Face(Wire.make_polygon([(x, y, 0) for x, y in pts], close=True))
+
+
 def op_moves(win, setup, op):
     """(WCS moves, world moves) for an operation; ([], []) when there's no part."""
     bodies = setup_bodies(win, setup)
@@ -2121,7 +2156,15 @@ def op_moves(win, setup, op):
     bbox = bodies_bbox(bodies)
     r = turning_radius(win, setup, bodies) if setup["type"] == cam.TURNING else 0.0
     loops = None
-    if op.get("type") == "contour":           # the part outline grown by tool radius + stock to leave
+    if op.get("type") == "rough" and setup["type"] == cam.MILLING:
+        loops = _mill_rough_layers(win, setup, op, bodies, bbox)
+    elif op.get("type") == "contour" and op.get("chains"):    # the picked walls, each to its own floor
+        grow = op["tool_dia"] / 2 + op.get("leave", 0.0)
+        loops = [{"pts": q, "bottom": c["z0"], "inside": bool(c.get("hole"))}
+                 for c in op["chains"] for q in grown_chain(bodies, c, -grow if c.get("hole") else grow)]
+        if not loops:
+            raise ValueError("the tool doesn't fit inside the picked pocket wall")
+    elif op.get("type") == "contour":         # the part outline grown by tool radius + stock to leave
         grow = op["tool_dia"] / 2 + op.get("leave", 0.0)
         key = ("outline", id(win.model), tuple(b.id for b in bodies), round(grow, 6))
         cache = win.__dict__.setdefault("_radius_cache", {})
@@ -2129,7 +2172,7 @@ def op_moves(win, setup, op):
             cache[key] = outline_loops(bodies, grow)
         loops = cache[key]
     profile = None
-    if op.get("type") in ("rough", "finish"):   # the part's OD (or ID: bore) silhouette about the spindle axis
+    if op.get("type") in ("rough", "finish") and setup["type"] == cam.TURNING:   # OD (or ID: bore) silhouette
         i, center, _ = cam.turning_frame(bbox, setup)
         inner = bool(op.get("internal"))
         key = ("bore" if inner else "profile", id(win.model), tuple(b.id for b in bodies), setup["axis"])
@@ -2172,7 +2215,11 @@ class OpPanel(Panel):
                                         ("bottom_offset", "Below part bottom", 4), ("lead", "Lead in / out", 4),
                                         ("rpm", "Spindle RPM", 0), ("feed", "Feed (in/min)", 2),
                                         ("plunge", "Plunge (in/min)", 2)]},
-              "rough": {cam.TURNING: [("stepdown", "Depth of cut (side)", 4),
+              "rough": {cam.MILLING: [("stepdown", "Max stepdown", 4), ("stepover", "Stepover % of tool", 1),
+                                      ("leave", "Wall stock", 4), ("leave_floor", "Floor stock", 4),
+                                      ("rpm", "Spindle RPM", 0), ("feed", "Feed (in/min)", 2),
+                                      ("plunge", "Plunge (in/min)", 2)],
+                        cam.TURNING: [("stepdown", "Depth of cut (side)", 4),
                                       ("leave_x", "Stock to leave X", 4), ("leave_z", "Stock to leave Z", 4),
                                       ("retract", "Pull-off", 4), ("bore_dia", "Drilled hole Ø (0 = auto)", 4),
                                       ("sfm", "Surface speed SFM", 0), ("ipr", "Feed (in/rev)", 4),
@@ -2268,6 +2315,32 @@ class OpPanel(Panel):
             hl.addWidget(QLabel("Extend"))
             hl.addWidget(ext)
             self.ends[which] = (w, pick)
+        # 2D Contour / mill Roughing: pick the part's walls (or sketch shapes) to work on
+        self.geo_rows = {}
+        for which, tip in (("geo", "Click, then click the walls to work on (the hub, the outside...). Again drops one.\n"
+                                    "Right-click: none picked (2D Contour: the whole outline)."),
+                           ("boundary", "Click, then click a sketch shape (or a pocket wall) to keep the tool inside.\n"
+                                         "Right-click: back to the stock.")):
+            w = QWidget()
+            hl = QHBoxLayout(w)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.setSpacing(6)
+            b = QToolButton()
+            b.setObjectName("pickBtn")
+            b.setCheckable(True)
+            b.setIconSize(QSize(16, 16))
+            b.setFixedSize(30, 24)
+            b.setIcon(icons.icon("cursor", theme.FG2))
+            b.setToolTip(tip)
+            b.toggled.connect(partial(s.set_geo_pick, which))
+            b.setContextMenuPolicy(Qt.CustomContextMenu)
+            b.customContextMenuRequested.connect(partial(s.clear_geo, which))
+            lb = QLabel("")
+            lb.setStyleSheet(f"color:{theme.FG};")
+            hl.addWidget(b)
+            hl.addStretch()
+            hl.addWidget(lb)
+            self.geo_rows[which] = (w, b, lb)
         self.holes = QComboBox()                 # Drill (mill): which hole size, found in the model
         self.holes.currentIndexChanged.connect(s.holes_changed)
         self.hole_btn = QToolButton()            # ... or click the holes themselves in the view
@@ -2325,12 +2398,15 @@ class OpPanel(Panel):
                 items.append(("Output", self.output))
             elif kind == "finish":
                 items.append(("Use G70 cycle", self.g70))
-            if kind in ("rough", "finish", "groove") or (kind == "drill" and stype == cam.TURNING):
+            if stype == cam.TURNING and (kind in ("rough", "finish", "groove") or kind == "drill"):
                 items[0:0] = [("Start", self.ends["start"][0]), ("End", self.ends["end"][0])]
             if kind == "groove":
                 items.insert(0, ("Groove", self.side))
-            if kind in ("rough", "finish"):
+            if kind in ("rough", "finish") and stype == cam.TURNING:
                 items.insert(0, ("Internal (ID)", self.internal))
+            if stype == cam.MILLING and kind in ("contour", "rough"):
+                items[0:0] = [("Geometry", self.geo_rows["geo"][0])] + \
+                    ([("Boundary", self.geo_rows["boundary"][0])] if kind == "rough" else [])
             items.insert(0, ("Tool", self.tools[stype]))
             for label, w in items:
                 r = QWidget()
@@ -2389,7 +2465,7 @@ class OpSession:
         if "direction" in op:
             p.direction.setCurrentIndex(max(0, p.direction.findData(op["direction"])))
         self.start_at, self.end_at = op.get("start_at"), op.get("end_at")
-        if self.kind in ("rough", "finish", "groove") or (self.kind == "drill" and st["type"] == cam.TURNING):
+        if st["type"] == cam.TURNING and self.kind in ("rough", "finish", "groove", "drill"):
             self.show_ends()
         if self.kind == "groove":
             p.side.setCurrentIndex(max(0, p.side.findData(op.get("side", "od"))))
@@ -2413,9 +2489,13 @@ class OpSession:
         if "output" in op:
             p.output.setCurrentIndex(max(0, p.output.findData(op["output"])))
             p.g70.setChecked(op["output"] == "cycle")
-        if self.kind in ("rough", "finish"):
+        if self.kind in ("rough", "finish") and st["type"] == cam.TURNING:
             p.internal.setChecked(bool(op.get("internal")))
             self.show_bore_row()
+        self.geo = [dict(c) for c in (op.get("islands") if self.kind == "rough" else op.get("chains")) or []]
+        self.bnd = dict(op["boundary"]) if op.get("boundary") else None
+        if st["type"] == cam.MILLING and self.kind in ("contour", "rough"):
+            self.show_geo()
         p.name.setText(op.get("name", cam.next_name(cam.OP_TYPES[self.kind], {o["name"] for o in st.get("ops", [])})))
         self._loading = False
         for stype, g in p.groups.items():
@@ -2568,12 +2648,16 @@ class OpSession:
             o["output"] = p.output.currentData()
         elif self.kind == "finish":
             o["output"] = "cycle" if p.g70.isChecked() else "lines"
-        if self.kind in ("rough", "finish", "groove") or (self.kind == "drill" and st["type"] == cam.TURNING):
+        if st["type"] == cam.TURNING and self.kind in ("rough", "finish", "groove", "drill"):
             o["start_at"], o["end_at"] = self.start_at, self.end_at
         if self.kind == "groove":
             o["side"] = p.side.currentData()
-        if self.kind in ("rough", "finish"):
+        if self.kind in ("rough", "finish") and st["type"] == cam.TURNING:
             o["internal"] = p.internal.isChecked()
+        if st["type"] == cam.MILLING and self.kind == "rough":
+            o["islands"], o["boundary"] = [dict(c) for c in self.geo], (dict(self.bnd) if self.bnd else None)
+        if st["type"] == cam.MILLING and self.kind == "contour":
+            o["chains"] = [dict(c) for c in self.geo]
         if self.kind == "drill":
             o["cycle"] = p.cycles[st["type"]].currentData()
             o["hole_dia"] = (p.holes.currentData() or 0.0) if st["type"] == cam.MILLING else 0.0
@@ -2581,6 +2665,96 @@ class OpSession:
                 o["hole_dia"] = 0.0
             o["picked"] = [list(q) for q in self.picked_holes] if st["type"] == cam.MILLING else []
         return o
+
+    # ---- 2D Contour / mill Roughing: pick the part's walls (islands) and a boundary in the view
+    geo: list = []
+    bnd = None
+    geo_pick = None
+
+    def _cands(self):
+        """Everything pickable: the part's walls level by level (kernel.slice_chains) and the
+        closed shapes of the XY sketches (sketch=True, at their plane)."""
+        st = self.current_setup()
+        bodies = setup_bodies(self.win, st)
+        key = ("chains", id(self.win.model), tuple(b.id for b in bodies))
+        cache = self.win.__dict__.setdefault("_radius_cache", {})
+        if key not in cache:
+            cache[key] = slice_chains(bodies) if bodies else []
+        out = list(cache[key])
+        regions, planes = regions_for(self.win.doc)
+        for r in regions:
+            fr = planes.get(r.sketch)
+            if fr is None or not pl.is_xy(fr):
+                continue
+            z = fr["origin"][2]
+            out.append({"pts": [[x + fr["origin"][0], y + fr["origin"][1]] for x, y in r.outer.pts],
+                        "z0": z, "z1": z, "hole": False, "sketch": True})
+        return out
+
+    @staticmethod
+    def _same(a, b) -> bool:
+        if a is None or b is None or len(a["pts"]) != len(b["pts"]) or bool(a.get("sketch")) != bool(b.get("sketch")):
+            return False
+        return abs(a["z0"] - b["z0"]) < 1e-6 and all(math.dist(p, q) < 1e-6 for p, q in zip(a["pts"], b["pts"]))
+
+    def show_geo(self):
+        p = self.panel
+        n = len(self.geo)
+        none = "whole outline" if self.kind == "contour" else "none (pick)"
+        p.geo_rows["geo"][2].setText(f"{n} picked" if n else none)
+        p.geo_rows["geo"][1].setIcon(icons.icon("cursor", theme.ACCENT if n else theme.FG2))
+        if self.kind == "rough":
+            b = self.bnd
+            p.geo_rows["boundary"][2].setText("Stock" if b is None else ("Sketch shape" if b.get("sketch") else "Part wall"))
+            p.geo_rows["boundary"][1].setIcon(icons.icon("cursor", theme.ACCENT if b else theme.FG2))
+
+    def set_geo_pick(self, which, on: bool):
+        if on:
+            other = self.panel.geo_rows["boundary" if which == "geo" else "geo"][1]
+            other.blockSignals(True)
+            other.setChecked(False)
+            other.blockSignals(False)
+            self.geo_pick = which
+            self.win.message("PICK " + ("WALLS: click the part's walls (or a sketch shape), again to drop one"
+                                        if which == "geo" else "BOUNDARY: click a sketch shape or a pocket wall")
+                             + " · Esc stops")
+        elif self.geo_pick == which:
+            self.geo_pick = None
+            self.vp.dim.hide()
+        self.preview()
+
+    def clear_geo(self, which, *_):
+        if which == "geo":
+            self.geo = []
+        else:
+            self.bnd = None
+        self.show_geo()
+        self.preview()
+
+    def _geo_under(self, ev, tol=10.0):
+        """The pickable outline nearest the cursor on screen (drawn at its top), within tol px."""
+        best, hit = tol, None
+        p = np.array([ev.position().x(), ev.position().y()])
+        for c in self._cands():
+            q = self.vp.project([[x, y, c["z1"]] for x, y in c["pts"] + c["pts"][:1]])[:, :2]
+            a, b = q[:-1], q[1:]
+            ab = b - a
+            L = (ab ** 2).sum(1)
+            t = np.clip(((p - a) * ab).sum(1) / np.where(L > 0, L, 1), 0, 1)
+            d = float(np.min(np.hypot(*(a + ab * t[:, None] - p).T)))
+            if d < best:
+                best, hit = d, c
+        return hit
+
+    def draw_geo(self):
+        def ring(c, dz=0.003):
+            return [[x, y, c["z1"] + dz] for x, y in c["pts"] + c["pts"][:1]]
+        if self.geo_pick:
+            self.vp.add_lines("op", [ring(c) for c in self._cands()], theme.FG2, 1.2, opacity=0.7)
+        if self.geo:
+            self.vp.add_lines("op", [ring(c, 0.005) for c in self.geo], theme.ACCENT, 3.0)
+        if self.bnd:
+            self.vp.add_lines("op", [ring(self.bnd, 0.005)], theme.WARN, 3.0)
 
     # ---- Drill (mill): click holes in the view to pick / drop them
     picked_holes: list = []
@@ -2676,11 +2850,15 @@ class OpSession:
             self.panel.info.setText(str(exc))
             if self.kind == "drill" and st["type"] == cam.MILLING:
                 self.draw_holes(st)              # (rings to pick from, even with nothing to drill yet)
+            if st["type"] == cam.MILLING and self.kind in ("contour", "rough"):
+                self.draw_geo()
             self.vp.render()
             return
         draw_toolpath(self.vp, world, "op")
-        if self.kind in ("rough", "finish"):
+        if self.kind in ("rough", "finish") and st["type"] == cam.TURNING:
             self.draw_ends(st, self.op())
+        if st["type"] == cam.MILLING and self.kind in ("contour", "rough"):
+            self.draw_geo()
         if self.kind == "drill" and st["type"] == cam.MILLING:
             self.draw_holes(st)
         zs = {round(p[2], 6) for k, p in moves if k == "feed"} if st["type"] == cam.MILLING else \
@@ -2696,6 +2874,8 @@ class OpSession:
             self.panel.info.setText(f"{n} plunge{'s' if n != 1 else ''} · about {t:.1f} min cutting")
         elif self.kind == "finish":
             self.panel.info.setText(f"1 finish pass along the profile · about {t:.1f} min cutting")
+        elif self.kind == "rough" and st["type"] == cam.MILLING:
+            self.panel.info.setText(f"{n} depth{'s' if n != 1 else ''} · about {t:.1f} min cutting")
         elif self.kind == "rough":
             self.panel.info.setText(f"{n - 1} roughing pass{'es' if n != 2 else ''} + profile pass · about {t:.1f} min "
                                     "cutting")
@@ -2788,6 +2968,15 @@ class OpSession:
         return i, w[cam.AXES[self.current_setup()["axis"]]]
 
     def on_move(self, w, ev):
+        if self.geo_pick and not ev.buttons():
+            c = self._geo_under(ev)
+            if c is None:
+                self.vp.dim.hide()
+            else:
+                what = "sketch shape" if c.get("sketch") else ("pocket wall" if c["hole"] else "wall") + \
+                    f" Z{c['z0']:.3f}–{c['z1']:.3f}"
+                self.vp.show_dim(what, ev.position().toPoint())
+            return
         if self.hole_pick and not ev.buttons():
             h = self._hole_under(ev)
             if h is None:
@@ -2811,6 +3000,20 @@ class OpSession:
         self.vp.render()
 
     def on_click(self, w, ev):
+        if self.geo_pick:
+            c = self._geo_under(ev)
+            if c is None:
+                return
+            if self.geo_pick == "boundary":
+                self.bnd = None if self._same(c, self.bnd) else dict(c)
+                self.panel.geo_rows["boundary"][1].setChecked(False)
+            elif any(self._same(c, g) for g in self.geo):
+                self.geo = [g for g in self.geo if not self._same(c, g)]
+            else:
+                self.geo = self.geo + [dict(c)]
+            self.show_geo()
+            self.preview()
+            return
         if self.hole_pick:
             h = self._hole_under(ev)
             if h is None:
@@ -2844,7 +3047,9 @@ class OpSession:
             self.commit()
             return True
         if ev.key() == Qt.Key_Escape:
-            if self.hole_pick:
+            if self.geo_pick:
+                self.panel.geo_rows[self.geo_pick][1].setChecked(False)
+            elif self.hole_pick:
                 self.panel.hole_btn.setChecked(False)
             elif self.picking:
                 self.panel.ends[self.picking][1].setChecked(False)

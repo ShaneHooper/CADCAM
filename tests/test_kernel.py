@@ -381,3 +381,37 @@ def test_groove_od_id_and_face():
     mv = cam.toolpath(bb, ts, op, rad, profile=sec)
     g = post.post_setup(ts, [(op, mv)], "haas", 1)
     assert "OD GROOVE" in g and "X1.2" in g and "T0606" in g
+
+
+def test_mill_roughing_round_a_picked_island_and_contour_chain():
+    """Mill Roughing round the bracket's hub (picked from kernel.slice_chains): every pass keeps the
+    tool off the hub by its radius + wall stock, down to the plate top + floor stock. 2D Contour on
+    the picked hub wall stops at the hub's floor."""
+    import math
+    from gsend_cad.core import bracket_plate, cam, post
+    from gsend_cad.kernel import bodies_bbox, chain_face, clearing_passes, grown_chain, slice_chains
+    m = Kernel().build(bracket_plate())
+    bb = bodies_bbox(m.bodies)
+    st = {**cam.new_setup("milling"), "name": "S"}
+    ch = slice_chains(m.bodies)
+    hub = [c for c in ch if not c["hole"] and c["z0"] > 0.4][0]
+    assert hub["z0"] == pytest.approx(0.5) and hub["z1"] == pytest.approx(1.25)
+    op = cam.validate_op(st, {**cam.new_op(st, "rough"), "name": "Roughing", "islands": [hub]})
+    lo, hi = cam.stock_box(bb, st)
+    box = [(lo[0], lo[1]), (hi[0], lo[1]), (hi[0], hi[1]), (lo[0], hi[1])]
+    f = chain_face(m.bodies, hub)
+    layers = [(z, clearing_passes(box, 0.2, [f for i in act], 0.27, 0.2)) for z, act in cam.mill_rough_layers(bb, st, op)]
+    mv = cam.toolpath(bb, st, op, loops=layers)
+    o = cam.wcs(bb, st)["origin"]
+    feeds = [p for k, p in mv if k == "feed"]
+    assert min(math.hypot(p[0] + o[0], p[1] + o[1]) for p in feeds) == pytest.approx(0.625 + 0.25 + 0.02, abs=2e-3)
+    assert min(p[2] for p in feeds) == pytest.approx(0.5 + 0.01 - o[2])            # plate top + floor stock
+    assert max(abs(p[0] + o[0]) for p in feeds) > 2.0                               # out past the stock edge
+    g = post.post_setup(st, [(op, mv)], "haas", 1)
+    assert "END MILL ROUGHING" in g and "F10." in g                                 # plunges at the plunge feed
+    with pytest.raises(ValueError):                                                 # nothing picked
+        cam.mill_rough_layers(bb, st, {**op, "islands": []})
+    loop = grown_chain(m.bodies, hub, 0.25)[0]
+    c_op = cam.validate_op(st, {**cam.new_op(st, "contour"), "name": "C", "chains": [hub]})
+    cm = cam.toolpath(bb, st, c_op, loops=[{"pts": loop, "bottom": hub["z0"], "inside": False}])
+    assert min(p[2] for k, p in cm if k == "feed") == pytest.approx(0.5 - o[2])      # to the hub's floor only

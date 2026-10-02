@@ -410,6 +410,27 @@ off that way. ID grooves go in and out through the bore below its smallest Ø.</
 <li>Posted line by line (G01).</li>
 </ol>
 """),
+    ("mrough", "CAM: Roughing (milling) and picking geometry", """
+<h1>Roughing (milling)</h1>
+<p>Clears the stock around the shapes you pick (a hub, a boss), layer by layer, down to their floor.</p>
+<ol>
+<li>CAM → Milling tab → <b>Roughing</b>. Pick an end mill.</li>
+<li><b>Geometry</b>: click the arrow, then click the part's walls in the view (grey outlines, drawn at their top):
+they turn blue. Click one again to drop it. Esc or the arrow stops picking. These are the islands to rough
+round; the floor is the lowest picked wall's bottom.</li>
+<li><b>Boundary</b>: Stock (default) clears all the stock outside the islands, out past its edges. Or draw a shape
+in a 2D sketch (on XY), come back and pick it with the Boundary arrow: the tool stays inside it (a pocket
+wall of the part works too). Right-click the arrow: back to Stock.</li>
+<li><b>Max stepdown</b> per layer, <b>Stepover %</b> of the tool between passes, <b>Wall stock</b> left on the
+islands, <b>Floor stock</b> left above the floor, cut direction, RPM / SFM, feed and plunge.</li>
+<li>Each layer: passes from the outside in (the first one in the air past the stock), then round the
+islands; short hops between passes stay down, long ones go up and over.</li>
+</ol>
+<h3>2D Contour: pick what to contour</h3>
+<p>The <b>Geometry</b> arrow on 2D Contour works the same way: pick the walls to contour (outside walls are
+cut outside, pocket / bore walls inside), each down to its own floor. With nothing picked it contours the
+part's whole outline, as before.</p>
+"""),
     ("drill", "CAM: Drill (mill and lathe)", """
 <h1>Drill</h1>
 <p>Drills the round holes in your model. Model the hole in CAD (a circle cut through or partway),

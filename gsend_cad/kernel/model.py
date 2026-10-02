@@ -409,6 +409,14 @@ def chain_face(bodies, chain):
     return None
 
 
+def grown_chain(bodies, chain, d: float) -> list:
+    """A picked chain (slice_chains wall, or a sketch loop {"pts"}) grown by d (shrunk when
+    d < 0) from its exact geometry: where a tool center runs round it. [] when nothing is left."""
+    f = chain_face(bodies, chain) if not chain.get("sketch") else None
+    g = _grow(f if f is not None else _poly_face(chain["pts"]), d)
+    return [_wire_pts(g.outer_wire())] if g is not None else []
+
+
 def _grow(face, d):
     """A face's outline grown by d (shrunk when d < 0), arcs kept, as a Face; None when nothing
     is left. (build123d's offset_2d: OCC's MakeOffset crashes on a one-circle face.)"""

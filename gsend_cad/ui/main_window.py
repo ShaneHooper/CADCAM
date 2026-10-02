@@ -179,7 +179,7 @@ class MainWindow(QMainWindow):
             return
         self.cancel_command()
         sid = getattr(self, "cam_setup", None)
-        need = {"contour": "milling", "rough": "turning", "finish": "turning", "groove": "turning"}.get(kind)
+        need = {"contour": "milling", "finish": "turning", "groove": "turning"}.get(kind)
         want = need or self.ribbon.current
         if not self.doc.setup(sid) or (need and self.doc.setup(sid)["type"] != need):
             sid = next((x["id"] for x in reversed(self.doc.setups) if x["type"] == want), None)

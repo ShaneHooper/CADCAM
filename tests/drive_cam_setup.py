@@ -456,5 +456,50 @@ pump()
 check("picking the Ø0.5 holes picks the Ø0.5 drill from the library",
       o.panel.tools["milling"].currentText().startswith("T7 · 1/2 Drill") and o.op()["tool_dia"] == 0.5)
 key(Qt.Key_Escape)
+
+# ---- mill Roughing round the bracket's hub (pick it in the view), 2D Contour on a picked wall
+from gsend_cad.core import bracket_plate as _bp
+win.dirty = False
+win._set_doc(_bp(), None)
+win.ribbon.show_mode("cam")
+win.select_tab("milling")
+win.run_tool("Setup")
+key(Qt.Key_Return)
+win.run_tool("Roughing")
+o = win.session
+check("mill Roughing opens with Geometry / Boundary picks", o.kind == "rough" and o.current_setup()["type"] == "milling"
+      and o.panel.geo_rows["geo"][1].isVisible() and o.panel.geo_rows["boundary"][2].text() == "Stock")
+check("nothing picked: the panel says to pick", "pick the geometry" in o.panel.info.text())
+o.panel.geo_rows["geo"][1].setChecked(True)
+pump()
+q = vp.project([(0.625, 0.0, 1.25)])[0]                # on the hub's top edge
+pt = _QP2(round(q[0]), round(q[1]))
+QTest.mouseMove(vp.plotter, pt)
+pump(60)
+QTest.mouseClick(vp.plotter, Qt.LeftButton, Qt.NoModifier, pt)
+pump(400)
+check("clicking the hub picks it; the roughing toolpath shows", o.panel.geo_rows["geo"][2].text() == "1 picked"
+      and "depth" in o.panel.info.text() and abs(o.op()["islands"][0]["z0"] - 0.5) < 1e-6)
+key(Qt.Key_Escape)
+shot("cam_11_mill_roughing")
+key(Qt.Key_Return)
+rs = win.doc.setups[-1]
+check("Roughing saved in the milling setup", rs["ops"][-1]["type"] == "rough" and rs["ops"][-1]["islands"])
+g = post.post_setup(rs, [(cam.validate_op(rs, x), op_moves(win, rs, x)[0]) for x in rs["ops"]], "haas", 1)
+check("Roughing posts", "END MILL ROUGHING" in g)
+win.run_tool("2D Contour")
+o = win.session
+o.panel.geo_rows["geo"][1].setChecked(True)
+pump()
+QTest.mouseMove(vp.plotter, pt)
+pump(60)
+QTest.mouseClick(vp.plotter, Qt.LeftButton, Qt.NoModifier, pt)
+pump(300)
+mv, _w = op_moves(win, o.current_setup(), o.op())
+zo = cam.wcs(bodies_bbox(win.model.bodies), o.current_setup())["origin"][2]
+check("2D Contour on the picked hub stops at its floor", o.panel.geo_rows["geo"][2].text() == "1 picked"
+      and abs(min(p[2] for k, p in mv if k == "feed") - (0.5 - zo)) < 1e-6)
+key(Qt.Key_Escape)
+key(Qt.Key_Escape)
 print("FAILURES:", failures or "none")
 sys.exit(1 if failures else 0)

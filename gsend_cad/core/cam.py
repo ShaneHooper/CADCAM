@@ -1056,6 +1056,9 @@ def describe_op(setup: dict, op: dict) -> str:
     if op.get("type") == "finish":
         return (("ID " if op.get("internal") else "") + f"Contour · leave X {op['leave_x']:.3f} Z {op['leave_z']:.3f} · {op['sfm']:.0f} SFM · "
                 f"{op['ipr']:.4f} IPR" + (" · G70 cycle" if op.get("output") == "cycle" else ""))
+    if op.get("type") == "rough" and setup["type"] == MILLING:
+        return (f"Roughing · Ø{op['tool_dia']:.3f} tool · {op['stepover']:.0f}% stepover · {op['stepdown']:.3f} DOC · "
+                f"{len(op.get('islands') or [])} picked · " + ("boundary" if op.get("boundary") else "whole stock"))
     if op.get("type") == "rough":
         return (("ID " if op.get("internal") else "") + f"Roughing · {op['stepdown']:.3f} DOC · leave X {op['leave_x']:.3f} Z {op['leave_z']:.3f} · "
                 f"{op['sfm']:.0f} SFM · {op['ipr']:.4f} IPR" + (" · G71 cycle" if op.get("output") == "cycle" else ""))

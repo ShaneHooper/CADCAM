@@ -21,7 +21,7 @@ KINDS = {"face mill": "Face mill", "end mill": "End mill", "drill": "Drill",
 MACHINE_KINDS = {"milling": ["face mill", "end mill", "drill"], "turning": ["od turn", "drill-t", "groove"]}
 # which tool kinds an operation can use, per machine
 FITS = {("milling", "face"): ("face mill", "end mill"), ("milling", "contour"): ("end mill",),
-        ("milling", "drill"): ("drill",), ("turning", "face"): ("od turn",), ("turning", "rough"): ("od turn",),
+        ("milling", "drill"): ("drill",), ("milling", "rough"): ("end mill",), ("turning", "face"): ("od turn",), ("turning", "rough"): ("od turn",),
         ("turning", "finish"): ("od turn",), ("turning", "drill"): ("drill-t",),
         ("turning", "groove"): ("groove",)}
 
