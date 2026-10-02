@@ -170,6 +170,18 @@ will cut away turns red. It runs to the nearest crossing on each side of the cur
 <li>A piece with nothing crossing it is removed entirely. A circle needs two crossings to be trimmed
 into an arc. A rectangle or polygon is split into lines first. Each click is its own Ctrl+Z.</li>
 </ul>
+<h3>Parallel to Axis</h3>
+<ul>
+<li>Click <b>Parallel to Axis</b> (Sketch tab, Create), or just use the <b>Line</b> tool and make your first click on an
+axis. Click an <b>axis</b> (the red or green line) or any line
+in the sketch: a line parallel to it, running on forever, follows the cursor.</li>
+<li>Click where it goes (it snaps like everything else), or just <b>type the distance</b>, for example
+<b>4.25</b>, and press Enter: it goes that far from the line you picked, on the side the cursor is on.
+A minus sign puts it on the other side.</li>
+<li>It is a drawing aid: it is never part of a profile (nothing is extruded or revolved from it) and it is
+not shown once the sketch is finished. The cursor snaps to where parallel lines cross each other, the axes
+and lines, so a part can be laid out from them. Select one to change its position in the palette.</li>
+</ul>
 <h3>Closed shapes (what can be extruded)</h3>
 <p>Only closed shapes can become solid: a rectangle, circle, polygon, or lines that join
 end to end back to the start. A shape drawn <b>inside</b> another becomes a hole in it, so a

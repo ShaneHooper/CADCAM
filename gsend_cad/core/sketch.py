@@ -6,6 +6,8 @@
     {"type": "rect",    "pts": [...], "corner_r": R}        optional rounded corners
     {"type": "polygon", "pts": [[x, y]] * n, "r": R}       closed loop
     {"type": "point",   "p": [x, y]}                        reference point (no profile)
+    {"type": "xline",   "p": [x, y], "d": [dx, dy]}         parallel line: runs on forever through p, direction d
+                                                            (unit); reference only, never part of a profile
     {"type": "arc",     "c": [x, y], "r": R, "a0": deg, "a1": deg, "pts": [start, end]}
                         counter-clockwise a0 -> a1; made by Fillet, chains with lines
 
@@ -52,6 +54,30 @@ def arc_mid(e):
 
 def point(p):
     return {"type": "point", "p": list(p)}
+
+
+XLINE_REACH = 400.0          # a parallel line is drawn this far each way from its point (the view's "forever")
+
+
+def xline(p, d):
+    """Parallel line through p along d (any length; kept as a unit vector)."""
+    L = math.hypot(d[0], d[1])
+    if L < 1e-12:
+        raise ValueError("A parallel line needs a direction")
+    return {"type": "xline", "p": [float(p[0]), float(p[1])], "d": [d[0] / L, d[1] / L]}
+
+
+def xline_offset(ref_p, ref_d, side_pt, dist=None):
+    """The parallel line parallel to the one through ref_p along ref_d, on the side of side_pt: where side_pt is
+    (dist=None) or `dist` away from it (always the positive distance; the side is side_pt's).
+    Returns (the new xline, the signed offset)."""
+    L = math.hypot(ref_d[0], ref_d[1])
+    d = (ref_d[0] / L, ref_d[1] / L)
+    n = (-d[1], d[0])                                    # a left-hand normal
+    off = (side_pt[0] - ref_p[0]) * n[0] + (side_pt[1] - ref_p[1]) * n[1]
+    if dist is not None:
+        off = math.copysign(abs(dist), off if abs(off) > 1e-12 else 1.0)
+    return xline((ref_p[0] + off * n[0], ref_p[1] + off * n[1]), d), off
 
 
 def rect(a, b, corner_r=0.0):
@@ -130,6 +156,9 @@ def entity_points(e, closed=True):
         return [[x + d, y], [x, y + d], [x - d, y], [x, y - d], [x + d, y]]
     if t == "line":
         return [list(p) for p in e["pts"]]
+    if t == "xline":
+        (x, y), (dx, dy), R = e["p"], e["d"], XLINE_REACH
+        return [[x - R * dx, y - R * dy], [x + R * dx, y + R * dy]]
     if t == "arc":
         n = max(4, math.ceil((e["a1"] - e["a0"]) / 6))
         pts = [_on(e["c"], e["r"], e["a0"] + (e["a1"] - e["a0"]) * i / n) for i in range(n + 1)]
@@ -153,6 +182,13 @@ def entity_label(e):
     t = e["type"]
     if t == "point":
         return "Point", f"{fmt(e['p'][0])}, {fmt(e['p'][1])}"
+    if t == "xline":
+        d = e["d"]
+        if abs(d[1]) < 1e-9:
+            return "Parallel", "Y " + fmt(e["p"][1])
+        if abs(d[0]) < 1e-9:
+            return "Parallel", "X " + fmt(e["p"][0])
+        return "Parallel", f"∠ {math.degrees(math.atan2(d[1], d[0])) % 180:.1f}°"
     if t == "line":
         (x0, y0), (x1, y1) = e["pts"]
         if e.get("corner"):
@@ -208,6 +244,12 @@ def params(e) -> dict:
     t = e["type"]
     if t == "point":
         return {"x": e["p"][0], "y": e["p"][1]}
+    if t == "xline":                                # level: its Y; plumb: its X; slanted: a point on it and the angle
+        if abs(e["d"][1]) < 1e-9:
+            return {"y": e["p"][1]}
+        if abs(e["d"][0]) < 1e-9:
+            return {"x": e["p"][0]}
+        return {"x": e["p"][0], "y": e["p"][1], "ang": math.degrees(math.atan2(e["d"][1], e["d"][0])) % 180}
     if t == "line" and e.get("corner"):             # chamfer: its horizontal / vertical legs
         (x0, y0), (x1, y1) = e["pts"]
         return {"ch": abs(x1 - x0), "cv": abs(y1 - y0)}
@@ -260,6 +302,11 @@ def _set_param(e, key, value):
     t = e["type"]
     if t == "point":
         return point((v["x"], v["y"]))
+    if t == "xline":
+        if "ang" in v:
+            a = math.radians(v["ang"])
+            return xline((v["x"], v["y"]), (math.cos(a), math.sin(a)))
+        return xline((v.get("x", e["p"][0]), v.get("y", e["p"][1])), e["d"])
     if t == "line":
         if key in ("x", "y"):                       # its position: the whole line moves, angle kept
             d = v[key] - params(e)[key]
@@ -321,6 +368,8 @@ def dimensions(e) -> list[dict]:
     Each item: {"lines": [polyline...], "at": [x, y], "text": "X 1.2500", "key": "x"}. Pure
     geometry, so the UI only has to draw it. `key` is the params() entry the dimension shows
     (its value is params(e)[key]); set_param(e, key, new) is how a right-click edits it."""
+    if e["type"] == "xline":
+        return []                                   # drawn forever: the palette's value is the dimension
     v = params(e)
     g = DIM_GAP
     if e.get("corner") and e["type"] == "arc":
@@ -443,12 +492,47 @@ def snap_points(ents) -> list[tuple]:
             m = arc_mid(e)
             out += [(*e["pts"][0], "end"), (*e["pts"][1], "end"), (m[0], m[1], "mid"),
                     (e["c"][0], e["c"][1], "center")]
+        elif t == "xline":
+            pass                                # its crossings are added below
         else:                                   # rect, polygon: every corner, every side's middle, the center
             pts = e["pts"]
             for (x0, y0), (x1, y1) in zip(pts, pts[1:] + pts[:1]):
                 out += [(x0, y0, "end"), ((x0 + x1) / 2, (y0 + y1) / 2, "mid")]
             c = _center(pts)
             out.append((c[0], c[1], "center"))
+    return out + xline_crossings(ents)
+
+
+def _cross2(a, b):
+    return a[0] * b[1] - a[1] * b[0]
+
+
+def xline_crossings(ents) -> list[tuple]:
+    """(u, v, 'cross') where a parallel line crosses an axis, another parallel line, or a line's length."""
+    xs = [e for e in ents if e["type"] == "xline"]
+    if not xs:
+        return []
+    out = []
+    axes = [((0.0, 0.0), (1.0, 0.0)), ((0.0, 0.0), (0.0, 1.0))]
+    others = [(tuple(e["p"]), tuple(e["d"])) for e in xs]
+    for i, e in enumerate(xs):
+        p, d = e["p"], e["d"]
+        for q, u in axes + others[i + 1:]:
+            den = _cross2(d, u)
+            if abs(den) > 1e-9:
+                t = _cross2((q[0] - p[0], q[1] - p[1]), u) / den
+                out.append((p[0] + t * d[0], p[1] + t * d[1], "cross"))
+        for ln in ents:
+            if ln["type"] != "line":
+                continue
+            a, b = ln["pts"]
+            sd = (b[0] - a[0], b[1] - a[1])
+            den = _cross2(d, sd)
+            if abs(den) > 1e-9:
+                t = _cross2((a[0] - p[0], a[1] - p[1]), sd) / den
+                w = _cross2((a[0] - p[0], a[1] - p[1]), d) / den
+                if -1e-9 <= w <= 1 + 1e-9:
+                    out.append((p[0] + t * d[0], p[1] + t * d[1], "cross"))
     return out
 
 
@@ -474,7 +558,7 @@ def edge_snap_points(edges) -> list[tuple]:
     return out
 
 
-SNAP_RANK = {"end": 0, "point": 0, "center": 1, "origin": 1, "mid": 2, "quad": 3}
+SNAP_RANK = {"end": 0, "point": 0, "center": 1, "origin": 1, "cross": 1, "mid": 2, "quad": 3}
 
 
 def nearest_snap(points, p, tol: float):
@@ -495,6 +579,8 @@ def distance(e, p) -> float:
         return math.hypot(p[0] - e["p"][0], p[1] - e["p"][1])
     if e["type"] == "circle":
         return abs(math.hypot(p[0] - e["c"][0], p[1] - e["c"][1]) - e["r"])
+    if e["type"] == "xline":
+        return abs(_cross2(e["d"], (p[0] - e["p"][0], p[1] - e["p"][1])))
     pts = entity_points(e)
     best = math.inf
     for (ax, ay), (bx, by) in zip(pts, pts[1:]):
@@ -505,10 +591,13 @@ def distance(e, p) -> float:
     return best
 
 
-def nearest(ents, p, tol: float):
-    """Index of the entity closest to p within tol, else None. Points win ties (they're small)."""
+def nearest(ents, p, tol: float, solid: bool = False):
+    """Index of the entity closest to p within tol, else None. Points win ties (they're small).
+    solid=True leaves out parallel lines (they are reference, not material: nothing trims them)."""
     best, bi = tol, None
     for i, e in enumerate(ents):
+        if solid and e["type"] == "xline":
+            continue
         d = distance(e, p) * (0.5 if e["type"] == "point" else 1.0)
         if d <= best:
             best, bi = d, i
@@ -798,7 +887,7 @@ def _trim_span(ents, i, p):
 
 def trim_preview(ents, p, tol: float):
     """The piece a Trim click at p would remove (an entity to draw), else None."""
-    i = nearest(ents, p, tol)
+    i = nearest(ents, p, tol, solid=True)
     if i is None:
         return None
     if ents[i]["type"] in ("rect", "polygon"):
@@ -817,7 +906,7 @@ def trim_preview(ents, p, tol: float):
 
 def trim(ents, origin, p, tol: float):
     """Trim at p: returns new (ents, origin). Raises ValueError when nothing is under p."""
-    i = nearest(ents, p, tol)
+    i = nearest(ents, p, tol, solid=True)
     if i is None:
         raise ValueError("Click on the piece of a line, arc or circle to trim")
     ents, origin = [dict(e) for e in ents], list(origin)
@@ -827,7 +916,7 @@ def trim(ents, origin, p, tol: float):
         for q in parts[1:]:
             ents.append(q)
             origin.append(origin[i])
-        i = nearest(ents, p, tol)
+        i = nearest(ents, p, tol, solid=True)
     e = ents[i]
     keep = []
     if e["type"] != "point":
@@ -908,6 +997,9 @@ def _xform(e, f, flip: bool, turn: float):
     t = e["type"]
     if t == "point":
         e["p"] = list(f(e["p"]))
+    elif t == "xline":
+        a, b = f(e["p"]), f([e["p"][0] + e["d"][0], e["p"][1] + e["d"][1]])
+        return xline(a, (b[0] - a[0], b[1] - a[1]))
     elif t == "line":
         e["pts"] = [list(f(q)) for q in e["pts"]]
     elif t == "circle":
