@@ -184,7 +184,8 @@ class Viewport(QWidget):
             a = self.plotter.add_mesh(mesh, color=theme.ACCENT if sel else theme.BODY, smooth_shading=True,
                                       split_sharp_edges=True, feature_angle=30,
                                       style="wireframe" if wire else "surface", specular=0.3, specular_power=24,
-                                      ambient=0.1 if not sel else 0.3, diffuse=0.6, render=False)
+                                      ambient=theme.BODY_AMBIENT if not sel else 0.3, diffuse=theme.BODY_DIFFUSE,
+                                      render=False)
             self._body_actors.append(a)
             self._actor_body[id(a)] = b.id
             if self.display_mode != 1:
