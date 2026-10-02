@@ -11,6 +11,8 @@ starts - it just has no File > Import G-code... entry.
     inserts.py  insert codes (ANSI / ISO) and sizes in comments (stdlib only)
     tooling.py  the tool list: READ / GUESSED / UNKNOWN / DEFINED (stdlib only)
     operations.py  the program cut into operations, each typed  (stdlib only)
+    fit.py      the outline fitted to lines and arcs, constraints recorded   (stdlib only)
+    build.py    sketch + hidden locked reference + revolve into the Document (stdlib + core)
     wizard.py, tools_page.py, ops_page.py, keywords_page.py, preview.py, widgets.py
                                                 the import window
                                                 (Qt; imported only by register)

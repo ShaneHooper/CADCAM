@@ -212,6 +212,40 @@ check("DELETE removes it", len(kd.rows) == n - 1 and kd.table.item(0, 0).text() 
 kd.close()
 dlg.close()
 
+# ---- Step 4: BUILD SKETCH + REVOLVED SOLID (Phase 5) ----
+win.dirty = False
+dlg = ImportWizard(win, str(FIXTURE), FIXTURE.read_text())
+dlg.show()
+dlg.go(3)
+rp = dlg.recon_page
+QTest.qWait(300)
+check("the build button is live and the page says how the outline was fitted",
+      rp.build_btn.isEnabled() and "lines" in rp.summary.text() and "arcs" in rp.summary.text())
+shot(dlg, "gcode_import_build_page")
+rp.build_btn.click()
+QTest.qWait(500)
+kinds = [f["kind"] for f in win.doc.features]
+check("NEW PART: the part holds the reference sketch, the profile sketch and one revolve",
+      kinds == ["sketch", "sketch", "revolve"] and win.doc.name == FIXTURE.stem)
+check("the revolve made one body, with no errors", len(win.model.bodies) == 1 and not win.model.errors)
+check("the window closed itself after building", not dlg.isVisible())
+ref, prof = win.doc.features[0], win.doc.features[1]
+check("the raw outline is kept hidden and locked", ref["show"] is False and ref["locked"] is True)
+check("the status line reports the fit", "lines" in win.status.msg.text() and "arcs" in win.status.msg.text())
+shot(win, "gcode_import_built")
+
+dlg = ImportWizard(win, str(FIXTURE), FIXTURE.read_text())
+dlg.show()
+dlg.go(3)
+dlg.recon_page.here_btn.click()
+dlg.recon_page.build_btn.click()
+QTest.qWait(500)
+check("ADD TO THIS PART: a second set of features lands in the same part",
+      [f["kind"] for f in win.doc.features] == ["sketch", "sketch", "revolve"] * 2 and len(win.model.bodies) == 2)
+win.undo()
+QTest.qWait(200)
+check("one Undo takes the whole import back out", [f["kind"] for f in win.doc.features] == ["sketch", "sketch", "revolve"])
+
 print("FAILED: " + ", ".join(failures) if failures else "ALL OK")
 win.dirty = False
 win.close()

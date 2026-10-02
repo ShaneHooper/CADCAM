@@ -1,19 +1,32 @@
 """Step 4 RECONSTRUCT: the part the program cuts, exact and assumed edges, warnings and checks."""
 from __future__ import annotations
 
-from PySide6.QtWidgets import QCheckBox, QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QVBoxLayout, QWidget
+from pathlib import Path
 
+from PySide6.QtWidgets import (QCheckBox, QFrame, QHBoxLayout, QLabel, QMessageBox, QPlainTextEdit, QVBoxLayout,
+                               QWidget)
+
+from ..core import Document
 from ..ui import theme
+from .build import BuildError, add_to_document
+from .build import build as build_profile
+from .fit import fit_outline
 from .preview import Preview
 from .stock import stock_z_range
-from .widgets import MONO_CSS, head, toggle
+from .widgets import MONO_CSS, button, head, toggle
+
+
+def fit_text(fit) -> str:
+    return (f"{len(fit.segs)} segments: {fit.lines} lines, {fit.arcs} arcs  "
+            f"(fit within {fit.max_dev:.5f}, tolerance {fit.tol})")
 
 
 def profile_summary(rec, needs_type: int = 0) -> str:
     if not rec.ok:
         return f"NO PROFILE: {rec.error}"
+    fit = fit_outline(rec.edges)
     rows = [
-        ("OUTLINE", f"{len(rec.edges)} segments  (fitted to lines and arcs in Step 5)"),
+        ("OUTLINE", f"{len(rec.edges)} raw edges -> {fit_text(fit)}"),
         ("EXACT / ASSUMED", f"{rec.count('EXACT')} exact, {rec.count('ASSUMED')} assumed in {rec.assumed_runs} "
                             f"stretch{'es' if rec.assumed_runs != 1 else ''}, {rec.count('STOCK')} uncut stock"),
         ("MAX Ø", f"{rec.max_dia:.4f}"),
@@ -79,10 +92,62 @@ class ReconPage(QWidget):
         self.notes.setStyleSheet(f"{MONO_CSS}font-size:11px;background:{theme.BG};color:{theme.FG};"
                                  f"border:1px solid {theme.LINE};")
         col.addWidget(self.notes, 1)
-        nxt = QLabel("SKETCH + REVOLVED SOLID: NOT BUILT YET (PHASE 5)")
-        nxt.setStyleSheet(f"color:{theme.FG3};font-family:'{theme.HEAD[0]}';letter-spacing:1px;")
-        col.addWidget(nxt)
+        col.addWidget(head("Build"))
+        wrow = QHBoxLayout()
+        self.new_btn, self.here_btn = toggle("NEW PART"), toggle("ADD TO THIS PART")
+        self.new_btn.setChecked(True)
+        self.new_btn.clicked.connect(lambda: self.set_target(True))
+        self.here_btn.clicked.connect(lambda: self.set_target(False))
+        wrow.addWidget(self.new_btn)
+        wrow.addWidget(self.here_btn)
+        wrow.addStretch()
+        col.addLayout(wrow)
+        bhint = QLabel("Makes a sketch of the fitted lines and arcs, a hidden locked copy of the raw outline, and "
+                       "a 360 degree revolve about the spindle. The finished front face is Z0.")
+        bhint.setWordWrap(True)
+        bhint.setStyleSheet(f"color:{theme.FG3};font-size:11px;")
+        col.addWidget(bhint)
+        self.build_btn = button("BUILD SKETCH + REVOLVED SOLID", ok=True)
+        self.build_btn.clicked.connect(self.build)
+        col.addWidget(self.build_btn)
         row.addWidget(box)
+
+    def set_target(self, new_part: bool):
+        self.new_btn.setChecked(new_part)
+        self.here_btn.setChecked(not new_part)
+
+    def build(self):
+        """Fit the profile, put the sketches and the revolve into the part, close the window."""
+        wiz = self.wiz
+        win = wiz.win
+        rec = wiz.reconstruction()
+        try:
+            built = build_profile(rec)
+            name = Path(wiz.path).stem
+            if self.new_btn.isChecked():
+                win.cancel_command()
+                if not win._maybe_save():
+                    return
+                win._set_doc(Document(name), None)
+            else:
+                win._snapshot()
+            ids = add_to_document(win.doc, built, name)
+        except BuildError as exc:
+            QMessageBox.warning(wiz, "Import G-code", f"The part could not be built:\n{exc}")
+            return
+        except Exception as exc:                        # never take the app down with the importer
+            QMessageBox.warning(wiz, "Import G-code", f"The build stopped:\n{type(exc).__name__}: {exc}")
+            return
+        win.dirty = True
+        win.rebuild(fit=True)
+        win.document_changed.emit()
+        errs = getattr(win, "model", None) and win.model.errors
+        f = built.fit
+        win.message(f"Imported {name}: {f.lines} lines and {f.arcs} arcs, {f.assumed} assumed, within "
+                    f"{f.max_dev:.5f} of the program's cuts. The raw outline is kept hidden in "
+                    f"'{name} reference'." + (f"  Kernel: {next(iter(errs.values()))}" if errs else ""))
+        win.viewport.show_toast(f"Built {name}")
+        wiz.accept()
 
     def set_nose_center(self, on: bool):
         self.tip_btn.setChecked(not on)
@@ -104,6 +169,7 @@ class ReconPage(QWidget):
         self.preview.show_setup(wiz.program.moves, (zb, zf, s["od"], s["id"]),
                                 "" if rec.ok else f"NO PROFILE\n{rec.error}", profile=rec.edges if rec.ok else None)
         needs = sum(1 for o in wiz.ops_page.ops if o.confidence == "NEEDS TYPE")
+        self.build_btn.setEnabled(bool(rec.ok))
         self.summary.setText(profile_summary(rec, needs))
         self.notes.setPlainText(notes_text(rec) if rec.ok else rec.error)
         n = len(rec.flags) if rec.ok else 0
