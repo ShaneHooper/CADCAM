@@ -1,0 +1,417 @@
+"""The G-code import window (Qt). Step 1 SETUP is built; steps 2-4 are placeholders.
+
+Only register() below touches the host app, and only through the main window's File menu.
+Everything a handler does is guarded: an error in here shows a message box and leaves the
+rest of the app running.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+import traceback
+
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QAction, QColor, QFont, QPainter, QPen
+from PySide6.QtWidgets import (QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
+                               QLabel, QMessageBox, QPlainTextEdit, QPushButton, QStackedWidget, QVBoxLayout,
+                               QWidget)
+
+from ..ui import theme
+from .detect import detect_machine
+from .parser import parse_program
+from .stock import Z0_CHOICES, Z0_LABELS, guess_stock, stock_z_range
+
+FILE_FILTER = "G-code (*.nc *.tap *.cnc *.ngc *.gcode *.eia *.min *.txt);;All files (*)"
+STEPS = ("SETUP", "TOOLS", "OPERATIONS", "RECONSTRUCT")
+# state colours, always shown with their word
+C_READ, C_GUESS, C_UNKNOWN, C_YOU = theme.OK, theme.WARN, theme.BAD, theme.ACCENT
+
+
+def register(win) -> None:
+    """File > Import G-code..., placed above the Export entries."""
+    menu = win.topbar.file.menu()
+    act = QAction("Import G-code…", menu)
+    act.triggered.connect(lambda: open_import(win))
+    before = next((a for a in menu.actions() if a.text().startswith("Export")), None)
+    menu.insertAction(before, act)
+    if before is not None:
+        menu.insertSeparator(before)
+    win._gcode_import_action = act
+
+
+def open_import(win, path: str | None = None):
+    try:
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(win, "Import G-code", "", FILE_FILTER)
+            if not path:
+                return None
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+        dlg = ImportWizard(win, path, text)
+        win._gcode_import = dlg
+        dlg.exec()
+        return dlg
+    except Exception as exc:                            # never take the app down with the importer
+        QMessageBox.warning(win, "Import G-code", f"The G-code import stopped:\n{exc}\n\n{traceback.format_exc(limit=3)}")
+        return None
+
+
+def _head(text: str) -> QLabel:
+    lab = QLabel(text.upper())
+    lab.setStyleSheet(f"color:{theme.FG2};font-family:'{theme.HEAD[0]}';font-weight:600;letter-spacing:2px;"
+                      f"font-size:12px;border:0;border-bottom:1px solid {theme.LINE};padding:6px 0 3px 0;")
+    return lab
+
+
+class Tag(QLabel):
+    """A state chip: AUTO (guessed from the program) until the user types, then SET BY YOU."""
+
+    def __init__(self):
+        super().__init__()
+        self.setAlignment(Qt.AlignCenter)
+        self.setFixedWidth(84)
+        self.set("AUTO", C_GUESS)
+
+    def set(self, word: str, colour: str, tip: str = ""):
+        self.setText(word)
+        self.setToolTip(tip)
+        self.setStyleSheet(f"color:{colour};border:1px solid {colour};font-size:10px;padding:1px 4px;"
+                           f"font-family:'{theme.MONO[0]}';")
+
+
+class Num(QDoubleSpinBox):
+    def __init__(self, lo=0.0, hi=1000.0):
+        super().__init__()
+        self.setDecimals(4)
+        self.setRange(lo, hi)
+        self.setSingleStep(0.125)
+        self.setButtonSymbols(QDoubleSpinBox.NoButtons)
+        self.setFixedWidth(96)
+
+
+def _toggle(text: str) -> QPushButton:
+    b = QPushButton(text)
+    b.setCheckable(True)
+    b.setCursor(Qt.PointingHandCursor)
+    b.setStyleSheet(
+        f"QPushButton{{border:1px solid {theme.LINE2};background:transparent;color:{theme.FG2};padding:4px 10px;"
+        f"font-family:'{theme.HEAD[0]}';font-weight:600;letter-spacing:1px;}}"
+        f"QPushButton:checked{{border-color:{theme.ACCENT};color:{theme.ACCENT};background:{theme.ACCENT_DIM};}}"
+        f"QPushButton:disabled{{color:{theme.FG3};border-color:{theme.LINE};}}")
+    return b
+
+
+class Preview(QWidget):
+    """XZ half-section: stock (dashed), centerline, Z0 marker, toolpath (feeds solid, rapids dashed)."""
+
+    def __init__(self):
+        super().__init__()
+        self.setMinimumSize(420, 320)
+        self.moves = []
+        self.stock = None           # (z_back, z_front, od, id) or None
+        self.note = ""
+
+    def show_setup(self, moves, stock, note=""):
+        self.moves, self.stock, self.note = moves, stock, note
+        self.update()
+
+    def _bounds(self):
+        zs, rs = [0.0], [0.0]
+        if self.stock:
+            zb, zf, od, _ = self.stock
+            zs += [zb, zf]
+            rs.append(od / 2.0)
+        for m in self.moves:
+            if m.kind != "rapid":
+                zs += [p[0] for p in m.points]
+                rs += [p[1] / 2.0 for p in m.points]
+        z0, z1, r1 = min(zs), max(zs), max(rs)
+        pad = 0.12 * max(z1 - z0, r1, 0.25)
+        return z0 - pad, z1 + pad, -pad, r1 + pad
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.fillRect(self.rect(), QColor(theme.BG))
+        p.setPen(QPen(QColor(theme.LINE), 1))
+        p.drawRect(self.rect().adjusted(0, 0, -1, -1))
+        mono = QFont(theme.MONO[0])
+        mono.setPixelSize(11)
+        p.setFont(mono)
+        if self.note:
+            p.setPen(QColor(theme.BAD))
+            p.drawText(self.rect(), Qt.AlignCenter, self.note)
+            return
+        z0, z1, r0, r1 = self._bounds()
+        w, h = self.width() - 24, self.height() - 24
+        s = min(w / max(z1 - z0, 1e-6), h / max(r1 - r0, 1e-6))
+        ox = 12 + (w - (z1 - z0) * s) / 2.0
+        oy = 12 + (h - (r1 - r0) * s) / 2.0
+
+        def pt(z, dia):
+            return QPointF(ox + (z - z0) * s, oy + (r1 - dia / 2.0) * s)
+
+        dash = QPen(QColor(theme.FG3), 1, Qt.DashLine)
+        if self.stock:
+            zb, zf, od, bore = self.stock
+            p.setPen(dash)
+            p.drawRect(QRectF(pt(zb, od), pt(zf, 0.0)))
+            if bore > 0:
+                p.drawLine(pt(zb, bore), pt(zf, bore))
+        # centerline and Z0
+        p.setPen(QPen(QColor(theme.FG3), 1, Qt.DashDotLine))
+        p.drawLine(pt(z0, 0.0), pt(z1, 0.0))
+        p.setPen(QColor(theme.FG3))
+        p.drawText(pt(z0, 0.0) + QPointF(4, -4), "CL  X0")
+        p.setPen(QPen(QColor(theme.OK), 1))
+        p.drawLine(pt(0.0, r1 * 2.0), pt(0.0, r0 * 2.0))
+        p.drawText(pt(0.0, r1 * 2.0) + QPointF(4, 12), "Z0")
+        # toolpath: rapids under, feeds over
+        clip = QRectF(1, 1, self.width() - 2, self.height() - 2)
+        p.setClipRect(clip)
+        rapid = QPen(QColor(theme.FG3), 1, Qt.DashLine)
+        feed = QPen(QColor(theme.ACCENT), 1.4)
+        for want_rapid, pen in ((True, rapid), (False, feed)):
+            p.setPen(pen)
+            for m in self.moves:
+                if (m.kind == "rapid") != want_rapid:
+                    continue
+                pts = [pt(z, d) for z, d in m.points]
+                for a, b in zip(pts, pts[1:]):
+                    p.drawLine(a, b)
+        p.setClipping(False)
+        p.setPen(QColor(theme.FG3))
+        p.drawText(self.rect().adjusted(8, 0, -8, -6), Qt.AlignBottom | Qt.AlignRight,
+                   "FEED ——   RAPID - - -   STOCK - - -   +Z →   +X ↑")
+
+
+class ImportWizard(QDialog):
+    def __init__(self, win, path: str, text: str):
+        super().__init__(win)
+        self.win = win
+        self.path = path
+        self.program = parse_program(text)
+        self.detection = detect_machine(self.program.lines)
+        self.guess = guess_stock(self.program)
+        self.machine = self.detection.machine
+        self._loading = True
+        self.setWindowTitle(f"Import G-code · {Path(path).name}")
+        self.resize(1080, 700)
+        self.setStyleSheet(f"QDialog{{background:{theme.BG};}} QLabel{{color:{theme.FG};}}")
+        v = QVBoxLayout(self)
+        v.setContentsMargins(12, 10, 12, 10)
+        v.setSpacing(8)
+
+        steps = QHBoxLayout()
+        steps.setSpacing(6)
+        self.step_btns = []
+        for i, name in enumerate(STEPS):
+            b = _toggle(f"{i + 1}  {name}")
+            b.clicked.connect(lambda _=False, i=i: self.go(i))
+            steps.addWidget(b)
+            self.step_btns.append(b)
+        steps.addStretch()
+        v.addLayout(steps)
+
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self._setup_page())
+        for i, name in enumerate(STEPS[1:], start=2):
+            self.pages.addWidget(self._placeholder(i, name))
+        v.addWidget(self.pages, 1)
+
+        foot = QHBoxLayout()
+        self.status = QLabel("")
+        self.status.setStyleSheet(f"color:{theme.FG2};")
+        foot.addWidget(self.status, 1)
+        self.back, self.next, close = QPushButton("BACK"), QPushButton("NEXT"), QPushButton("CLOSE")
+        for b in (self.back, self.next, close):
+            b.setObjectName("dlgBtn")
+            foot.addWidget(b)
+        self.next.setProperty("ok", True)
+        self.back.clicked.connect(lambda: self.go(self.pages.currentIndex() - 1))
+        self.next.clicked.connect(lambda: self.go(self.pages.currentIndex() + 1))
+        close.clicked.connect(self.reject)
+        v.addLayout(foot)
+
+        self._load_guess()
+        self._loading = False
+        self.go(0)
+        self.refresh()
+
+    # ---- pages ----
+    def _placeholder(self, number: int, name: str) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lab = QLabel(f"STEP {number} · {name}\n\nNOT BUILT YET (PHASE {number if number < 4 else '4-6'})")
+        lab.setAlignment(Qt.AlignCenter)
+        lab.setStyleSheet(f"color:{theme.FG3};font-family:'{theme.HEAD[0]}';font-size:16px;letter-spacing:2px;")
+        lay.addWidget(lab)
+        return w
+
+    def _setup_page(self) -> QWidget:
+        page = QWidget()
+        row = QHBoxLayout(page)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(12)
+        left = QFrame()
+        left.setFixedWidth(430)
+        left.setStyleSheet(f"QFrame{{background:{theme.PANEL};border:1px solid {theme.LINE};}} QLabel{{border:0;}}")
+        col = QVBoxLayout(left)
+        col.setContentsMargins(12, 6, 12, 10)
+        col.setSpacing(6)
+
+        col.addWidget(_head("Machine type"))
+        mrow = QHBoxLayout()
+        self.lathe_btn, self.mill_btn = _toggle("LATHE"), _toggle("MILL")
+        self.lathe_btn.clicked.connect(lambda: self.set_machine("lathe"))
+        self.mill_btn.clicked.connect(lambda: self.set_machine("mill"))
+        self.machine_tag = Tag()
+        mrow.addWidget(self.lathe_btn)
+        mrow.addWidget(self.mill_btn)
+        mrow.addStretch()
+        mrow.addWidget(self.machine_tag)
+        col.addLayout(mrow)
+        self.reason = QLabel(self.detection.summary)
+        self.reason.setWordWrap(True)
+        self.reason.setStyleSheet(f"color:{theme.FG2};font-size:11px;")
+        col.addWidget(self.reason)
+        self.mill_note = QLabel("MILL IMPORT NOT BUILT YET")
+        self.mill_note.setStyleSheet(f"color:{theme.BAD};")
+        col.addWidget(self.mill_note)
+
+        col.addWidget(_head("Stock"))
+        srow = QHBoxLayout()
+        self.round_btn, self.tube_btn, hexb = _toggle("ROUND BAR"), _toggle("TUBE"), _toggle("HEX · LATER")
+        hexb.setEnabled(False)
+        self.round_btn.setChecked(True)
+        self.round_btn.clicked.connect(lambda: self.set_shape("round"))
+        self.tube_btn.clicked.connect(lambda: self.set_shape("tube"))
+        for b in (self.round_btn, self.tube_btn, hexb):
+            srow.addWidget(b)
+        srow.addStretch()
+        col.addLayout(srow)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(5)
+        self.od, self.bore, self.length, self.front = Num(0.001), Num(0.0), Num(0.001), Num(0.0)
+        self.z0 = QComboBox()
+        for key in Z0_CHOICES:
+            self.z0.addItem(Z0_LABELS[key], key)
+        self.z0.setMinimumWidth(190)                    # "FINISHED FRONT FACE" in full
+        self.tags = {k: Tag() for k in ("od", "length", "z0", "front")}
+        self.bore_label = QLabel("ID")
+        rows = (("OD", self.od, self.tags["od"]), (self.bore_label, self.bore, None),
+                ("LENGTH", self.length, self.tags["length"]))
+        for r, (label, field, tag) in enumerate(rows):
+            grid.addWidget(QLabel(label) if isinstance(label, str) else label, r, 0)
+            grid.addWidget(field, r, 1)
+            if tag:
+                grid.addWidget(tag, r, 2)
+        grid.setColumnStretch(3, 1)
+        col.addLayout(grid)
+
+        col.addWidget(_head("Origin"))
+        x0 = QLabel("X0   SPINDLE CENTERLINE (FIXED)")
+        x0.setStyleSheet(f"color:{theme.FG2};")
+        col.addWidget(x0)
+        og = QGridLayout()
+        og.setHorizontalSpacing(8)
+        og.setVerticalSpacing(5)
+        og.addWidget(QLabel("Z0"), 0, 0)
+        og.addWidget(self.z0, 0, 1)
+        og.addWidget(self.tags["z0"], 0, 2)
+        og.addWidget(QLabel("STOCK IN FRONT"), 1, 0)
+        og.addWidget(self.front, 1, 1)
+        og.addWidget(self.tags["front"], 1, 2)
+        og.setColumnStretch(3, 1)
+        col.addLayout(og)
+
+        self.flags_head = _head("Flags")
+        col.addWidget(self.flags_head)
+        self.flags = QPlainTextEdit()
+        self.flags.setReadOnly(True)
+        self.flags.setStyleSheet(f"font-family:'{theme.MONO[0]}','Consolas',monospace;font-size:11px;"
+                                 f"background:{theme.BG};color:{theme.FG};border:1px solid {theme.LINE};")
+        col.addWidget(self.flags, 1)
+        row.addWidget(left)
+
+        self.preview = Preview()
+        row.addWidget(self.preview, 1)
+
+        self.od.valueChanged.connect(lambda: self.edited("od"))
+        self.length.valueChanged.connect(lambda: self.edited("length"))
+        self.front.valueChanged.connect(lambda: self.edited("front"))
+        self.bore.valueChanged.connect(lambda: self.edited(None))
+        self.z0.currentIndexChanged.connect(lambda: self.edited("z0"))
+        return page
+
+    # ---- state ----
+    def _load_guess(self):
+        g = self.guess
+        self.od.setValue(g.od)
+        self.length.setValue(g.length)
+        self.front.setValue(g.front)
+        self.z0.setCurrentIndex(Z0_CHOICES.index(g.z0))
+        for key, tag in self.tags.items():
+            tag.set("AUTO", C_GUESS, g.reasons.get(key, ""))
+        self.machine_tag.set("AUTO", C_GUESS, self.detection.summary)
+        self.set_shape("round")
+        lines = [f"LINE {f.line:<5} {f.level.upper():<12} {f.text}" if f.line else f"{f.level.upper():<12} {f.text}"
+                 for f in self.program.flags]
+        self.flags.setPlainText("\n".join(lines) if lines else "Nothing flagged.")
+        bad = sum(1 for f in self.program.flags if f.level == "unsupported")
+        self.flags_head.setText(f"FLAGS · {len(self.program.flags)}" + (f" · {bad} NOT READ" if bad else ""))
+
+    def edited(self, key: str | None):
+        if self._loading:
+            return
+        if key:
+            self.tags[key].set("SET BY YOU", C_YOU)
+        self.refresh()
+
+    def set_machine(self, machine: str):
+        self.machine = machine
+        if machine != self.detection.machine:
+            self.machine_tag.set("SET BY YOU", C_YOU)
+        else:
+            self.machine_tag.set("AUTO", C_GUESS, self.detection.summary)
+        self.refresh()
+
+    def set_shape(self, shape: str):
+        self.shape = shape
+        self.round_btn.setChecked(shape == "round")
+        self.tube_btn.setChecked(shape == "tube")
+        self.bore.setVisible(shape == "tube")
+        self.bore_label.setVisible(shape == "tube")
+        if not self._loading:
+            self.refresh()
+
+    def settings(self) -> dict:
+        """What Step 1 decided - the input to the later steps."""
+        return {"machine": self.machine, "shape": self.shape, "od": self.od.value(),
+                "id": self.bore.value() if self.shape == "tube" else 0.0, "length": self.length.value(),
+                "z0": self.z0.currentData(), "front": self.front.value() if self.z0.currentData() == "finished" else 0.0}
+
+    def refresh(self):
+        lathe = self.machine == "lathe"
+        self.lathe_btn.setChecked(lathe)
+        self.mill_btn.setChecked(not lathe)
+        self.mill_note.setVisible(not lathe)
+        self.front.setEnabled(self.z0.currentData() == "finished")
+        s = self.settings()
+        zb, zf = stock_z_range(s["z0"], s["length"], s["front"])
+        self.preview.show_setup(self.program.moves, (zb, zf, s["od"], s["id"]),
+                                "" if lathe else "MILL IMPORT NOT BUILT YET")
+        cuts = sum(1 for m in self.program.moves if m.kind != "rapid")
+        metric = "  ·  PROGRAM IS METRIC, SHOWN IN INCHES" if self.program.units == "mm" else ""
+        self.status.setText(f"{Path(self.path).name}  ·  {len(self.program.lines)} lines  ·  "
+                            f"{len(self.program.moves)} moves ({cuts} cutting){metric}")
+        self.next.setEnabled(lathe and self.pages.currentIndex() < len(STEPS) - 1)
+
+    def go(self, index: int):
+        index = max(0, min(len(STEPS) - 1, index))
+        if index > 0 and self.machine != "lathe":
+            index = 0
+        self.pages.setCurrentIndex(index)
+        for i, b in enumerate(self.step_btns):
+            b.setChecked(i == index)
+        self.back.setEnabled(index > 0)
+        self.next.setEnabled(self.machine == "lathe" and index < len(STEPS) - 1)

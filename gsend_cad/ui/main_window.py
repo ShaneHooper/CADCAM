@@ -99,6 +99,16 @@ class MainWindow(QMainWindow):
         self.topbar.open.connect(self.open)
         self.topbar.undo.connect(self.undo)
         self.topbar.projection.connect(self.set_projection)
+        try:                                            # optional module: the app runs without it
+            from ..gcode_import import register as _gcode_import
+            _gcode_import(self)
+        except Exception:                               # broken or removed -> no File > Import G-code… entry
+            import traceback
+            try:                                        # a windowed .exe has no console: keep it in the logs
+                from .app import log_dir
+                (log_dir() / "gcode_import.log").write_text(traceback.format_exc(), encoding="utf-8")
+            except Exception:
+                pass
         from PySide6.QtCore import QSettings
         self.prefs = QSettings("G-SEND", "CADCAM")            # remembered between runs
         self.tool_lib_path = os.environ.get("GSEND_TOOL_LIBRARY") or os.path.join(
