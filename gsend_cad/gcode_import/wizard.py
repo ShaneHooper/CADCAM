@@ -6,24 +6,37 @@ rest of the app running.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import traceback
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QAction, QColor, QFont, QPainter, QPen
-from PySide6.QtWidgets import (QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
-                               QLabel, QMessageBox, QPlainTextEdit, QPushButton, QStackedWidget, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
+                               QMessageBox, QPlainTextEdit, QStackedWidget, QVBoxLayout, QWidget)
 
 from ..ui import theme
+from . import keywords as kw
 from .detect import detect_machine
+from .keywords_page import KeywordsDialog
 from .parser import parse_program
 from .stock import Z0_CHOICES, Z0_LABELS, guess_stock, stock_z_range
+from .tools_page import ToolsPage
+from .widgets import C_GUESS, C_YOU, Num, Tag, button
+from .widgets import head as _head
+from .widgets import toggle as _toggle
 
 FILE_FILTER = "G-code (*.nc *.tap *.cnc *.ngc *.gcode *.eia *.min *.txt);;All files (*)"
 STEPS = ("SETUP", "TOOLS", "OPERATIONS", "RECONSTRUCT")
-# state colours, always shown with their word
-C_READ, C_GUESS, C_UNKNOWN, C_YOU = theme.OK, theme.WARN, theme.BAD, theme.ACCENT
+
+
+def keywords_path(win) -> Path:
+    """The keyword table sits beside the tool library (GSEND_GCODE_KEYWORDS overrides, for tests)."""
+    env = os.environ.get("GSEND_GCODE_KEYWORDS")
+    if env:
+        return Path(env)
+    lib = getattr(win, "tool_lib_path", None)
+    return (Path(lib).parent if lib else Path.home() / ".gsend_cadcam") / "gcode_import_keywords.json"
 
 
 def register(win) -> None:
@@ -52,51 +65,6 @@ def open_import(win, path: str | None = None):
     except Exception as exc:                            # never take the app down with the importer
         QMessageBox.warning(win, "Import G-code", f"The G-code import stopped:\n{exc}\n\n{traceback.format_exc(limit=3)}")
         return None
-
-
-def _head(text: str) -> QLabel:
-    lab = QLabel(text.upper())
-    lab.setStyleSheet(f"color:{theme.FG2};font-family:'{theme.HEAD[0]}';font-weight:600;letter-spacing:2px;"
-                      f"font-size:12px;border:0;border-bottom:1px solid {theme.LINE};padding:6px 0 3px 0;")
-    return lab
-
-
-class Tag(QLabel):
-    """A state chip: AUTO (guessed from the program) until the user types, then SET BY YOU."""
-
-    def __init__(self):
-        super().__init__()
-        self.setAlignment(Qt.AlignCenter)
-        self.setFixedWidth(84)
-        self.set("AUTO", C_GUESS)
-
-    def set(self, word: str, colour: str, tip: str = ""):
-        self.setText(word)
-        self.setToolTip(tip)
-        self.setStyleSheet(f"color:{colour};border:1px solid {colour};font-size:10px;padding:1px 4px;"
-                           f"font-family:'{theme.MONO[0]}';")
-
-
-class Num(QDoubleSpinBox):
-    def __init__(self, lo=0.0, hi=1000.0):
-        super().__init__()
-        self.setDecimals(4)
-        self.setRange(lo, hi)
-        self.setSingleStep(0.125)
-        self.setButtonSymbols(QDoubleSpinBox.NoButtons)
-        self.setFixedWidth(96)
-
-
-def _toggle(text: str) -> QPushButton:
-    b = QPushButton(text)
-    b.setCheckable(True)
-    b.setCursor(Qt.PointingHandCursor)
-    b.setStyleSheet(
-        f"QPushButton{{border:1px solid {theme.LINE2};background:transparent;color:{theme.FG2};padding:4px 10px;"
-        f"font-family:'{theme.HEAD[0]}';font-weight:600;letter-spacing:1px;}}"
-        f"QPushButton:checked{{border-color:{theme.ACCENT};color:{theme.ACCENT};background:{theme.ACCENT_DIM};}}"
-        f"QPushButton:disabled{{color:{theme.FG3};border-color:{theme.LINE};}}")
-    return b
 
 
 class Preview(QWidget):
@@ -192,9 +160,12 @@ class ImportWizard(QDialog):
         self.detection = detect_machine(self.program.lines)
         self.guess = guess_stock(self.program)
         self.machine = self.detection.machine
+        self.keywords_file = keywords_path(win)
+        self.table = kw.load(self.keywords_file)        # keyword table (Settings > Keywords)
+        self.overrides = {}                             # tool number -> Tool the user defined in Step 2
         self._loading = True
         self.setWindowTitle(f"Import G-code · {Path(path).name}")
-        self.resize(1080, 700)
+        self.resize(1200, 720)
         self.setStyleSheet(f"QDialog{{background:{theme.BG};}} QLabel{{color:{theme.FG};}}")
         v = QVBoxLayout(self)
         v.setContentsMargins(12, 10, 12, 10)
@@ -209,11 +180,16 @@ class ImportWizard(QDialog):
             steps.addWidget(b)
             self.step_btns.append(b)
         steps.addStretch()
+        self.keywords_btn = button("SETTINGS · KEYWORDS…")
+        self.keywords_btn.clicked.connect(self.open_keywords)
+        steps.addWidget(self.keywords_btn)
         v.addLayout(steps)
 
         self.pages = QStackedWidget()
         self.pages.addWidget(self._setup_page())
-        for i, name in enumerate(STEPS[1:], start=2):
+        self.tools_page = ToolsPage(self)
+        self.pages.addWidget(self.tools_page)
+        for i, name in enumerate(STEPS[2:], start=3):
             self.pages.addWidget(self._placeholder(i, name))
         v.addWidget(self.pages, 1)
 
@@ -221,11 +197,9 @@ class ImportWizard(QDialog):
         self.status = QLabel("")
         self.status.setStyleSheet(f"color:{theme.FG2};")
         foot.addWidget(self.status, 1)
-        self.back, self.next, close = QPushButton("BACK"), QPushButton("NEXT"), QPushButton("CLOSE")
+        self.back, self.next, close = button("BACK"), button("NEXT", ok=True), button("CLOSE")
         for b in (self.back, self.next, close):
-            b.setObjectName("dlgBtn")
             foot.addWidget(b)
-        self.next.setProperty("ok", True)
         self.back.clicked.connect(lambda: self.go(self.pages.currentIndex() - 1))
         self.next.clicked.connect(lambda: self.go(self.pages.currentIndex() + 1))
         close.clicked.connect(self.reject)
@@ -233,6 +207,7 @@ class ImportWizard(QDialog):
 
         self._load_guess()
         self._loading = False
+        self.tools_page.reload()
         self.go(0)
         self.refresh()
 
@@ -405,6 +380,19 @@ class ImportWizard(QDialog):
         self.status.setText(f"{Path(self.path).name}  ·  {len(self.program.lines)} lines  ·  "
                             f"{len(self.program.moves)} moves ({cuts} cutting){metric}")
         self.next.setEnabled(lathe and self.pages.currentIndex() < len(STEPS) - 1)
+
+    # ---- keywords ----
+    def open_keywords(self):
+        dlg = KeywordsDialog(self, self.keywords_file, self.table)
+        self.keywords_dialog = dlg
+        dlg.exec()
+        self.table = dlg.rows
+        self.tools_page.reload(keep_row=self.tools_page.current())
+
+    def save_keyword(self, text: str, tool_type: str):
+        """Step 2's 'save as keyword for next time': added to the table as a USER row."""
+        self.table = kw.add(self.table, text, tool_type, None, "USER")
+        kw.save(self.keywords_file, self.table)
 
     def go(self, index: int):
         index = max(0, min(len(STEPS) - 1, index))

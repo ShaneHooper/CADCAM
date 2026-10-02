@@ -1,4 +1,4 @@
-"""Drive File > Import G-code... (Step 1 SETUP) in the real window.
+"""Drive File > Import G-code... (Step 1 SETUP, Step 2 TOOLS, Settings > Keywords) in the real window.
 
     python tests/drive_gcode_import.py OUTDIR
     (Linux: xvfb-run -a -s "-screen 0 1600x1000x24" python tests/drive_gcode_import.py OUTDIR)
@@ -14,6 +14,10 @@ import gsend_cad
 from gsend_cad.gcode_import.wizard import ImportWizard
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "."
+KEYWORDS = os.path.join(OUT, "gcode_import_keywords.json")      # never the user's real table
+if os.path.exists(KEYWORDS):
+    os.remove(KEYWORDS)
+os.environ["GSEND_GCODE_KEYWORDS"] = KEYWORDS
 FIXTURE = Path(__file__).parent / "fixtures" / "gcode" / "stepped_shaft.nc"
 app = QApplication(sys.argv[:1])
 win = gsend_cad.launch(block=False)
@@ -70,10 +74,75 @@ check("choosing MILL says mill import is not built, and blocks NEXT",
 shot(dlg, "gcode_import_mill")
 dlg.lathe_btn.click()
 dlg.next.click()
-check("NEXT goes to step 2 (placeholder until Phase 2), BACK returns",
+check("NEXT goes to step 2 TOOLS, BACK returns",
       dlg.pages.currentIndex() == 1 and dlg.step_btns[1].isChecked())
 dlg.back.click()
 check("back on Setup", dlg.pages.currentIndex() == 0)
+dlg.close()
+
+# ---- Step 2 TOOLS + Settings > Keywords ----
+from gsend_cad.gcode_import.keywords_page import KeywordsDialog
+
+MULTI = FIXTURE.with_name("multi_tool.nc")
+dlg = ImportWizard(win, str(MULTI), MULTI.read_text())
+dlg.show()
+dlg.go(1)
+tp = dlg.tools_page
+QTest.qWait(300)
+cell = lambda r, c: tp.table.item(r, c).text()
+check("one row per tool with its status", tp.table.rowCount() == 6
+      and [cell(r, 7) for r in range(6)] == ["READ", "READ", "READ", "GUESSED", "GUESSED", "UNKNOWN"])
+check("the header counts each status", all(x in tp.counts.text() for x in ("READ 3", "GUESSED 2", "UNKNOWN 1",
+                                                                            "DEFINED 0")))
+check("T01 row: keyword, type, insert, nose radius, side",
+      [cell(0, c) for c in (0, 2, 3, 4, 5, 6)] == ["T01", "OD ROUGH", "OD TURN", "CNMG 432", "0.0312", "OD"])
+check("opens on the first unresolved tool (T03: nose radius ASSUMED)",
+      tp.current() == 2 and tp.nose_tag.text() == "ASSUMED" and "default" in tp.assumed.text())
+shot(dlg, "gcode_import_tools")
+tp.insert.setText("CCMT 32.51")
+tp.insert.textEdited.emit("CCMT 32.51")
+check("typing an insert code fills in the shape and the nose radius",
+      abs(tp.nose.value() - 1 / 64) < 1e-4 and "80° diamond" in tp.shape.text() and tp.nose_tag.text() == "READ")
+tp.apply_btn.click()
+check("APPLY marks it DEFINED and moves to the next unresolved (T04)",
+      cell(2, 7) == "DEFINED" and cell(2, 4) == "CCMT 32.51" and tp.current() == 3)
+tp.apply_btn.click()
+check("a groove tool cannot be applied without its width", "width" in tp.note.text() and cell(3, 7) == "GUESSED")
+tp.size.setValue(0.125)
+tp.apply_btn.click()
+check("with the width typed it is DEFINED", cell(3, 7) == "DEFINED" and tp.current() == 4)
+tp.table.setCurrentCell(5, 0)
+check("a groove plunging inward cuts on the OD", cell(3, 6) == "OD")
+check("the UNKNOWN tool says it is a sharp point", "sharp point" in tp.assumed.text()
+      and tp.kw_text.text() == "PARTING BLADE")
+tp.type.setCurrentText("CUTOFF")
+tp.size.setValue(0.118)
+tp.save_kw.setChecked(True)
+check("with a type and width typed the panel says nothing is assumed",
+      tp.assumed.text() == "Nothing assumed." and tp.nose_tag.text() != "ASSUMED")
+shot(dlg, "gcode_import_tool_define")
+tp.apply_btn.click()
+check("defining it with 'save as keyword' adds a USER keyword to the settings file",
+      cell(5, 7) == "DEFINED" and dlg.table[0] == {"keyword": "PARTING BLADE", "tool": "CUTOFF", "op": None,
+                                                    "source": "USER"} and os.path.exists(KEYWORDS))
+check("the header counts follow", "DEFINED 3" in tp.counts.text() and "UNKNOWN 0" in tp.counts.text())
+
+kd = KeywordsDialog(dlg, dlg.keywords_file, dlg.table)
+kd.show()
+kd.test.setText("FACE GROOVE CNMG 120408")
+out = kd.result.text()
+check("test box: longest keyword, ISO insert, tool type, operation, nose radius",
+      "FACE GROOVE" in out and "FACE," not in out and "ISO" in out and "0.0315" in out)
+kd.new_key.setText("wiper")
+kd.new_tool.setCurrentText("OD TURN")
+kd.add_btn.click()
+check("ADD puts a USER keyword at the top of the table",
+      kd.table.item(0, 0).text() == "WIPER" and kd.table.item(0, 3).text() == "USER")
+shot(kd, "gcode_import_keywords")
+n = len(kd.rows)
+kd.delete("WIPER")
+check("DELETE removes it", len(kd.rows) == n - 1 and kd.table.item(0, 0).text() == "PARTING BLADE")
+kd.close()
 dlg.close()
 
 print("FAILED: " + ", ".join(failures) if failures else "ALL OK")

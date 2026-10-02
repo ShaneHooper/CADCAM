@@ -7,7 +7,11 @@ starts - it just has no File > Import G-code... entry.
     parser.py   lathe G-code -> one canonical list of moves   (stdlib only)
     detect.py   lathe / mill tells                              (stdlib only)
     stock.py    stock + Z0 guesses for the Setup screen         (stdlib only)
-    wizard.py   the import window                               (Qt; imported only by register)
+    keywords.py comment keywords: table, JSON, matching         (stdlib only)
+    inserts.py  insert codes (ANSI / ISO) and sizes in comments (stdlib only)
+    tooling.py  the tool list: READ / GUESSED / UNKNOWN / DEFINED (stdlib only)
+    wizard.py, tools_page.py, keywords_page.py, widgets.py    the import window
+                                                (Qt; imported only by register)
 
 The stdlib half never imports Qt, so G-SEND.IO's CAM side can use it headless.
 """
