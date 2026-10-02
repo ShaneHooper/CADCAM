@@ -242,6 +242,9 @@ FACE_PULL = 0.02            # G72 pull-off (45°) after each facing pass
 CONTOUR_MILL = {"type": "contour", "tool": 2, "tool_dia": 0.5, "stepdown": 0.25, "leave": 0.0,
                 "bottom_offset": 0.0, "direction": "climb", "rpm": 5000.0, "feed": 30.0, "plunge": 10.0,
                 "lead": 0.1, "clearance": 0.5}
+MILL_ROUGH = {"type": "rough", "tool": 2, "tool_dia": 0.5, "stepdown": 0.1, "stepover": 40.0, "leave": 0.02,
+              "leave_floor": 0.01, "direction": "climb", "rpm": 5000.0, "feed": 40.0, "plunge": 10.0,
+              "clearance": 0.5, "islands": [], "boundary": None}
 ROUGH_TURN = {"type": "rough", "tool": 2, "stepdown": 0.05, "leave_x": 0.01, "leave_z": 0.005, "retract": 0.02,
               "past_back": 0.0, "sfm": 600.0, "ipr": 0.01, "max_rpm": 3000.0, "clearance": 0.1, "output": "cycle",
               "start_at": None, "end_at": None, "start_ext": 0.0, "internal": False, "bore_dia": 0.0}
@@ -281,9 +284,7 @@ def new_op(setup: dict, kind: str = "face") -> dict:
             raise ValueError("2D Contour needs a Milling setup")
         return copy.deepcopy(CONTOUR_MILL)
     if kind == "rough":
-        if setup["type"] != TURNING:
-            raise ValueError("Roughing needs a Turning setup")
-        return copy.deepcopy(ROUGH_TURN)
+        return copy.deepcopy(ROUGH_TURN if setup["type"] == TURNING else MILL_ROUGH)
     if kind == "drill":
         return copy.deepcopy(DRILL_MILL if setup["type"] == MILLING else DRILL_TURN)
     if kind == "groove":
@@ -429,23 +430,28 @@ def contour_toolpath(bbox, setup: dict, op: dict, loops) -> list[tuple]:
     w = wcs(bbox, setup)
     o = w["origin"]
     lo, hi = stock_box(bbox, setup)
-    top, bottom = hi[2] - o[2], bbox[0][2] - o[2] - op["bottom_offset"]
-    levels = _levels(top, bottom, op["stepdown"])
+    top, part_bottom = hi[2] - o[2], bbox[0][2] - o[2]
     safe = top + op["clearance"]
     moves = []
     for loop in loops:
-        pts = [(x - o[0], y - o[1]) for x, y in loop]
+        # a picked chain: {"pts", "bottom" (its floor, model Z), "inside" (a pocket / bore wall)}
+        inside = isinstance(loop, dict) and loop.get("inside", False)
+        bottom = (loop["bottom"] - o[2] if isinstance(loop, dict) and "bottom" in loop else part_bottom) \
+            - op["bottom_offset"]
+        levels = _levels(top, bottom, op["stepdown"])
+        pts = [(x - o[0], y - o[1]) for x, y in (loop["pts"] if isinstance(loop, dict) else loop)]
         area = sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(pts, pts[1:] + pts[:1])) / 2
-        if (area > 0) == (op["direction"] == "climb"):
-            pts.reverse()                       # climb: clockwise; conventional: counter-clockwise
-        cw = op["direction"] == "climb"
+        climb = op["direction"] == "climb"
+        if (area > 0) == (climb != inside):
+            pts.reverse()                       # climb: clockwise outside, counter-clockwise inside
+        cw = climb != inside
         k = max(range(len(pts)), key=lambda i: math.dist(pts[i], pts[(i + 1) % len(pts)]))
         a, b = pts[k], pts[(k + 1) % len(pts)]
         start = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
         ring = [start] + pts[k + 1:] + pts[:k + 1] + [start]
         d = math.dist(a, b) or 1.0
         dx, dy = (b[0] - a[0]) / d, (b[1] - a[1]) / d
-        nx, ny = (-dy, dx) if cw else (dy, -dx)            # outward, away from the part
+        nx, ny = (-dy, dx) if climb else (dy, -dx)         # away from the wall (out / into the pocket)
         lead = (start[0] + nx * op["lead"], start[1] + ny * op["lead"])
         moves.append(("rapid", (lead[0], lead[1], safe)))
         moves.append(("rapid", (lead[0], lead[1], top + 0.1)))
@@ -454,6 +460,86 @@ def contour_toolpath(bbox, setup: dict, op: dict, loops) -> list[tuple]:
             moves += [("feed", (x, y, z)) for x, y in ring]
             moves.append(("feed", (lead[0], lead[1], z)))
         moves.append(("rapid", (lead[0], lead[1], safe)))
+    return moves
+
+
+def mill_rough_layers(bbox, setup: dict, op: dict) -> list[tuple]:
+    """Mill Roughing's depths: [(z WCS, [index of each island standing at that depth])], from just
+    under the stock top down to the islands' floor + floor stock. An island (a picked
+    kernel.slice_chains wall) stands at depths between its floor z0 and its top z1."""
+    op = validate_op(setup, op)
+    isl = op.get("islands") or []
+    if not isl:
+        raise ValueError("pick the geometry to rough around (the select button, then the part's walls)")
+    o = wcs(bbox, setup)["origin"]
+    lo, hi = stock_box(bbox, setup)
+    top = hi[2] - o[2]
+    floor = min(c["z0"] for c in isl) - o[2] + op["leave_floor"]
+    if floor >= top - 1e-9:
+        raise ValueError("nothing to rough: the picked walls start at the stock top")
+    out = []
+    for z in _levels(top, floor, op["stepdown"]):
+        zm = z + o[2]                                        # back in model Z
+        out.append((z, [i for i, c in enumerate(isl) if c["z0"] - 1e-6 <= zm - op["leave_floor"] < c["z1"] - 1e-9
+                        or c["z0"] - 1e-6 <= zm < c["z1"] - 1e-9]))
+    return out
+
+
+def _inside(p, loop) -> bool:
+    x, y = p
+    c = False
+    for (x0, y0), (x1, y1) in zip(loop, loop[1:] + loop[:1]):
+        if (y0 > y) != (y1 > y) and x < x0 + (y - y0) * (x1 - x0) / (y1 - y0):
+            c = not c
+    return c
+
+
+def mill_rough_toolpath(bbox, setup: dict, op: dict, layers) -> list[tuple]:
+    """Mill Roughing: clear the stock around the picked islands, layer by layer. `layers` =
+    [(z WCS, passes)] with passes = kernel.clearing_passes for that depth's islands (model XY,
+    tool center paths, outermost first). Each layer: the outside passes inward (the first runs
+    in the air past the stock), then the passes round the islands from the middle out; a short
+    hop to the next pass is fed at depth, a long one goes up and over. Climb = counter-clockwise
+    on the outside, clockwise round islands."""
+    op = validate_op(setup, op)
+    o = wcs(bbox, setup)["origin"]
+    lo, hi = stock_box(bbox, setup)
+    safe = hi[2] - o[2] + op["clearance"]
+    climb = op["direction"] == "climb"
+    hop = op["tool_dia"] * 1.01
+    moves, at = [], None
+    for z, passes in layers:
+        outer, inner = [], []
+        for k, loops in enumerate(passes):
+            for q in loops:
+                q = [(x - o[0], y - o[1]) for x, y in q]
+                around = sum(1 for other in loops if other is not q and len(other) > 2
+                             and _inside((q[0][0] + o[0], q[0][1] + o[1]), other)) % 2 == 1
+                (inner if around else outer).append((k, q))
+        order = sorted(outer, key=lambda t: t[0]) + sorted(inner, key=lambda t: -t[0])
+        for _k, q in order:
+            area = sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(q, q[1:] + q[:1])) / 2
+            island = (_k, q) in inner
+            if (area > 0) != (climb != island):             # outside: CCW, islands: CW (climb)
+                q = q[::-1]
+            if at is not None and at[2] == z:
+                i = min(range(len(q)), key=lambda j: math.dist(at[:2], q[j]))
+            else:
+                i = 0
+            q = q[i:] + q[:i]
+            start = q[0]
+            if at is not None and at[2] == z and math.dist(at[:2], start) <= hop:
+                moves.append(("feed", (start[0], start[1], z)))           # a short hop at depth
+            else:
+                if at is not None:
+                    moves.append(("rapid", (at[0], at[1], safe)))
+                moves += [("rapid", (start[0], start[1], safe)), ("rapid", (start[0], start[1], z + 0.1)),
+                          ("feed", (start[0], start[1], z))]
+            moves += [("feed", (x, y, z)) for x, y in q[1:] + [q[0]]]
+            at = (q[0][0], q[0][1], z)
+    if not moves:
+        raise ValueError("nothing to rough inside the boundary")
+    moves.append(("rapid", (at[0], at[1], safe)))
     return moves
 
 
@@ -895,6 +981,12 @@ def toolpath(bbox, setup: dict, op: dict, radius: float = 0.0, loops=None, profi
         return moves
     if op.get("type") == "groove":
         return groove_toolpath(bbox, setup, op, profile or [], radius)
+    if op.get("type") == "rough" and setup["type"] == MILLING:
+        moves = mill_rough_toolpath(bbox, setup, op, loops or [])
+        if setup.get("x_dir", "+x") != "+x":
+            cx, cy = X_DIRS[setup["x_dir"]][1]
+            moves = [(k, (x * cx + y * cy, -x * cy + y * cx, z)) for k, (x, y, z) in moves]
+        return moves
     if op.get("type") == "rough":
         return rough_toolpath(bbox, setup, op, profile or [], radius)
     if op.get("type") == "finish":

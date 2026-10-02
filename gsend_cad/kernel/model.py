@@ -311,6 +311,147 @@ def outline_loops(bodies, grow: float, tol: float = 0.0005) -> list[list[tuple]]
     return loops
 
 
+def _wire_pts(w, tol: float = 0.0005) -> list[list[float]]:
+    """A closed wire as an XY point loop (arcs split to within tol), no repeated end point."""
+    pts = []
+    edges = w.order_edges() if hasattr(w, "order_edges") else w.edges()
+    for e in edges:
+        n = 1 if e.geom_type == GeomType.LINE else \
+            max(4, int(math.ceil(e.length / max(math.sqrt(8 * tol * max(e.radius, 1e-6)) if e.geom_type == GeomType.CIRCLE
+                                                 else 0.02, 1e-3))))
+        seg = [[p.X, p.Y] for p in e.positions([i / n for i in range(n + 1)])]
+        if pts and math.dist(pts[-1], seg[0]) > math.dist(pts[-1], seg[-1]):
+            seg.reverse()
+        pts.extend(seg[1:] if pts else seg)
+    if len(pts) > 2 and math.dist(pts[0], pts[-1]) < 1e-6:
+        pts.pop()
+    return pts
+
+
+def slice_chains(bodies) -> list[dict]:
+    """Every outline of the parts seen from above, level by level: what 2D Contour / mill
+    Roughing pick. [{"pts": XY loop, "z0": floor, "z1": top, "hole": inside wall (a pocket /
+    bore) or not}] - the hub's round wall, the plate's outside, a pocket's wall... A wall that
+    runs through several levels is one chain."""
+    out = []
+    for b in bodies:
+        lo, hi = b.bbox()
+        zs = {lo[2], hi[2]}
+        for f in b.shape.faces():
+            if f.geom_type == GeomType.PLANE and abs(abs(f.normal_at(f.center()).Z) - 1) < 1e-9:
+                zs.add(f.center().Z)
+        zs = sorted(zs)
+        for z0, z1 in zip(zs, zs[1:]):
+            if z1 - z0 < 1e-6:
+                continue
+            for f in b.shape.intersect(Plane.XY.offset((z0 + z1) / 2)).faces():
+                for w, hole in [(f.outer_wire(), False)] + [(x, True) for x in f.inner_wires()]:
+                    pts = _wire_pts(w)
+                    if len(pts) < 3:
+                        continue
+                    same = next((c for c in out if c["hole"] == hole and abs(c["z1"] - z0) < 1e-6
+                                 and len(c["pts"]) == len(pts) and _same_loop(c["pts"], pts)), None)
+                    if same:
+                        same["z1"] = z1                  # the same wall, one level up
+                    else:
+                        out.append({"pts": pts, "z0": z0, "z1": z1, "hole": hole})
+    return out
+
+
+def _same_loop(a, b, tol=1e-5):
+    k = min(range(len(b)), key=lambda i: math.dist(a[0], b[i]))
+    if math.dist(a[0], b[k]) > tol:
+        return False
+    n = len(a)
+    return all(math.dist(a[i], b[(k + i) % n]) < tol for i in range(n)) or \
+        all(math.dist(a[i], b[(k - i) % n]) < tol for i in range(n))
+
+
+def _poly_face(pts):
+    return Face(Wire.make_polygon([(x, y, 0) for x, y in pts], close=True))
+
+
+def _offset_face(face, d: float) -> list:
+    """The face's outline offset by d (+ out, - in), as XY loops; [] when nothing is left."""
+    from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeOffset
+    from OCP.GeomAbs import GeomAbs_Arc
+    from build123d import Compound
+    if abs(d) < 1e-12:
+        return [_wire_pts(w) for w in [face.outer_wire()] + face.inner_wires()]
+    mk = BRepOffsetAPI_MakeOffset(face.wrapped, GeomAbs_Arc)
+    try:
+        mk.Perform(d)
+    except Exception:
+        return []
+    if not mk.IsDone():
+        return []
+    return [p for p in (_wire_pts(w) for w in Compound(mk.Shape()).wires()) if len(p) > 2]
+
+
+def offset_loop(pts, d: float) -> list[list]:
+    """A closed XY loop grown by d (shrunk when d < 0): where a tool center runs around it."""
+    return _offset_face(_poly_face(pts), d)
+
+
+def chain_face(bodies, chain):
+    """The exact face (real arcs, not points) inside a slice_chains chain: the part cut just
+    above the chain's floor, the wire that is that chain. None if it isn't found."""
+    xs, ys = [p[0] for p in chain["pts"]], [p[1] for p in chain["pts"]]
+    want = (min(xs), min(ys), max(xs), max(ys))
+    z = chain["z0"] + min(1e-3, (chain["z1"] - chain["z0"]) / 2)
+    for b in bodies:
+        for f in b.shape.intersect(Plane.XY.offset(z)).faces():
+            f = Pos(0, 0, -z) * f
+            for w in [f.outer_wire()] + f.inner_wires():
+                bb = w.bounding_box()
+                if all(abs(a - c) < 3e-3 for a, c in zip((bb.min.X, bb.min.Y, bb.max.X, bb.max.Y), want)):
+                    return Face(w)
+    return None
+
+
+def _grow(face, d):
+    """A face's outline grown by d (shrunk when d < 0), arcs kept, as a Face; None when nothing
+    is left. (build123d's offset_2d: OCC's MakeOffset crashes on a one-circle face.)"""
+    if abs(d) < 1e-12:
+        return face
+    try:
+        w = face.outer_wire().offset_2d(d, kind=Kind.ARC)
+        f = Face(w)
+        return f if f.area > 1e-9 else None
+    except Exception:
+        return None
+
+
+def clearing_passes(boundary, grow_boundary: float, islands, grow_islands: float, step: float,
+                    max_passes: int = 400) -> list[list]:
+    """Mill Roughing: where the tool center runs, pass after pass. The area = `boundary` (an XY
+    loop, or an exact Face) grown by grow_boundary (- = shrunk) less every island (exact Faces,
+    see chain_face) grown by grow_islands; pass k is its outline offset k x step inward, until
+    nothing is left. [[loop, ...] per pass]."""
+    base = boundary if isinstance(boundary, Face) else _poly_face(boundary)
+    passes = []
+    for k in range(max_passes):                      # pass k: boundary shrunk k x step, islands grown
+        outer = _grow(base, grow_boundary - k * step)
+        if outer is None:
+            break
+        region = outer
+        for isl in islands:
+            g = _grow(isl, grow_islands + k * step)
+            if g is not None:
+                region = region - g
+        faces = region.faces() if hasattr(region, "faces") else [region]
+        loops = [p for f in faces if f.area > 1e-9 for w in [f.outer_wire()] + f.inner_wires()
+                 if len(p := _wire_pts(w)) > 2]
+        if not loops:
+            break
+        passes.append(loops)
+    return passes
+
+
+def _area(pts):
+    return sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(pts, pts[1:] + pts[:1])) / 2
+
+
 def model_snap_points(bodies) -> list[tuple]:
     """Points a WCS can be picked on: [((x, y, z), kind)] with kind 'end' (edge ends / vertices),
     'mid' (edge middles) and 'center' (circle and arc centers), duplicates merged."""

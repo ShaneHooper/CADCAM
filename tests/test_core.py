@@ -461,8 +461,7 @@ def test_od_rough_toolpath_and_g71():
                              cam.toolpath(box, s, {**op, "output": "cycle"}, 1.0, profile=prof))], "fanuc", 1)
     assert "G71 U0.05 R0.02" in g and "G71 P100 Q101 U0.02 W0.005 F0.01" in g
     assert "N100 G00 X1." in g and "X2. Z-1.55" in g and "N101 X2.3" in g
-    with pytest.raises(ValueError):
-        cam.new_op(cam.new_setup("milling"), "rough")
+    assert cam.new_op(cam.new_setup("milling"), "rough")["islands"] == []   # mill Roughing: its own fields
 
 
 def test_turning_contour_finish_and_g70():

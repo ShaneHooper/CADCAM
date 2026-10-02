@@ -116,6 +116,23 @@ class Panel(QFrame):
         lb.setObjectName("val")
         return lb
 
+    def keyPressEvent(self, ev):
+        """Esc from a checkbox / list / button in the panel closes it like Esc in the view."""
+        if ev.key() == Qt.Key_Escape:
+            _escape_to_window(self, ev)
+            ev.accept()
+            return
+        super().keyPressEvent(ev)
+
+
+def _escape_to_window(w, ev):
+    """Esc in a panel (not undoing a half-typed value): the main window handles it as if pressed
+    in the view - Rotate / a toolpath / Extrude... closes (Shane 10/2/26)."""
+    win = w.window()
+    if hasattr(win, "handle_key"):
+        win.viewport.plotter.setFocus()
+        win.handle_key(ev)
+
 
 # ------------------------------------------------------------------ sketch
 class NumBox(QDoubleSpinBox):
@@ -134,8 +151,12 @@ class NumBox(QDoubleSpinBox):
 
     def keyPressEvent(self, ev):
         if ev.key() == Qt.Key_Escape:
+            typed = self.lineEdit().text() != self.textFromValue(self.value()) + self.suffix() and \
+                self.lineEdit().text() != self.prefix() + self.textFromValue(self.value()) + self.suffix()
             self.setValue(self.value())     # drops the half-typed text
             self.clearFocus()
+            if not typed:                   # nothing typed: Esc closes the panel / ends the command
+                _escape_to_window(self, ev)
         elif ev.key() in (Qt.Key_Tab, Qt.Key_Backtab):
             return super().keyPressEvent(ev)
         else:
@@ -468,7 +489,11 @@ class XformPanel(Panel):
         if kind in ("rotate", "mirror"):
             self.copy = add("copy", "Keep original", QCheckBox("Copy"))
             self.copy.setChecked(kind == "mirror")
-            self.copy.toggled.connect(lambda *_: s.xform_preview())
+            self.copy.toggled.connect(lambda *_: (self.show_rows(), s.xform_preview()))
+        if kind == "rotate":                     # Copy on: how many in all, equally spaced
+            self.total_n = add("total_n", "Total (incl. original)", num(2, 0, 2, 500))
+            self.total_n.setToolTip("4 = the original + 3 copies, 90° apart (the angle follows; type it to change)")
+            self.total_n.valueChanged.connect(lambda v: self.angle.setValue(360.0 / max(int(v), 1)))
         self.info = QLabel("")                   # one line: a wrapping label sizes wrong (see SketchPalette.fit)
         self.info.setStyleSheet(f"color:{theme.FG2};padding:4px 10px;")
         self.v.addWidget(self.info)
@@ -495,6 +520,8 @@ class XformPanel(Panel):
                 self.rows[k].setVisible(not circ)
         if self.kind == "mirror":
             self.rows["line"].setVisible(self.about.currentData() == "line")
+        if self.kind == "rotate":
+            self.rows["total_n"].setVisible(self.copy.isChecked())
         self.adjustSize()
         self.setFixedHeight(self.sizeHint().height())
 
@@ -1086,10 +1113,13 @@ class SketchSession:
 
     def clear_selection(self):
         """The view bar's trash button: drop what's selected / picked (shapes stay)."""
-        if self.xpanel is not None:
-            self.picked = []
-            self.xform_preview()
         self.multi = []
+        if self.xpanel is not None:              # Rotate / Mirror / Pattern stays open, nothing picked
+            self.picked = []
+            self.sel = None
+            self.redraw()
+            self.xform_preview()
+            return
         self.select(None)
         self.redraw()
 
@@ -1151,7 +1181,11 @@ class SketchSession:
             def f(es):
                 return sk.mirrored(es, a, b)
         if p.copy.isChecked():
-            new = f(src)
+            if kind == "rotate":                 # Total: the original + copies, each one more angle round
+                c, a = (p.cx.value(), p.cy.value()), p.angle.value()
+                new = [q for k in range(1, int(p.total_n.value())) for q in sk.rotated(src, c, a * k)]
+            else:
+                new = f(src)
             return self.ents + new, self.origin + [None] * len(new)
         ents, origin = [], []
         for i, e in enumerate(self.ents):

@@ -124,6 +124,8 @@ and its size. Tick <b>Dimensions: All</b> to see every shape's dimensions at onc
 <li>Click <b>×</b> next to any shape in the palette list to delete that one.</li>
 <li><b>Clear</b> removes everything; <b>Cancel</b> leaves without keeping the sketch.</li>
 <li><b>Esc</b> drops a half-drawn shape; press it again to put the tool down.</li>
+<li>In a panel (Rotate, a toolpath...), <b>Esc</b> closes it and leaves that function, even while a box in the
+panel has the cursor (if you had half-typed a value, the first Esc just undoes the typing).</li>
 <li><b>Right-click</b> (without dragging) while drawing: <b>Done</b> puts the tool down (ends a line chain),
 <b>Cancel this shape</b> drops the half-drawn one, <b>Finish Sketch</b>. Right drag still pans.</li>
 </ul>
@@ -153,7 +155,8 @@ sides, center X / Y and angle. Its dimensions show AF and AC; right-click one to
 drop one). A shape that was selected is picked already. The result shows faintly; <b>OK</b> or Enter applies,
 <b>CANCEL</b> or Esc puts the tool down. Each one is a single Ctrl+Z.</li>
 <li><b>Rotate</b>: angle (counter-clockwise +), center (type X / Y or click the arrow then a point in the
-sketch; it snaps to ends and centers; clicking a circle, arc or polygon takes its center). <b>Keep original</b> makes a turned copy instead.</li>
+sketch; it snaps to ends and centers; clicking a circle, arc or polygon takes its center). <b>Keep original</b> makes copies instead: <b>Total</b> is how many in all, the original included, and the
+angle follows (4 = 90° apart, equally spaced round the center; type the angle to change it).</li>
 <li><b>Mirror</b>: across the Y axis, the X axis or a line in the sketch (click the arrow, then the line).
 Keeps the original by default.</li>
 <li><b>Pattern</b>: <b>Circular</b> = count and angle about a center (360 = evenly all the way round, e.g. a bolt
