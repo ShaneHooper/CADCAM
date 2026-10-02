@@ -34,6 +34,7 @@ PATHS = {
     "mirror": '<path d="M12 3v18" stroke-dasharray="2 2"/><path d="M9 6 3 18h6zM15 6l6 12h-6z"/>',
     "pattern": '<circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/>',
     "tools": '<path d="M14 4a4 4 0 0 0-4 5L4 15l3 3 6-6a4 4 0 0 0 5-4l-2 2-3-1-1-3z"/>',
+    "xline": '<path d="M2 12h20M6 8.5 2.5 12 6 15.5M18 8.5l3.5 3.5-3.5 3.5"/>',
     "line": '<path d="M4 20 20 4"/><circle cx="4" cy="20" r="1.5"/><circle cx="20" cy="4" r="1.5"/>',
     "rect": '<rect x="4" y="6" width="16" height="12"/>',
     "crect": '<rect x="4" y="6" width="16" height="12"/><path d="M12 9v6M9 12h6"/>',

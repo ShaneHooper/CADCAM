@@ -276,7 +276,9 @@ class MainWindow(QMainWindow):
                     and (show_all or self.doc.sketch_shown(f, consumed)):
                 fr = self.doc.sketch_plane(f)
                 line = lambda e: [pl.to_world(fr, q, 0.004) for q in sk.entity_points(e)]
-                vp.add_lines("sketches", [line(e) for e in f["ents"] if e.get("src") != "ASSUMED"])
+                # (parallel lines are drawing aids: they show only while the sketch is open)
+                vp.add_lines("sketches", [line(e) for e in f["ents"] if e.get("src") != "ASSUMED"
+                                          and e["type"] != "xline"])
                 # pieces the G-code import only ASSUMED (a guessed nose radius or tool): warning yellow
                 vp.add_lines("sketches", [line(e) for e in f["ents"] if e.get("src") == "ASSUMED"], color=theme.WARN)
         vp.render()
