@@ -20,6 +20,7 @@ from . import keywords as kw
 from . import flip as fl
 from .build import build_document
 from .detect import detect_machine
+from .fit import GRID_INCH, GRID_MM
 from .keywords_page import KeywordsDialog
 from .ops_page import OpsPage
 from .parser import Flag, parse_program
@@ -448,10 +449,14 @@ class ImportWizard(QDialog):
                 self._recon = Reconstruction(ok=False, error=f"{type(exc).__name__}: {exc}")
         return self._recon
 
-    # ---- Phase 5: the part ----
+    def grid(self) -> float:
+        """The program's own resolution in inches: what the fitted profile's clean values snap to."""
+        return GRID_INCH if self.program.units == "inch" else GRID_MM / 25.4
+
+    # ---- the part: Phase 5 (sketch + revolve) and Phase 6 (clean values, ASSUMED marked) ----
     def build_part(self):
         """BUILD PART: the fitted outline as a sketch + a revolve, as a new part in the main window."""
-        built = build_document(self.reconstruction(), Path(self.path).stem)
+        built = build_document(self.reconstruction(), Path(self.path).stem, self.grid())
         if not built.ok:
             QMessageBox.warning(self, "Import G-code", built.error)
             return
@@ -463,8 +468,11 @@ class ImportWizard(QDialog):
         win.dirty = True                                # an import is unsaved work until it is saved
         f = built.fit
         win.viewport.show_toast(f"{built.doc.name} · {f.count('line')} lines + {f.count('arc')} arcs, revolved")
+        warn = (f" {f.assumed} piece{'s' if f.assumed != 1 else ''} only ASSUMED (yellow in the sketch): check "
+                f"{'them' if f.assumed != 1 else 'it'} against the drawing.") if f.assumed else ""
         win.message(f"Built from {Path(self.path).name}: sketch Profile ({f.count('line')} lines, {f.count('arc')} arcs, "
-                    "worst fit {:.5f}) + Revolve1. Switch to CAM and add a Turning setup to program it.".format(f.max_dev))
+                    "worst fit {:.5f}) + Revolve1.".format(f.max_dev) + warn
+                    + " Switch to CAM and add a Turning setup to program it.")
         self.accept()
 
     # ---- keywords ----

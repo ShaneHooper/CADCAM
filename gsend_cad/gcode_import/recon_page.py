@@ -14,8 +14,14 @@ from .widgets import MONO_CSS, button, head, toggle
 def fit_text(rec, fit) -> str:
     if fit is None or not fit.ok:
         return f"{len(rec.edges)} segments" + (f"  (NOT FITTED: {fit.error})" if fit is not None else "")
-    return (f"{fit.segments} segments fitted to {fit.count('line')} line{'s' if fit.count('line') != 1 else ''} + "
+    text = (f"{fit.segments} segments fitted to {fit.count('line')} line{'s' if fit.count('line') != 1 else ''} + "
             f"{fit.count('arc')} arc{'s' if fit.count('arc') != 1 else ''}  (worst fit {fit.max_dev:.5f})")
+    if fit.snapped:
+        text += f"\n{'':<16} {fit.snapped} value{'s' if fit.snapped != 1 else ''} cleaned to the program's resolution"
+    if fit.assumed:
+        text += (f"\n{'':<16} {fit.assumed} piece{'s' if fit.assumed != 1 else ''} only ASSUMED "
+                 "(yellow in the sketch, never rounded)")
+    return text
 
 
 def profile_summary(rec, needs_type: int = 0, fit=None) -> str:
@@ -118,7 +124,7 @@ class ReconPage(QWidget):
         self.preview.show_setup(wiz.model.moves, (zb, zf, s["od"], s["id"]),
                                 "" if rec.ok else f"NO PROFILE\n{rec.error}", profile=rec.edges if rec.ok else None)
         needs = sum(1 for o in wiz.ops_page.ops if o.confidence == "NEEDS TYPE")
-        fit = fit_outline(rec.edges) if rec.ok else None
+        fit = fit_outline(rec.edges, wiz.grid()) if rec.ok else None
         self.summary.setText(profile_summary(rec, needs, fit))
         self.build_btn.setEnabled(bool(rec.ok and fit is not None and fit.ok))
         self.notes.setPlainText(notes_text(rec) if rec.ok else rec.error)

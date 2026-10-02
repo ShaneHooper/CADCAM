@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 from ..core import profiles as pf
 from ..core.document import Document
-from .fit import Fit, fit_outline, to_entities
+from .fit import GRID_INCH, Fit, fit_outline, to_entities
 
 
 @dataclass
@@ -23,11 +23,12 @@ class Built:
     fit: Fit | None = None
 
 
-def build_document(rec, name: str = "Imported part") -> Built:
-    """rec: a Reconstruction. Returns a new Document holding the profile sketch and the revolve."""
+def build_document(rec, name: str = "Imported part", grid: float | None = GRID_INCH) -> Built:
+    """rec: a Reconstruction. Returns a new Document holding the profile sketch and the revolve.
+    grid: the program's resolution in inches; the EXACT geometry is snapped onto it (fit.py)."""
     if not rec.ok:
         return Built(False, f"no profile to build: {rec.error}")
-    fit = fit_outline(rec.edges)
+    fit = fit_outline(rec.edges, grid)
     if not fit.ok:
         return Built(False, f"could not fit the outline: {fit.error}", fit=fit)
     ents = to_entities(fit)

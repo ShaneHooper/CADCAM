@@ -18,7 +18,7 @@ Coordinates: (z, radius). The outline carries diameter; it is halved here.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from ..core import sketch as sk
 
@@ -34,6 +34,9 @@ ARC_TOL = 2e-4                  # every vertex of an arc's run is this close to 
                                 # nose radius pass as one big arc (measured: 6.6e-4 off on a shoulder).
                                 # A chord cut by a boolean sits off the circle by its sagitta, 1.7e-5 on a
                                 # 1/32 nose and 1.3e-4 on a 1/4 round insert, so 2e-4 holds them all.
+SNAP_TOL = 5e-6                 # a vertex / radius this close to a grid value IS that value (float and boolean dust)
+GRID_INCH = 1e-4                # an inch program's resolution (diameters and Z); a metric one's is GRID_MM / 25.4
+GRID_MM = 1e-3
 R_MAX = 1000.0
 REGULAR = 1.5                   # the chords between an arc's two end chords differ by at most this factor
 END_LONGER = 1.3                # an end chord is at most this much longer than the longest chord between
@@ -60,8 +63,10 @@ class Fit:
     ok: bool = True
     error: str = ""
     prims: list[Prim] = field(default_factory=list)
-    max_dev: float = 0.0
+    max_dev: float = 0.0        # worst distance of any outline vertex from what replaced it (snapping included)
     segments: int = 0           # outline segments before fitting
+    snapped: int = 0            # vertices moved onto the program's grid (see _snap)
+    assumed: int = 0            # pieces that are only ASSUMED: never snapped, drawn in warning yellow
 
     def count(self, kind: str) -> int:
         return sum(1 for p in self.prims if p.kind == kind)
@@ -152,8 +157,63 @@ def _vertices(edges) -> tuple[list[Pt], list[str], list[str]] | str:
     return pts, tags, tools
 
 
-def fit_outline(edges) -> Fit:
-    """Lines and arcs for a reconstruction's outline (its `edges`), in order, closed."""
+def _snap_value(v: float, g: float, tol: float) -> float:
+    s = round(v / g) * g
+    return s if abs(v - s) <= tol else v
+
+
+def _snap(prims: list[Prim], grid: float) -> tuple[list[Prim], int]:
+    """Clean round values: put every vertex on the program's own resolution (Z and diameters to `grid`) and
+    every arc radius on half of it, wherever the value is within SNAP_TOL of a grid point.
+
+    Only noise moves: a tangent point like Z-0.46875 is 5e-5 from the nearest grid value, so it stays. A vertex
+    is snapped ONCE and shared by the two pieces it joins, so the profile stays closed. Anything touching an
+    ASSUMED piece is left alone (its numbers are a guess, not a reading). Returns the new pieces and how many
+    vertices moved."""
+    n = len(prims)
+    verts: list[Pt] = []
+    moved = 0
+    for k in range(n):
+        z, r = prims[k].p
+        if prims[k].tag != "ASSUMED" and prims[k - 1].tag != "ASSUMED":
+            z2 = _snap_value(z, grid, SNAP_TOL)
+            r2 = _snap_value(2.0 * r, grid, 2.0 * SNAP_TOL) / 2.0
+            if (z2, r2) != (z, r):
+                moved += 1
+            z, r = z2, r2
+        verts.append((z, r))
+    out: list[Prim] = []
+    for k, pr in enumerate(prims):
+        p, q = verts[k], verts[(k + 1) % n]
+        if pr.kind == "line":
+            out.append(replace(pr, p=p, q=q))
+            continue
+        R = pr.r if pr.tag == "ASSUMED" else _snap_value(pr.r, grid / 2.0, SNAP_TOL)
+        ab = _sub(q, p)
+        L = _len(ab)
+        if L < 1e-12:
+            out.append(replace(pr, p=p, q=q))
+            continue
+        R = max(R, L / 2.0)
+        h = math.sqrt(max(R * R - (L / 2.0) ** 2, 0.0))
+        mid = ((p[0] + q[0]) / 2.0, (p[1] + q[1]) / 2.0)
+        nrm = (-ab[1] / L, ab[0] / L)
+        side = 1.0 if (pr.c[0] - mid[0]) * nrm[0] + (pr.c[1] - mid[1]) * nrm[1] >= 0 else -1.0
+        out.append(replace(pr, p=p, q=q, c=(mid[0] + side * h * nrm[0], mid[1] + side * h * nrm[1]), r=R))
+    return out, moved
+
+
+def _dist_to_prim(pt: Pt, pr: Prim) -> float:
+    if pr.kind == "arc":
+        return abs(_len(_sub(pt, pr.c)) - pr.r)
+    return _dist_to_line(pt, pr.p, pr.q)
+
+
+def fit_outline(edges, grid: float | None = GRID_INCH) -> Fit:
+    """Lines and arcs for a reconstruction's outline (its `edges`), in order, closed.
+
+    grid: the program's resolution in inches (GRID_INCH, or GRID_MM / 25.4 for a metric program). The fitted
+    EXACT geometry is snapped onto it (see _snap); None leaves the fit as the outline gave it."""
     res = Fit()
     got = _vertices(edges)
     if isinstance(got, str):
@@ -277,8 +337,12 @@ def fit_outline(edges) -> Fit:
             prims.append(Prim("line", a, b, ptag[i], tool_of(i, i), None, 0.0, True, dev,
                               pieces[i][1] - pieces[i][0] + 1))
             i += 1
+    if grid:
+        prims, res.snapped = _snap(prims, grid)
     res.prims = prims
-    res.max_dev = max((p.dev for p in prims), default=0.0)
+    # the honest number: every vertex of the outline against the pieces that replaced it, after snapping too
+    res.max_dev = max((min(_dist_to_prim(v, pr) for pr in prims) for v in ring[:-1]), default=0.0)
+    res.assumed = sum(1 for p in prims if p.tag == "ASSUMED")
     return res
 
 

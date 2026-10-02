@@ -178,3 +178,79 @@ def test_failures_say_what_is_wrong_and_build_nothing():
     bad = Reconstruction(ok=False, error="nothing is left of the stock")
     b = build_document(bad)
     assert not b.ok and "nothing is left of the stock" in b.error and b.doc is None
+
+
+# ---- Phase 6: clean, round values; ASSUMED pieces are never touched ----
+def _box(dz=0.0, dd=0.0, tags=("EXACT", "EXACT", "EXACT", "AXIS")):
+    """A plain turned part (dia 1.5 x 1.2 long) whose far corner carries dust: dz in Z, dd in diameter."""
+    pts = [(0.0, 0.0), (0.0, 1.5), (-1.2 + dz, 1.5 + dd), (-1.2 + dz, 0.0), (0.0, 0.0)]
+    return [Edge(a[0], a[1], b[0], b[1], t) for a, b, t in zip(pts, pts[1:], tags)]
+
+
+def test_dust_is_cleaned_to_the_programs_resolution():
+    f = fit_outline(_box(dz=-1.2e-6, dd=8e-7))              # Z-1.2000012 and dia 1.5000008
+    zs = sorted({round(v, 12) for p in f.prims for v in (p.p[0], p.q[0])})
+    assert zs == [-1.2, 0.0] and f.snapped >= 1
+    assert sorted({round(2 * v, 12) for p in f.prims for v in (p.p[1], p.q[1])}) == [0.0, 1.5]
+    assert f.max_dev <= 2e-6                                # the dust was all that moved
+    assert len(pf.sketch_regions("sk", to_entities(f))) == 1  # still one closed profile
+
+
+def test_a_real_number_that_is_not_on_the_grid_is_left_alone():
+    """Z-0.46875 (a nose radius's tangent point) is 5e-5 from the nearest 1e-4: a value, not dust."""
+    n, rc, c = 24, 1 / 32, (-0.46875, 0.53125)
+    arc = [(c[0] + rc * math.cos(math.radians(-90 - 90 * i / n)), c[1] + rc * math.sin(math.radians(-90 - 90 * i / n)))
+           for i in range(n + 1)]
+    pts = [(0.0, 0.0), (0.0, 0.5), *arc, (-0.5, 0.0), (0.0, 0.0)]
+    f = fit_outline([Edge(a[0], 2 * a[1], b[0], 2 * b[1], "EXACT") for a, b in zip(pts, pts[1:])])
+    a = next(p for p in f.prims if p.kind == "arc")
+    assert a.p == pytest.approx((-0.46875, 0.5), abs=1e-12) and a.r == pytest.approx(1 / 32, abs=1e-12)
+
+
+def test_an_arc_radius_a_hair_off_snaps_to_its_round_value():
+    n, rc, c = 24, 0.0312496, (-0.46875, 0.53125)           # a radius 4e-7 under 1/32
+    arc = [(c[0] + rc * math.cos(math.radians(-90 - 90 * i / n)), c[1] + rc * math.sin(math.radians(-90 - 90 * i / n)))
+           for i in range(n + 1)]
+    pts = [(0.0, 0.0), (0.0, 0.5), *arc, (-0.5, 0.0), (0.0, 0.0)]
+    f = fit_outline([Edge(a[0], 2 * a[1], b[0], 2 * b[1], "EXACT") for a, b in zip(pts, pts[1:])])
+    assert next(p for p in f.prims if p.kind == "arc").r == 0.03125
+
+
+def test_an_assumed_piece_and_the_corners_it_touches_are_never_rounded():
+    f = fit_outline(_box(dz=-1.2e-6, dd=8e-7, tags=("EXACT", "ASSUMED", "EXACT", "AXIS")))
+    assumed = next(p for p in f.prims if p.tag == "ASSUMED")
+    assert assumed.q[0] == -1.2 + -1.2e-6 and assumed.p[1] * 2 == pytest.approx(1.5)      # its own end points untouched
+    assert f.assumed == 1
+    ents = to_entities(f)
+    assert sum(1 for e in ents if e["src"] == "ASSUMED") == 1 and len(pf.sketch_regions("sk", ents)) == 1
+
+
+def test_no_grid_leaves_the_fit_as_the_outline_gave_it():
+    f = fit_outline(_box(dz=-1.2e-6, dd=8e-7), grid=None)
+    assert f.snapped == 0 and min(p.p[0] for p in f.prims) == pytest.approx(-1.2000012, abs=1e-12)
+
+
+def test_a_metric_program_snaps_to_its_own_resolution():
+    mm = 0.001 / 25.4                                       # 0.001 mm in inches
+    z = -10.0 / 25.4                                        # Z-10 mm
+    dust = z + 1e-7 / 25.4                                  # 1e-7 mm of dust
+    pts = [(0.0, 0.0), (0.0, 1.0), (dust, 1.0), (dust, 0.0), (0.0, 0.0)]
+    f = fit_outline([Edge(a[0], a[1], b[0], b[1], "EXACT") for a, b in zip(pts, pts[1:])], grid=mm)
+    assert min(p.p[0] for p in f.prims) == pytest.approx(-10.0 / 25.4, abs=1e-12) and f.snapped >= 1
+
+
+def test_snapping_keeps_every_fixture_closed_and_within_tolerance():
+    for source, stock in ALL:
+        r = recon(source, stock)
+        f = fit_outline(r.edges)
+        assert f.ok and f.max_dev <= ARC_TOL
+        for a, b in zip(f.prims, f.prims[1:] + f.prims[:1]):
+            assert a.q == b.p
+        assert len(pf.sketch_regions("sk", to_entities(f))) == 1
+
+
+def test_the_summary_says_what_was_cleaned_and_what_is_only_assumed():
+    from gsend_cad.gcode_import.recon_page import fit_text
+    f = fit_outline(_box(dz=-1.2e-6, dd=8e-7, tags=("EXACT", "ASSUMED", "EXACT", "AXIS")))
+    text = fit_text(Reconstruction(edges=_box()), f)
+    assert "ASSUMED" in text and "never rounded" in text
