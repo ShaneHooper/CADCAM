@@ -19,6 +19,7 @@ from dataclasses import dataclass
 import re
 
 from . import keywords as kw
+from .flip import part_of
 from .parser import WORD_RE, Program, _strip_comments
 from .tooling import Tool
 
@@ -88,6 +89,7 @@ class Operation:
     passes: int
     moves: tuple[int, ...]          # indices into program.moves (approach rapids included)
     thread: Thread | None = None
+    part: int = 1                   # 2 for the operations after a flip (OP2), see flip.py
 
 
 # ---- passes: runs of cutting moves between rapids ----
@@ -137,11 +139,13 @@ def _passes(program: Program) -> list[dict]:
             first = cuts[0]
             cyc = first.code.split()[0]
             out.append({"moves": list(run), "tool": first.tool, "comment": first.comment,
-                        "cycle": cyc if cyc in CYCLES else None, "cls": pass_class(cuts)})
+                        "cycle": cyc if cyc in CYCLES else None, "cls": pass_class(cuts),
+                        "part": part_of(program, first)})
             run.clear()
 
     for i, m in enumerate(program.moves):
-        if m.kind == "rapid" or (run and (m.tool != program.moves[run[-1]].tool)):
+        if m.kind == "rapid" or (run and (m.tool != program.moves[run[-1]].tool
+                                          or part_of(program, m) != part_of(program, program.moves[run[-1]]))):
             close()
         if m.kind != "rapid":
             run.append(i)
@@ -150,13 +154,19 @@ def _passes(program: Program) -> list[dict]:
 
 
 def _resolve_sweeps(program: Program, passes: list[dict], bore: float | None):
-    """XSWEEP -> FACE / PARTOFF / GROOVE, from where the sweep sits along Z."""
+    """XSWEEP -> FACE / PARTOFF / GROOVE, from where the sweep sits along Z. Each half of a flip program is
+    judged in its own frame (its own front and back), never against the other's."""
+    for part in sorted({p["part"] for p in passes}):
+        _resolve_part(program, [p for p in passes if p["part"] == part], part, bore)
+
+
+def _resolve_part(program: Program, passes: list[dict], part: int, bore: float | None):
     sweeps = [p for p in passes if p["cls"] == "XSWEEP" and not p["cycle"]]
     if not sweeps:
         return
     z_of = lambda p: program.moves[p["moves"][0]].z1
     top = max(z_of(p) for p in sweeps)
-    cuts = [m for m in program.moves if m.kind != "rapid"]
+    cuts = [m for m in program.moves if m.kind != "rapid" and part_of(program, m) == part]
     bottom = min(min(m.z0, m.z1) for m in cuts)
     for p in sweeps:
         low = min(min(program.moves[i].x0, program.moves[i].x1) for i in p["moves"])
@@ -282,7 +292,7 @@ def build_operations(program: Program, tools: list[Tool], table: list[dict],
 
     groups: list[list[dict]] = []
     for p in passes:
-        key = (p["tool"], p["comment"], p["cycle"] or p["cls"])
+        key = (p["part"], p["tool"], p["comment"], p["cycle"] or p["cls"])
         if groups and groups[-1][0]["_key"] == key:
             groups[-1].append(p)
         else:
@@ -327,7 +337,7 @@ def build_operations(program: Program, tools: list[Tool], table: list[dict],
             type_, found, conf, why = overrides[key], "YOU", YOU, "set by you"
         thread = _thread(program, list(range(first, last + 1)), cycle) if motion in ("THREAD", "G76", "G92") else None
         ops.append(Operation(len(ops) + 1, key, g[0]["tool"], comment, line0, line1, text, found, type_, conf, why,
-                             side, motion, n, tuple(range(prev_end + 1, last + 1)), thread))
+                             side, motion, n, tuple(range(prev_end + 1, last + 1)), thread, g[0]["part"]))
         prev_end = last
         if cls == "DRILL":
             bore = max(bore or 0.0, (tool.size or 0.0) if tool else 0.0)

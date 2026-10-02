@@ -123,6 +123,13 @@ def guess_stock(program: Program) -> StockGuess:
         g.front = 0.0
         g.reasons["front"] = "Z0 is on the stock itself"
 
+    if program.flip is not None and g.z0 != "back":
+        # a flip program (the MODEL: OP2 mirrored into OP1's frame): the bar runs from OP1's stock face to OP2's,
+        # so the overall length and the stock left on both ends are already in the span. No extra inch.
+        g.length = max(STEP, round_up(g.front - g.z_min))
+        g.reasons["length"] = (f"flip program: OP1's stock face (Z{g.front:.4f}) to OP2's (Z{g.z_min:.4f} in OP1's "
+                               f"frame), rounded up to the next {STEP:.3f}")
+        return g
     if g.z0 == "back":
         span = face_top if face_top is not None else g.z_max
         g.reasons["length"] = (f"Z0 to the highest {'facing pass' if face_top is not None else 'cut'} "

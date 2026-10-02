@@ -97,11 +97,15 @@ class _Shape:
     note: str = ""                  # why nothing is cut, when kind == "none"
 
 
-def tool_shape(tool: Tool | None, side: str) -> _Shape:
+def tool_shape(tool: Tool | None, side: str, flipped: bool = False) -> _Shape:
+    """flipped: an OP2 tool - the part is turned end for end, so the tool's body lies the other way along Z."""
     if tool is None or tool.type == kw.UNKNOWN:
         rdir = -1 if side == "ID" else 1
-        return _Shape("insert", ts.insert(0.0, None, None, 1, rdir), (0.0, 0.0), "unknown", 0.0, rdir, 1)
+        zd = -1 if flipped else 1
+        return _Shape("insert", ts.insert(0.0, None, None, zd, rdir), (0.0, 0.0), "unknown", 0.0, rdir, zd)
     zdir = -1 if tool.hand == "LH" else 1
+    if flipped:
+        zdir = -zdir
     rdir = -1 if tool.side == "ID" else 1
     if tool.type in NOSED:
         ins = parse_insert(tool.insert)
@@ -111,7 +115,8 @@ def tool_shape(tool: Tool | None, side: str) -> _Shape:
     if tool.type in ("DRILL", "SPOT DRILL"):
         if not tool.size:
             return _Shape("none", note=f"T{tool.number} ({tool.type.lower()}) has no diameter - its hole is not cut")
-        return _Shape("drill", ts.drill(tool.size, ts.SPOT_POINT if tool.type == "SPOT DRILL" else ts.DRILL_POINT))
+        return _Shape("drill", ts.drill(tool.size, ts.SPOT_POINT if tool.type == "SPOT DRILL" else ts.DRILL_POINT,
+                                        -1 if flipped else 1))
     if tool.type in ("GROOVE", "CUTOFF", "FACE GROOVE"):
         if not tool.size:
             return _Shape("none", note=f"T{tool.number} ({tool.type.lower()}) has no width - its cuts are left out")
@@ -187,6 +192,8 @@ def _pq_final(program: Program, op: Operation):
     du, dw = w.get("U", 0.0) * k, w.get("W", 0.0) * k
     if program.x_inverted:                              # U is written for the negative-X side: mirror it too
         du = -du
+    if op.part == 2:                                    # OP2's Z is mirrored into OP1's frame, and W with it
+        dw = -dw
     runs, run = [], []
     for m in prof:                                      # split where a rapid broke the contour
         p = [(z - dw, (x - du) / 2.0) for z, x in m.points]
@@ -225,7 +232,7 @@ def reconstruct(program: Program, tools: list[Tool], ops: list[Operation], stock
     for op in ops:
         if op.type == "SKIP":
             continue
-        shape = tool_shape(by.get(op.tool), op.side)
+        shape = tool_shape(by.get(op.tool), op.side, op.part == 2)
         cls_of[op.tool] = shape.cls
         if shape.kind == "none":
             if shape.note and shape.note not in noted:
@@ -267,6 +274,9 @@ def reconstruct(program: Program, tools: list[Tool], ops: list[Operation], stock
                               "(no finish pass at size?). The P-Q contour was used as the profile.")
         swept.setdefault("PQ", []).append(cut)
         remaining = g2.subtract(remaining, cut)
+
+    if program.flip is not None:                        # a flip program: the part ends at the overall length
+        remaining = g2.subtract(remaining, g2.rect(zb - 10.0, -1.0, -program.flip.length, r_out + 1.0))
 
     part = g2.clean(remaining)
     pcs = g2.pieces(part)

@@ -17,11 +17,12 @@ from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog, QFrame, QGridLay
 
 from ..ui import theme
 from . import keywords as kw
+from . import flip as fl
 from .build import build_document
 from .detect import detect_machine
 from .keywords_page import KeywordsDialog
 from .ops_page import OpsPage
-from .parser import parse_program
+from .parser import Flag, parse_program
 from .preview import Preview
 from .recon_page import ReconPage
 from .reconstruct import reconstruct
@@ -66,6 +67,8 @@ def open_import(win, path: str | None = None):
         text = Path(path).read_text(encoding="utf-8", errors="replace")
         dlg = ImportWizard(win, path, text)
         win._gcode_import = dlg
+        if dlg.flip_marker is not None:                 # OP1 and OP2 in one program: ask for the overall length
+            dlg.prompt_flip()
         dlg.exec()
         return dlg
     except Exception as exc:                            # never take the app down with the importer
@@ -73,14 +76,58 @@ def open_import(win, path: str | None = None):
         return None
 
 
+class FlipDialog(QDialog):
+    """The little box a flip program (OP1 and OP2 in one file) opens with: the part's overall length."""
+
+    def __init__(self, parent, marker, default: float):
+        super().__init__(parent)
+        self.setWindowTitle("Flip program")
+        self.setStyleSheet(f"QDialog{{background:{theme.BG};}} QLabel{{color:{theme.FG};}}")
+        v = QVBoxLayout(self)
+        v.setContentsMargins(16, 14, 16, 12)
+        v.setSpacing(10)
+        v.addWidget(_head("Flip program found"))
+        text = QLabel(f'Line {marker.line}: "{marker.text}" starts OP2 in the same program.\n\n'
+                      "Enter the overall length of the part. OP2 runs from the other end: its Z0 sits that far from "
+                      "OP1's Z0, and its tools are turned end for end.")
+        text.setWordWrap(True)
+        text.setMinimumWidth(420)
+        v.addWidget(text)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("OVERALL LENGTH"))
+        self.length = Num(0.001)
+        self.length.setValue(default)
+        self.length.selectAll()
+        row.addWidget(self.length)
+        row.addWidget(QLabel("in"))
+        row.addStretch()
+        v.addLayout(row)
+        hint = QLabel(f"A first guess from how deep OP1 cuts ({default:.4f}); type the real one.")
+        hint.setStyleSheet(f"color:{theme.FG3};font-size:11px;")
+        v.addWidget(hint)
+        foot = QHBoxLayout()
+        foot.addStretch()
+        no, ok = button("NO FLIP"), button("OK", ok=True)
+        no.setToolTip("Read the whole program as one operation")
+        no.clicked.connect(self.reject)
+        ok.clicked.connect(self.accept)
+        ok.setDefault(True)
+        foot.addWidget(no)
+        foot.addWidget(ok)
+        v.addLayout(foot)
+
+
 class ImportWizard(QDialog):
     def __init__(self, win, path: str, text: str):
         super().__init__(win)
         self.win = win
         self.path = path
-        self.program = parse_program(text)
+        self.base_program = parse_program(text)         # as written: each half in its own frame
+        self.program = self.base_program                # ... plus the flip, once the user gives the length
+        self.model = self.program                       # one part in OP1's frame (OP2 mirrored): what Step 4 sees
+        self.flip_marker = fl.find_marker(self.base_program)
         self.detection = detect_machine(self.program.lines)
-        self.guess = guess_stock(self.program)
+        self.guess = guess_stock(self.model)
         self.machine = self.detection.machine
         self.keywords_file = keywords_path(win)
         self.table = kw.load(self.keywords_file)        # keyword table (Settings > Keywords)
@@ -230,6 +277,26 @@ class ImportWizard(QDialog):
         og.setColumnStretch(3, 1)
         col.addLayout(og)
 
+        # a flip program (OP1 and OP2 in one file): shown only when a flip comment was found
+        self.flip_head = _head("Flip program · OP2")
+        col.addWidget(self.flip_head)
+        self.flip_note = QLabel("")
+        self.flip_note.setWordWrap(True)
+        self.flip_note.setStyleSheet(f"color:{theme.FG2};font-size:11px;")
+        col.addWidget(self.flip_note)
+        self.flip_len, self.flip_tag = Num(0.0), Tag("OFF")
+        self.flip_row = QWidget()
+        fg = QGridLayout(self.flip_row)
+        fg.setContentsMargins(0, 0, 0, 0)
+        fg.setHorizontalSpacing(8)
+        fg.addWidget(QLabel("OVERALL LENGTH"), 0, 0)
+        fg.addWidget(self.flip_len, 0, 1)
+        fg.addWidget(self.flip_tag, 0, 2)
+        fg.setColumnStretch(3, 1)
+        col.addWidget(self.flip_row)
+        for w in (self.flip_head, self.flip_note, self.flip_row):
+            w.setVisible(self.flip_marker is not None)
+
         self.flags_head = _head("Flags")
         col.addWidget(self.flags_head)
         self.flags = QPlainTextEdit()
@@ -247,6 +314,7 @@ class ImportWizard(QDialog):
         self.front.valueChanged.connect(lambda: self.edited("front"))
         self.bore.valueChanged.connect(lambda: self.edited(None))
         self.z0.currentIndexChanged.connect(lambda: self.edited("z0"))
+        self.flip_len.valueChanged.connect(lambda v: self.set_flip_length(v))
         return page
 
     # ---- state ----
@@ -260,11 +328,62 @@ class ImportWizard(QDialog):
             tag.set("AUTO", C_GUESS, g.reasons.get(key, ""))
         self.machine_tag.set("AUTO", C_GUESS, self.detection.summary)
         self.set_shape("round")
+        self._show_flags()
+        self._show_flip()
+
+    def _show_flags(self):
+        flags = list(self.program.flags)
+        if self.program.flip is not None:
+            f = self.program.flip
+            flags.insert(0, Flag(f.line, "info", f'flip program: "{f.text}" starts OP2. OP2\'s Z0 is {f.length:.4f} '
+                                                 "from OP1's, on the other end of the part"))
         lines = [f"LINE {f.line:<5} {f.level.upper():<12} {f.text}" if f.line else f"{f.level.upper():<12} {f.text}"
-                 for f in self.program.flags]
+                 for f in flags]
         self.flags.setPlainText("\n".join(lines) if lines else "Nothing flagged.")
-        bad = sum(1 for f in self.program.flags if f.level == "unsupported")
-        self.flags_head.setText(f"FLAGS · {len(self.program.flags)}" + (f" · {bad} NOT READ" if bad else ""))
+        bad = sum(1 for f in flags if f.level == "unsupported")
+        self.flags_head.setText(f"FLAGS · {len(flags)}" + (f" · {bad} NOT READ" if bad else ""))
+
+    # ---- flip programs (OP1 + OP2 in one file) ----
+    def _show_flip(self):
+        m = self.flip_marker
+        if m is None:
+            return
+        f = self.program.flip
+        self.flip_note.setText(
+            f'Line {m.line}: "{m.text}" starts OP2. Type the part\'s overall length and OP2 runs from the other end - '
+            "its Z0 sits that far from OP1's, with the tools turned end for end. 0 = not a flip program."
+            + ("" if f is None else f"  OP2 Z0 is at Z-{f.length:.4f} in OP1's frame."))
+        self.flip_tag.set("SET BY YOU" if f is not None else "OFF", None, "")
+
+    def prompt_flip(self) -> bool:
+        """The little box: the overall length of the part. Cancel leaves the program as one (no flip)."""
+        dlg = FlipDialog(self.win, self.flip_marker, fl.guess_length(self.base_program, self.flip_marker))
+        if dlg.exec() != QDialog.Accepted:
+            return False
+        self._loading = True
+        self.flip_len.setValue(dlg.length.value())
+        self._loading = False
+        self.set_flip_length(dlg.length.value())
+        return True
+
+    def set_flip_length(self, length: float | None):
+        """Tell the program the part's overall length (None or 0: not a flip). OP2 is mirrored into OP1's frame
+        for Step 4 and the previews; the stock length follows unless the user typed one."""
+        if self._loading or self.flip_marker is None:
+            return
+        self.program = (fl.with_flip(self.base_program, self.flip_marker, length) if length and length > 0
+                        else self.base_program)
+        self.model = fl.model(self.program)
+        self.invalidate()
+        self.guess = guess_stock(self.model)
+        self._loading = True
+        if self.tags["length"].text() == "AUTO":
+            self.length.setValue(self.guess.length)
+            self.tags["length"].set("AUTO", C_GUESS, self.guess.reasons["length"])
+        self._loading = False
+        self._show_flags()
+        self._show_flip()
+        self.refresh()
 
     def edited(self, key: str | None):
         if self._loading:
@@ -304,7 +423,7 @@ class ImportWizard(QDialog):
         self.front.setEnabled(self.z0.currentData() == "finished")
         s = self.settings()
         zb, zf = stock_z_range(s["z0"], s["length"], s["front"])
-        self.preview.show_setup(self.program.moves, (zb, zf, s["od"], s["id"]),
+        self.preview.show_setup(self.model.moves, (zb, zf, s["od"], s["id"]),
                                 "" if lathe else "MILL IMPORT NOT BUILT YET")
         if hasattr(self, "ops_page"):
             self.ops_page.reload()                      # stock (a tube's ID) and the preview follow Setup
@@ -322,7 +441,7 @@ class ImportWizard(QDialog):
         """The part as it stands now. Re-run whenever a tool, an operation or the stock changes."""
         if self._recon is None:
             try:
-                self._recon = reconstruct(self.program, self.tools_page.tools, self.ops_page.ops, self.settings(),
+                self._recon = reconstruct(self.model, self.tools_page.tools, self.ops_page.ops, self.settings(),
                                           self.nose_center)
             except Exception as exc:                    # a bad program must not take the window down
                 from .reconstruct import Reconstruction

@@ -115,7 +115,7 @@ class ReconPage(QWidget):
         s = wiz.settings()
         zb, zf = stock_z_range(s["z0"], s["length"], s["front"])
         self.preview.show_toolpath = self.show_path.isChecked()
-        self.preview.show_setup(wiz.program.moves, (zb, zf, s["od"], s["id"]),
+        self.preview.show_setup(wiz.model.moves, (zb, zf, s["od"], s["id"]),
                                 "" if rec.ok else f"NO PROFILE\n{rec.error}", profile=rec.edges if rec.ok else None)
         needs = sum(1 for o in wiz.ops_page.ops if o.confidence == "NEEDS TYPE")
         fit = fit_outline(rec.edges) if rec.ok else None

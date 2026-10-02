@@ -1141,6 +1141,7 @@ class Program:
     flags: list[Flag]
     units: str                      # "inch" or "mm": what the SOURCE was written in
     x_inverted: bool = False        # the source commands negative X diameters; every X here is already mirrored
+    flip: object = None             # flip.Flip when OP2 follows OP1 in this program (see flip.py), else None
 
 
 _KNOWN_G = {0, 1, 2, 3, 4, 17, 18, 19, 20, 21, 28, 32, 40, 41, 42, 50, 53, 54, 55, 56, 57, 58, 59,

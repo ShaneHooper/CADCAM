@@ -235,6 +235,49 @@ check("it is unsaved work, named for the program, and the window closed", win.di
       and not dlg.isVisible())
 shot(win, "gcode_import_built_part")
 
+# ---- flip programs: OP1 and OP2 in one file ----
+from PySide6.QtWidgets import QLabel
+from gsend_cad.gcode_import.wizard import FlipDialog
+
+FLIP = FIXTURE.with_name("flip_part.nc")
+fd = ImportWizard(win, str(FLIP), FLIP.read_text())
+fd.show()
+QTest.qWait(300)
+check("a flip comment is found (line 20) and Setup shows the length row, off until a length is typed",
+      fd.flip_marker is not None and fd.flip_marker.line == 20 and fd.flip_row.isVisible() and fd.flip_tag.text() == "OFF"
+      and fd.program.flip is None)
+check("an ordinary program shows no flip row", not dlg.flip_row.isVisible() and dlg.flip_marker is None)
+box = FlipDialog(win, fd.flip_marker, 1.25)
+check("the little box names the comment and offers a first guess of the length",
+      abs(box.length.value() - 1.25) < 1e-9 and any("FLIP PART" in lab.text() for lab in box.findChildren(QLabel)))
+box.close()
+fd.flip_len.setValue(2.0)
+check("typing the overall length flips the program: OP2's Z0 is that far from OP1's",
+      fd.program.flip is not None and fd.program.flip.length == 2.0 and fd.flip_tag.text() == "SET BY YOU"
+      and abs(fd.model.moves[-1].z1 - (-2.0 - fd.program.moves[-1].z1)) < 1e-9)
+check("the stock length follows the flip (a guess, still AUTO)", abs(fd.length.value() - 2.25) < 1e-9
+      and fd.tags["length"].text() == "AUTO" and "flip program" in fd.tags["length"].toolTip())
+check("the flags list says the program was split", "starts OP2" in fd.flags.toPlainText())
+fd.go(2)
+QTest.qWait(300)
+rows = [fd.ops_page.table.item(r, 0).text() for r in range(fd.ops_page.table.rowCount())]
+check("Step 3 lists OP1's operations and then OP2's, marked", rows == ["1", "2", "3 · OP2", "4 · OP2"])
+fd.go(3)
+QTest.qWait(300)
+frec = fd.reconstruction()
+check("Step 4 makes one 2.000 long part from the two ops (dia 1.5 front, bar, dia 1.0 at the far end)",
+      frec.ok and abs(frec.z_min + 2.0) < 1e-4 and abs(frec.diameter_at(-0.5) - 1.5) < 0.005
+      and abs(frec.diameter_at(-1.35) - 2.0) < 0.005 and abs(frec.diameter_at(-1.75) - 1.0) < 0.005)
+shot(fd, "gcode_import_flip")
+fd.flip_len.setValue(0.0)
+check("a length of 0 turns the flip off", fd.program.flip is None and fd.flip_tag.text() == "OFF")
+fd.flip_len.setValue(2.0)
+win.dirty = False
+fd.build_part()
+bb = win.model.bodies[0].shape.bounding_box()
+check("BUILD PART makes the 2.000 long part", len(win.model.bodies) == 1 and not win.model.errors
+      and abs(bb.min.X + 2.0) < 1e-3 and abs(bb.max.Y - 1.0) < 1e-3)
+
 print("FAILED: " + ", ".join(failures) if failures else "ALL OK")
 win.dirty = False
 win.close()

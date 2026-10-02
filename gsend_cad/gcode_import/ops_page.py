@@ -94,7 +94,8 @@ class OpsPage(QWidget):
         self._loading = True
         self.table.setRowCount(len(self.ops))
         for r, o in enumerate(self.ops):
-            cells = (str(o.index), f"T{o.tool}", o.comment or "—", o.lines, o.found_by, "", o.confidence)
+            cells = (f"{o.index} · OP2" if o.part == 2 else str(o.index), f"T{o.tool}", o.comment or "—", o.lines,
+                     o.found_by, "", o.confidence)
             for c, text in enumerate(cells):
                 item = QTableWidgetItem(text)
                 if c == 6:
@@ -119,9 +120,9 @@ class OpsPage(QWidget):
         wiz.invalidate()
         rec = wiz.reconstruction()                      # live: the profile follows every change
         self.preview.show_toolpath = False              # only the selected operation's moves, over the part
-        self.preview.show_setup(wiz.program.moves, (zb, zf, stock["od"], stock["id"]),
+        self.preview.show_setup(wiz.model.moves, (zb, zf, stock["od"], stock["id"]),
                                 profile=rec.edges if rec.ok else None)
-        self.summary.setText(summary_text(operations.summary(wiz.program, self.ops, wiz.tools_page.tools, stock),
+        self.summary.setText(summary_text(operations.summary(wiz.model, self.ops, wiz.tools_page.tools, stock),
                                           rec))
         self._loading = False
         if self.ops:
