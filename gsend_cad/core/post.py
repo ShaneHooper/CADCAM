@@ -10,10 +10,16 @@ post writes it as a diameter). Inch, absolute, one tool change per operation. Co
 from __future__ import annotations
 
 from . import cam
+from . import nose
 from .cam import FACE_PULL
 
 CONTROLLERS = {"haas": "Haas", "fanuc": "Fanuc (generic)"}
 OFFSETS = ["G54", "G55", "G56", "G57", "G58", "G59"]
+# Cutter comp for a lathe Contour. Off: the part line point to point (no G41 / G42, no nose radius). Machine: the same
+# points, with G42 / G41 and G40 in the program so the control compensates. Computer: no G41 / G42 / G40; the program
+# carries the points that make the nose radius cut the part line (nose.py).
+COMPS = {"off": "Off", "machine": "Machine (G41 / G42)", "computer": "Computer (in the code)"}
+COMP_CODE = {"od": "G42", "id": "G41"}      # an OD tool on the Haas lathes: G42; an ID (bore) tool: G41
 
 
 def num(v: float) -> str:
@@ -52,10 +58,12 @@ class _Modal:
 
 
 def post_setup(setup: dict, ops: list[tuple[dict, list]], controller: str = "haas", program: int = 1000,
-               offset: str = "G54", coolant: bool = True, doc_name: str = "") -> str:
-    """G-code for every operation of a setup, in order."""
+               offset: str = "G54", coolant: bool = True, doc_name: str = "", comp: str = "off") -> str:
+    """G-code for every operation of a setup, in order. comp: cutter comp for a lathe Contour (COMPS)."""
     if controller not in CONTROLLERS:
         raise ValueError(f"controller must be one of {', '.join(CONTROLLERS)}")
+    if comp not in COMPS:
+        raise ValueError(f"cutter comp must be one of {', '.join(COMPS)}")
     if offset not in OFFSETS:
         raise ValueError(f"work offset must be one of {', '.join(OFFSETS)}")
     if not 1 <= int(program) <= 9999:
@@ -71,7 +79,7 @@ def post_setup(setup: dict, ops: list[tuple[dict, list]], controller: str = "haa
     L.append("G20 G18 G40 G80 G99" if turning else "G20 G17 G40 G49 G80 G90")
     g71 = []                                          # (contour, P, Q) of each G71 rough so far
     for k, (op, moves) in enumerate(ops):
-        L += (_lathe_op(setup, op, moves, offset, coolant, controller, 100 * (k + 1), g71) if turning
+        L += (_lathe_op(setup, op, moves, offset, coolant, controller, 100 * (k + 1), g71, comp) if turning
               else (_mill_drill if op.get("type") == "drill" else _mill_op)(setup, op, moves, offset, coolant))
     if turning:
         L += ["G28 U0. W0.", "M30", "%"]
@@ -108,13 +116,56 @@ def _mill_op(setup, op, moves, offset, coolant):
     return [x for x in L if x is not None]
 
 
-def _lathe_op(setup, op, moves, offset, coolant, controller="haas", n=100, g71=None):
+def _with_g(line: str, code: str) -> str:
+    """Add a G word (G41 / G42 / G40) to a motion block: 'G01 Z-1.' -> 'G01 G42 Z-1.'; a block that dropped its
+    modal G01 / G00 just gets it in front."""
+    head = line.split(" ", 1)
+    if head[0] in ("G00", "G01"):
+        return head[0] + f" {code}" + (" " + head[1] if len(head) > 1 else "")
+    return f"{code} {line}".strip()
+
+
+def _comp_plan(op, moves, comp, cycle):
+    """Cutter comp for a lathe Contour. Returns (moves, cycle, notes, code, a, b): the moves to write (the tip's path in
+    computer mode), whether it can still be a canned cycle (comp needs the contour written out, so G70 is not),
+    the comments to put at the top, and for machine comp the G41 / G42 word with the indexes of the approach move
+    (a) and the move that leaves the contour (b + 1) - code is None otherwise."""
+    if op.get("type") != "finish" or comp == "off":
+        return moves, cycle, [], None, None, None
+    r = float(op.get("nose_r") or 0.0)
+    internal = bool(op.get("internal"))
+    notes = []
+    if cycle:
+        cycle = False
+        notes.append("CUTTER COMP: CONTOUR POSTED LINE BY LINE (NOT G70)")
+    feeds = [i for i, (k, _p) in enumerate(moves) if k == "feed"]
+    if comp == "computer":
+        if r <= 0:
+            notes.append("CUTTER COMP COMPUTER: THIS TOOL HAS NO NOSE RADIUS - NOT COMPENSATED")
+        else:
+            try:
+                moves = nose.compensate(moves, r, internal)
+                notes.append(f"CUTTER COMP IN THE CODE: NOSE R{num(r)} - TOOL TIP PATH, NO G41 / G42")
+            except ValueError as exc:
+                notes.append(f"CUTTER COMP COMPUTER: {exc} - NOT COMPENSATED")
+        return moves, cycle, notes, None, None, None
+    code = COMP_CODE["id" if internal else "od"]
+    if len(feeds) < 2 or feeds[-1] + 1 >= len(moves):
+        notes.append("CUTTER COMP MACHINE: NO CONTOUR PASS TO COMPENSATE")
+        return moves, cycle, notes, None, None, None
+    notes.append(f"CUTTER COMP {code} ON AT THE APPROACH, G40 AFTER THE CONTOUR - "
+                 + (f"SET NOSE RADIUS R{num(r)} AND TIP IN THE OFFSET" if r > 0 else "SET NOSE RADIUS AND TIP IN THE OFFSET"))
+    return moves, cycle, notes, code, feeds[0], feeds[-1] + 1
+
+
+def _lathe_op(setup, op, moves, offset, coolant, controller="haas", n=100, g71=None, comp="off"):
     t = int(op.get("tool", 1))
     cycle = op.get("output") == "cycle"
     rough = op.get("type") == "rough"
     kind = op.get("type", "face")
     if kind == "drill":
         return _lathe_drill(op, moves, offset, coolant, controller)
+    moves, cycle, comp_notes, comp_code, comp_on, comp_off = _comp_plan(op, moves, comp, cycle)
     what = {"rough": "ID ROUGH" if op.get("internal") else "OD ROUGH",
             "finish": "ID CONTOUR" if op.get("internal") else "CONTOUR", "face": "FACE",
             "groove": {"od": "OD", "id": "ID", "face": "FACE"}.get(op.get("side"), "OD") + " GROOVE"}[kind] + \
@@ -131,6 +182,8 @@ def _lathe_op(setup, op, moves, offset, coolant, controller="haas", n=100, g71=N
          f"G50 S{int(round(op['max_rpm']))}", f"G96 S{int(round(op['sfm']))} M03" + (" M08" if coolant else "")]
     if note:
         L.insert(2, note)
+    for k, text in enumerate(comp_notes):
+        L.insert(2 + k, _comment(text))
     m = _Modal()
     if cycle:
         if kind == "finish":
@@ -141,11 +194,15 @@ def _lathe_op(setup, op, moves, offset, coolant, controller="haas", n=100, g71=N
         if rough and g71 is not None:
             g71.append((_contour(moves, op), n, n + 1))
         return L + (_g71(moves, op, m, controller, n) if rough else _g72(moves, op, m, controller, n)) + (["M09"] if coolant else []) + ["M05"]
-    for kind, (x, _y, z) in moves:                    # X radius -> diameter
+    for i, (kind, (x, _y, z)) in enumerate(moves):    # X radius -> diameter
         words = [("G", "G00" if kind == "rapid" else "G01"), ("X", num(x * 2)), ("Z", num(z))]
         if kind == "feed":
             words.append(("F", num(op["ipr"])))
         line = m.block(words)
+        if comp_code and i == comp_on:                # machine comp: on at the approach move ...
+            line = _with_g(line, comp_code)
+        elif comp_code and i == comp_off:             # ... off on the first move away from the contour
+            line = _with_g(line, "G40")
         if line and line not in ("G00", "G01"):
             L.append(line)
     L += ["M09" if coolant else None, "M05"]
