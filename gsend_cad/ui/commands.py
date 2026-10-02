@@ -585,6 +585,7 @@ class PlanePickSession:
 
 class SketchSession:
     captures_left = True
+    shows_grid = True                        # the viewport draws its grid on this sketch's plane while it is open
 
     def __init__(self, win, name: str, plane_z: float = 0.0, ents=None, edit_id: str | None = None,
                  plane: dict | None = None):
@@ -800,7 +801,9 @@ class SketchSession:
             self.vp.add_lines("plane_edges", [[pl.to_world(self.frame, q, 0.003) for q in e["pts"]]
                                               for e in self.model_edges], color=theme.FG3, width=1.0)
         others = [e for i, e in enumerate(self.ents) if i != self.sel and i not in self.multi]
-        self.vp.add_lines("sketch", self._lines(others))
+        # a piece the G-code import only ASSUMED (a guessed nose radius or tool) is drawn in warning yellow
+        self.vp.add_lines("sketch", self._lines([e for e in others if e.get("src") != "ASSUMED"]))
+        self.vp.add_lines("sketch", self._lines([e for e in others if e.get("src") == "ASSUMED"]), color=theme.WARN)
         if self.sel is not None:
             self.vp.add_lines("sel", self._lines([self.ents[self.sel]], 0.005), color=theme.FG, width=2.6)
         self.multi = [i for i in self.multi if 0 <= i < len(self.ents)]
