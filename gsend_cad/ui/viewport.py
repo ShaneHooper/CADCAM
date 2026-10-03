@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import os
 from functools import partial
 
 import numpy as np
@@ -16,6 +17,14 @@ from vtkmodules.vtkCommonMath import vtkMatrix4x4
 from vtkmodules.vtkRenderingCore import vtkBillboardTextActor3D, vtkCellPicker, vtkMapper, vtkRenderer
 
 from ..core import plane as pl
+
+# Line rendering switches, for trying alternatives on a machine whose driver draws thin lines with gaps
+# (seen on an AMD Radeon 610M: a 1.5 px axis with a hole in it). Set before starting the app:
+#   GSEND_AA = ssaa (default) | msaa | fxaa | none     the anti-aliasing pass
+#   GSEND_LINES_AS_TUBES = 1                           draw every line as a shaded tube (shader-based width,
+#                                                      independent of the driver's wide-line support)
+AA_MODE = os.environ.get("GSEND_AA", "ssaa").strip().lower()
+LINES_AS_TUBES = os.environ.get("GSEND_LINES_AS_TUBES", "0").strip() == "1"
 from . import icons, theme
 
 VIEWS = {"home": (6, -7, 5), "top": (0, 0, 10), "front": (0, -10, 0), "left": (-10, 0, 0), "right": (10, 0, 0),
@@ -72,7 +81,11 @@ class Viewport(QWidget):
         lay.addWidget(self.plotter, 0, 0)
         p = self.plotter
         p.set_background(theme.BG)
-        p.enable_anti_aliasing("ssaa") if hasattr(p, "enable_anti_aliasing") else None
+        if AA_MODE in ("ssaa", "fxaa") and hasattr(p, "enable_anti_aliasing"):
+            p.enable_anti_aliasing(AA_MODE)
+        elif AA_MODE == "msaa" and hasattr(p, "enable_anti_aliasing"):
+            p.enable_anti_aliasing("msaa", multi_samples=8)
+        pv.global_theme.render_lines_as_tubes = LINES_AS_TUBES      # every add_mesh line from here on
         vtkMapper.SetResolveCoincidentTopologyToPolygonOffset()
         p.renderer.remove_all_lights()
         p.add_light(pv.Light(light_type="headlight", intensity=0.55))
@@ -180,6 +193,7 @@ class Viewport(QWidget):
             a = pv.Actor(mapper=pv.DataSetMapper(polyline_mesh([[tuple(-self.AXIS_REACH * x for x in d),
                                                                 tuple(self.AXIS_REACH * x for x in d)]])))
             a.prop.color, a.prop.line_width, a.prop.lighting = c, 1.5, False
+            a.prop.render_lines_as_tubes = LINES_AS_TUBES
             a.SetPickable(False)
             self.top.AddActor(a)
             self._axis_actors.append(a)
@@ -265,6 +279,7 @@ class Viewport(QWidget):
         actor.prop.line_width = width
         actor.prop.opacity = opacity
         actor.prop.lighting = False
+        actor.prop.render_lines_as_tubes = LINES_AS_TUBES
         self.top.AddActor(actor)
         self._groups.setdefault(group, []).append(actor)
 
