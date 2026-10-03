@@ -63,6 +63,7 @@ class Viewport(QWidget):
         self._right_taken = False            # a right-click a session handled: swallow its release too
         self._rpress = None                  # right press spot: a release there (no pan) = context menu
         self._box0 = None                    # left press spot of a selection box (None = not boxing)
+        self._sk_orbit = None                # sketching, Shift / Alt + left drag orbits: [press spot, last spot, Shift?]
         self.box_cb = None                   # no command running: box / click selects bodies (main window)
         self.click_cb = None
 
@@ -471,9 +472,26 @@ class Viewport(QWidget):
         u, v = pl.to_local(fr, (float(hit[0]), float(hit[1]), float(hit[2])))
         return u, v
 
+    SK_ORBIT_DEG = 0.4                       # degrees of turn per pixel dragged, Shift / Alt + left drag in a sketch
+
+    def _sketch_orbit_to(self, p: QPoint):
+        """Turn the view about its centre by the drag since the last spot (a free trackball turn)."""
+        o = self._sk_orbit
+        dx, dy = p.x() - o[1].x(), p.y() - o[1].y()
+        o[1] = p
+        cam = self.plotter.camera
+        cam.Azimuth(-dx * self.SK_ORBIT_DEG)
+        cam.Elevation(dy * self.SK_ORBIT_DEG)
+        cam.OrthogonalizeViewUp()
+        self.plotter.renderer.ResetCameraClippingRange()
+        self.plotter.render()
+
     # ---------- mouse routing ----------
     def eventFilter(self, obj, ev):
         t = ev.type()
+        if t == QEvent.MouseMove and self._sk_orbit is not None and ev.buttons() & Qt.LeftButton:
+            self._sketch_orbit_to(ev.position().toPoint())
+            return True
         if t == QEvent.MouseMove and self._box0 is not None and ev.buttons() & Qt.LeftButton:
             p = ev.position().toPoint()
             if (p - self._box0).manhattanLength() > 4:
@@ -512,7 +530,7 @@ class Viewport(QWidget):
             # a fast second click arrives as DblClick: it must count as a click, and VTK must
             # never see it (it starts an orbit whose release we swallow = stuck rotating)
             self._press = ev.position().toPoint()
-            boxing = self._box_ok() and not (ev.modifiers() & Qt.ShiftModifier)   # Shift+drag orbits
+            boxing = self._box_ok() and not (ev.modifiers() & (Qt.ShiftModifier | Qt.AltModifier))   # Shift / Alt+drag orbits
             self._box0 = self._press if boxing else None
             if boxing and self.handler is None:
                 return True                          # VTK must not start an orbit
@@ -520,10 +538,18 @@ class Viewport(QWidget):
                 self._face_view = False              # orbiting off TOP / FRONT / ...: not a face view now
                 self.apply_projection(render=False)
             if self.handler and self.handler.captures_left:
+                if ev.modifiers() & (Qt.ShiftModifier | Qt.AltModifier):
+                    # sketching: a plain left drag draws / selects, so Shift (or Alt) + left drag turns the view.
+                    # A Shift press that never moves is the click it always was (it snaps four times finer).
+                    self._sk_orbit = [self._press, self._press, bool(ev.modifiers() & Qt.ShiftModifier)]
+                    if self._face_view:
+                        self._face_view = False
+                        self.apply_projection(render=False)
+                    return True
                 w = self.world_at(self._press)
                 if w:
                     self.handler.on_click(w, ev)
-                return True          # no orbit while sketching
+                return True          # a plain left drag does not orbit while sketching
             return False
         if t == QEvent.MouseButtonRelease and ev.button() == Qt.LeftButton and self._box0 is not None:
             p0, self._box0, self._press = self._box0, None, None
@@ -546,6 +572,11 @@ class Viewport(QWidget):
             p0, self._press = self._press, None
             if self.handler and self.handler.captures_left:
                 self.plotter.iren.interactor.GetInteractorStyle().OnLeftButtonUp()   # never leave VTK orbiting
+                orbit, self._sk_orbit = self._sk_orbit, None
+                if orbit is not None and orbit[2] and (ev.position().toPoint() - orbit[0]).manhattanLength() <= 4:
+                    w = self.world_at(ev.position().toPoint())
+                    if w:
+                        self.handler.on_click(w, ev)             # Shift + click with no drag: a click (fine snap)
                 return True
             if self.handler and p0 is not None and (ev.position().toPoint() - p0).manhattanLength() <= 4:
                 w = self.world_at(ev.position().toPoint())
