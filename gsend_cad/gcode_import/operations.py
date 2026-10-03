@@ -191,9 +191,9 @@ def _from_cycle(cycle: str, side: str, tool: Tool | None) -> str:
         return _sided("FINISH", side)
     if cycle in ("G76", "G92"):
         return "THREAD"
-    if cycle == "G84" or (tool and tool.type == "TAP"):
+    if cycle == "G84" or (tool and tool.base == "TAP"):
         return "TAP"
-    return "SPOT DRILL" if tool and tool.type == "SPOT DRILL" else "DRILL"
+    return "SPOT DRILL" if tool and tool.base == "SPOT DRILL" else "DRILL"
 
 
 def _from_motion(cls: str, n: int, side: str, tool: Tool | None) -> tuple[str | None, str]:
@@ -212,8 +212,8 @@ def _from_motion(cls: str, n: int, side: str, tool: Tool | None) -> tuple[str | 
     if cls == "PARTOFF":
         return "PART-OFF", "X to the centerline at the back of the part"
     if cls == "DRILL":
-        if tool and tool.type in ("SPOT DRILL", "TAP"):
-            return tool.type, f"Z-only moves at X0 with a {tool.type.lower()}"
+        if tool and tool.base in ("SPOT DRILL", "TAP"):
+            return tool.base, f"Z-only moves at X0 with a {tool.type.lower()}"
         return "DRILL", "Z-only moves at X0"
     if cls == "THREAD":
         return "THREAD", "threading moves"
@@ -353,7 +353,7 @@ def counts(ops: list[Operation]) -> dict[str, int]:
 def summary(program: Program, ops: list[Operation], tools: list[Tool], stock: dict) -> dict:
     """What is known before the reconstruction (Step 4 adds the profile's own numbers)."""
     cuts = [m for o in ops if o.type != "SKIP" for i in o.moves for m in (program.moves[i],) if m.kind != "rapid"]
-    drills = [t.size for t in tools if t.type == "DRILL" and t.size]
+    drills = [t.size for t in tools if t.base == "DRILL" and t.size]
     inside = [max(program.moves[i].x0, program.moves[i].x1) for o in ops if o.side == "ID" and o.type != "SKIP"
               for i in o.moves if program.moves[i].kind != "rapid"]
     bore = max(drills + inside + [stock.get("id", 0.0)], default=0.0)

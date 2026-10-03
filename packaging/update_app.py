@@ -44,7 +44,55 @@ def copy_app(folder) -> Path:
     shutil.copytree(ROOT / "gsend_cad", dest, ignore=SKIP)
     (folder / "app" / "APP_VERSION.txt").write_text(app_version() + "\n", encoding="utf-8")
     stamp_build(dest)
+    bridge_runtime(folder)
     return dest
+
+
+# Packages the app needs that an OLDER runtime does not bundle yet. Until that runtime is rebuilt
+# with PyInstaller, they ride in the app layer as plain files (the .exe puts app/ on sys.path), so a
+# code-only update still gives the installed copy the whole feature. Each is a package directory plus
+# the ".libs" folder its wheel keeps its DLLs in, and its dist-info (for Help > Open-source licences).
+BRIDGE = ("shapely",)
+
+
+def bridge_runtime(folder: Path) -> list[str]:
+    """Copy BRIDGE packages into <folder>/app when <folder>/_internal lacks them. Returns what was copied."""
+    import importlib.util
+    internal = folder / "_internal"
+    done = []
+    for name in BRIDGE:
+        target = folder / "app" / name
+        if (internal / name).is_dir():                  # the runtime has it: drop any bridge copy
+            for stale in (target, folder / "app" / f"{name}.libs"):
+                if stale.exists():
+                    shutil.rmtree(stale)
+            continue
+        spec = importlib.util.find_spec(name)
+        if not spec or not spec.submodule_search_locations:
+            print(f"bridge: {name} is not installed in this Python, so it was not copied")
+            continue
+        src = Path(list(spec.submodule_search_locations)[0])
+        if not _same_python(internal):
+            print(f"bridge: {name} skipped - this Python is not the runtime's version")
+            continue
+        for s, d in ((src, target), (src.parent / f"{name}.libs", folder / "app" / f"{name}.libs")):
+            if s.is_dir():
+                if d.exists():
+                    shutil.rmtree(d)
+                shutil.copytree(s, d, ignore=SKIP)
+        for info in src.parent.glob(f"{name}-*.dist-info"):
+            d = folder / "app" / info.name
+            if d.exists():
+                shutil.rmtree(d)
+            shutil.copytree(info, d)
+        done.append(name)
+    return done
+
+
+def _same_python(internal: Path) -> bool:
+    """The runtime's python3XY.dll must match the Python whose compiled modules we are copying."""
+    want = f"python{sys.version_info.major}{sys.version_info.minor}.dll"
+    return (internal / want).exists() or not internal.is_dir()
 
 
 def stamp_build(dest: Path):

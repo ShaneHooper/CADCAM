@@ -5,8 +5,8 @@ from dataclasses import replace
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
-                               QLabel, QLineEdit, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
+                               QHeaderView, QLabel, QLineEdit, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ..ui import theme
 from . import keywords as kw
@@ -15,6 +15,69 @@ from .inserts import parse_insert
 from .widgets import STATUS_COLOUR, TABLE_CSS, Num, Tag, button, head, toggle
 
 COLUMNS = ("T", "COMMENT", "KEYWORD(S)", "TYPE", "INSERT / SIZE", "NOSE R", "SIDE", "STATUS")
+ADD_TYPE = "+ ADD TOOL TYPE…"
+
+
+def type_items() -> list[str]:
+    """What the tool-type dropdown offers: built-ins, the user's own types, UNKNOWN, then the add entry."""
+    return list(kw.all_tool_types()) + [kw.UNKNOWN, ADD_TYPE]
+
+
+class AddTypeDialog(QDialog):
+    """Name a new tool type and say which built-in it cuts like (that decides its shape and its fields)."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle("Add tool type")
+        self.setStyleSheet(f"QDialog{{background:{theme.BG};}} QLabel{{color:{theme.FG};}}")
+        v = QVBoxLayout(self)
+        v.setContentsMargins(16, 14, 16, 12)
+        v.setSpacing(8)
+        v.addWidget(head("New tool type"))
+        g = QGridLayout()
+        g.setHorizontalSpacing(8)
+        g.setVerticalSpacing(6)
+        self.name = QLineEdit()
+        self.name.setPlaceholderText("e.g. THREAD MILL, BACK BORE, WIPER")
+        self.like = QComboBox()
+        self.like.addItems(list(kw.TOOL_TYPES))
+        g.addWidget(QLabel("NAME"), 0, 0)
+        g.addWidget(self.name, 0, 1)
+        g.addWidget(QLabel("CUTS LIKE"), 1, 0)
+        g.addWidget(self.like, 1, 1)
+        g.setColumnStretch(1, 1)
+        v.addLayout(g)
+        hint = QLabel("The type is yours to name; CUTS LIKE picks the built-in shape the reconstruction uses for it "
+                      "(an OD TURN insert, a drill, a groove blade, a thread that removes nothing...). It is saved "
+                      "with your keywords and offered next time.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color:{theme.FG3};font-size:11px;")
+        v.addWidget(hint)
+        self.note = QLabel("")
+        self.note.setStyleSheet(f"color:{theme.BAD};font-size:11px;")
+        v.addWidget(self.note)
+        foot = QHBoxLayout()
+        foot.addStretch()
+        cancel, ok = button("CANCEL"), button("ADD", ok=True)
+        cancel.clicked.connect(self.reject)
+        ok.clicked.connect(self.accept_if_named)
+        ok.setDefault(True)
+        foot.addWidget(cancel)
+        foot.addWidget(ok)
+        v.addLayout(foot)
+        self.name.setFocus()
+
+    def accept_if_named(self):
+        if not kw.clean(self.name.text()):
+            self.note.setText("Give the type a name.")
+            return
+        if kw.clean(self.name.text()) in (kw.UNKNOWN, ADD_TYPE):
+            self.note.setText("That name is taken.")
+            return
+        self.accept()
+
+    def result_type(self) -> tuple[str, str]:
+        return kw.clean(self.name.text()), self.like.currentText()
 
 
 def insert_or_size(t: tooling.Tool) -> str:
@@ -80,7 +143,7 @@ class ToolsPage(QWidget):
         g.setHorizontalSpacing(8)
         g.setVerticalSpacing(6)
         self.type = QComboBox()
-        self.type.addItems(list(kw.TOOL_TYPES) + [kw.UNKNOWN])
+        self.type.addItems(type_items())
         self.insert = QLineEdit()
         self.insert.setPlaceholderText("CNMG 432 / CNMG 120408")
         self.shape = QLabel("")
@@ -206,9 +269,9 @@ class ToolsPage(QWidget):
         self.shape.setText(f"{ins.system} · {ins.shape_name} · nose {ins.nose_radius:.4f}" if ins else
                            ("not an insert code I can read" if d.insert else ""))
         sized = d.type in tooling.SIZED
-        self.size_label.setText(tooling.SIZED.get(d.type, "SIZE"))
+        self.size_label.setText(tooling.SIZED.get(d.base, "SIZE"))
         self.size.setEnabled(sized)
-        drilling = d.type in ("DRILL", "SPOT DRILL", "TAP")
+        drilling = d.base in ("DRILL", "SPOT DRILL", "TAP")
         self.nose.setEnabled(not drilling)
         if drilling:
             self.nose_tag.set("—", theme.FG3)
@@ -224,16 +287,45 @@ class ToolsPage(QWidget):
     def _type_changed(self, text: str):
         if self._loading:
             return
+        if text == ADD_TYPE:
+            text = self.add_type()                      # a new type (and it is selected), or the old one again
+            if text is None:
+                self._loading = True
+                self.type.setCurrentText(self.draft.type)
+                self._loading = False
+                return
+        base = kw.base_of(text)
         d = replace(self.draft, type=text, side=tooling.default_side(text))
-        if text in tooling.NOSED and not d.insert and d.nose_radius == 0.0:
+        if base in tooling.NOSED and not d.insert and d.nose_radius == 0.0:
             d = replace(d, nose_radius=tooling.DEFAULT_NOSE, nose_assumed=True)
             self._loading = True
             self.nose.setValue(d.nose_radius)
             self._loading = False
-        elif text not in tooling.NOSED:             # no nose radius to assume on a drill / groove tool
+        elif base not in tooling.NOSED:             # no nose radius to assume on a drill / groove tool
             d = replace(d, nose_assumed=text == kw.UNKNOWN)
         self.draft = d
         self._sync()
+
+    def add_type(self) -> str | None:
+        """The '+ ADD TOOL TYPE...' entry: ask, register, save with the keywords, refill the dropdown."""
+        dlg = AddTypeDialog(self)
+        self.add_dialog = dlg
+        if dlg.exec() != QDialog.Accepted:
+            return None
+        name, like = dlg.result_type()
+        name = kw.add_tool_type(name, like)
+        if name is None:
+            return None
+        kw.save(self.wiz.keywords_file, self.wiz.table)
+        self.refill_types(name)
+        return name
+
+    def refill_types(self, select: str | None = None):
+        self._loading = True
+        self.type.clear()
+        self.type.addItems(type_items())
+        self.type.setCurrentText(select or self.draft.type)
+        self._loading = False
 
     def _insert_typed(self, text: str):
         if self._loading:
@@ -277,7 +369,7 @@ class ToolsPage(QWidget):
         d = replace(d, nose_assumed=False, size=size, size_text=d.size_text if size else "",
                     status=tooling.DEFINED)
         if d.type in tooling.SIZED and size is None:
-            self.note.setText(f"Type the {tooling.SIZED[d.type].lower()} - without it the cut is ASSUMED.")
+            self.note.setText(f"Type the {tooling.SIZED[d.base].lower()} - without it the cut is ASSUMED.")
             return
         self.wiz.overrides[d.number] = d
         if self.save_kw.isChecked() and kw.clean(self.kw_text.text()):

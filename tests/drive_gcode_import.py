@@ -121,6 +121,31 @@ tp.table.setCurrentCell(5, 0)
 check("a groove plunging inward cuts on the OD", cell(3, 6) == "OD")
 check("the UNKNOWN tool says it is a sharp point", "sharp point" in tp.assumed.text()
       and tp.kw_text.text() == "PARTING BLADE")
+from gsend_cad.gcode_import import keywords as kw
+from gsend_cad.gcode_import.tools_page import ADD_TYPE, AddTypeDialog
+items = [tp.type.itemText(i) for i in range(tp.type.count())]
+check("the type dropdown has THREAD, then UNKNOWN, then + ADD TOOL TYPE… last",
+      "THREAD" in items and items[-2:] == ["UNKNOWN", ADD_TYPE])
+ad = AddTypeDialog(tp)
+ad.accept_if_named()
+from PySide6.QtWidgets import QDialog
+check("ADD TOOL TYPE refuses an empty name", "name" in ad.note.text().lower() and ad.result() != QDialog.Accepted)
+ad.name.setText("back bore")
+ad.like.setCurrentText("BORING BAR")
+ad.accept_if_named()
+name, like = ad.result_type()
+check("the new type is named and told what it cuts like", (name, like) == ("BACK BORE", "BORING BAR"))
+kw.add_tool_type(name, like)
+kw.save(dlg.keywords_file, dlg.table)
+tp.refill_types(name)
+check("the new type is in the dropdown, selected, and behaves like a boring bar (ID)",
+      tp.type.currentText() == "BACK BORE" and kw.base_of("BACK BORE") == "BORING BAR"
+      and "BACK BORE" in [tp.type.itemText(i) for i in range(tp.type.count())])
+tp._type_changed("BACK BORE")
+check("picking it sets the side to ID and a default nose radius", tp.draft.side == "ID" and tp.nose.value() > 0)
+kw.remove_tool_type("BACK BORE")
+tp.refill_types("UNKNOWN")
+tp._type_changed("UNKNOWN")
 tp.type.setCurrentText("CUTOFF")
 tp.size.setValue(0.118)
 tp.save_kw.setChecked(True)

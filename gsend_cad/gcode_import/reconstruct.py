@@ -107,20 +107,21 @@ def tool_shape(tool: Tool | None, side: str, flipped: bool = False) -> _Shape:
     if flipped:
         zdir = -zdir
     rdir = -1 if tool.side == "ID" else 1
-    if tool.type in NOSED:
+    base = tool.base                                    # a user-made type cuts like the built-in it was given
+    if base in NOSED:
         ins = parse_insert(tool.insert)
         rn = tool.nose_radius
         return _Shape("insert", ts.insert(rn, tool.shape_angle, ins.size * 1.1 if ins else None, zdir, rdir),
                       ts.tip_vector(rn, zdir, rdir), "nose" if tool.nose_assumed else "exact", rn, rdir, zdir)
-    if tool.type in ("DRILL", "SPOT DRILL"):
+    if base in ("DRILL", "SPOT DRILL"):
         if not tool.size:
             return _Shape("none", note=f"T{tool.number} ({tool.type.lower()}) has no diameter - its hole is not cut")
-        return _Shape("drill", ts.drill(tool.size, ts.SPOT_POINT if tool.type == "SPOT DRILL" else ts.DRILL_POINT,
+        return _Shape("drill", ts.drill(tool.size, ts.SPOT_POINT if base == "SPOT DRILL" else ts.DRILL_POINT,
                                         -1 if flipped else 1))
-    if tool.type in ("GROOVE", "CUTOFF", "FACE GROOVE"):
+    if base in ("GROOVE", "CUTOFF", "FACE GROOVE"):
         if not tool.size:
             return _Shape("none", note=f"T{tool.number} ({tool.type.lower()}) has no width - its cuts are left out")
-        return _Shape("groove", ts.groove(tool.size, tool.nose_radius, rdir, zdir, tool.type == "FACE GROOVE"),
+        return _Shape("groove", ts.groove(tool.size, tool.nose_radius, rdir, zdir, base == "FACE GROOVE"),
                       rdir=rdir, zdir=zdir)
     return _Shape("none")           # THREAD, TAP: a feature on the cylinder, no material removed
 

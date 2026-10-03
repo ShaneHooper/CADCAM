@@ -223,6 +223,8 @@ def selftest(report: str) -> int:
         from . import commands, docs, main_window, panels, viewport  # noqa: F401
         lines.append("ui modules: imported")
         lines.append(f"logo: {theme.LOGO_PNG.exists()}  fonts: {len(list(theme.FONT_DIR.glob('*.ttf')))}")
+        from ..gcode_import import geom2d
+        lines.append("gcode import booleans: " + ("shapely OK" if geom2d.AVAILABLE else f"MISSING - {geom2d.WHY_NOT}"))
         if os.environ.get("GSEND_CADCAM_SELFTEST_WINDOW") or sys.platform == "win32":
             app = QApplication.instance() or QApplication(sys.argv[:1])
             gl = opengl_info()

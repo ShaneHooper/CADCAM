@@ -50,14 +50,20 @@ class Tool:
     @property
     def assumed(self) -> str:
         """One line: what stays assumed until this tool is defined."""
-        if self.type == kw.UNKNOWN:
+        base = kw.base_of(self.type)
+        if base == kw.UNKNOWN:
             return "Treated as a sharp point. Every edge this tool cuts is marked ASSUMED."
-        if self.type in NOSED and self.nose_assumed:
+        if base in NOSED and self.nose_assumed:
             return (f"Nose radius {self.nose_radius:.4f} is a default, not read from the program. "
                     "Corners and tapers this tool cuts are marked ASSUMED.")
-        if self.type in SIZED and self.size is None:
-            return f"No {SIZED[self.type].lower()} found - this tool's cuts are left out until you type one."
+        if base in SIZED and self.size is None:
+            return f"No {SIZED[base].lower()} found - this tool's cuts are left out until you type one."
         return "Nothing assumed."
+
+    @property
+    def base(self) -> str:
+        """The built-in type this tool behaves like (its own type unless it is a user-made one)."""
+        return kw.base_of(self.type)
 
     @property
     def resolved(self) -> bool:
@@ -85,7 +91,7 @@ def read_comment(comment: str, table: list[dict]) -> Reading:
 
 
 def default_side(tool_type: str) -> str:
-    return {"BORING BAR": "ID", "DRILL": "CENTER", "SPOT DRILL": "CENTER", "TAP": "CENTER"}.get(tool_type, "OD")
+    return {"BORING BAR": "ID", "DRILL": "CENTER", "SPOT DRILL": "CENTER", "TAP": "CENTER"}.get(kw.base_of(tool_type), "OD")
 
 
 # ---- T calls and their comments ----
@@ -173,7 +179,7 @@ def build_tools(program: Program, table: list[dict], overrides: dict[str, Tool] 
             tool = replace(overrides[number], comment=comment, line=hits[0][0], status=DEFINED)
         else:
             tool = _identify(number, comment, hits[0][0], program, table, drilled)
-        drilled = drilled or tool.type in ("DRILL", "SPOT DRILL")
+        drilled = drilled or tool.base in ("DRILL", "SPOT DRILL")
         tools.append(tool)
     return tools
 
@@ -187,7 +193,7 @@ def _identify(number: str, comment: str, line: int, program: Program, table: lis
     if r.tool_type:
         key = next(m.keyword for m in r.matches if m.tool)
         type_, status, why = r.tool_type, READ, f'keyword "{key}" in its comment'
-        side = default_side(type_) if type_ in ("OD TURN", "BORING BAR", "DRILL", "SPOT DRILL", "TAP") else m_side
+        side = default_side(type_) if kw.base_of(type_) in ("OD TURN", "BORING BAR", "DRILL", "SPOT DRILL", "TAP") else m_side
     elif m_type:
         type_, status, why, side = m_type, GUESSED, f"no keyword matched; {m_why}", m_side
     else:
@@ -195,11 +201,11 @@ def _identify(number: str, comment: str, line: int, program: Program, table: lis
     nose, nose_assumed, angle, code = 0.0, True, None, ""
     if r.insert:
         nose, nose_assumed, angle, code = r.insert.nose_radius, False, r.insert.angle, r.insert.code
-    elif type_ in NOSED:
+    elif kw.base_of(type_) in NOSED:
         nose = DEFAULT_NOSE
     elif type_ != kw.UNKNOWN:
         nose_assumed = False                                # no nose radius to assume on a drill / groove tool
-    size = r.size if type_ in SIZED or type_ == "THREAD" else None
+    size = r.size if kw.base_of(type_) in SIZED or kw.base_of(type_) == "THREAD" else None
     return Tool(number, comment, words, type_, code, angle, nose, nose_assumed,
                 size.value if size else None, size.text if size else "", size.pitch if size else None,
                 "RH", side, status, why, line, r.ops)

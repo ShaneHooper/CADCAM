@@ -18,6 +18,36 @@ import re
 
 TOOL_TYPES = ("OD TURN", "BORING BAR", "GROOVE", "FACE GROOVE", "CUTOFF", "THREAD", "DRILL", "SPOT DRILL", "TAP")
 UNKNOWN = "UNKNOWN"
+# User-made tool types: name -> the built-in type it cuts like (that is what decides its shape, its side and
+# which fields it needs). Kept in the keywords JSON under "tool_types"; load() fills this, save() writes it.
+_CUSTOM: dict[str, str] = {}
+
+
+def custom_types() -> dict[str, str]:
+    return dict(_CUSTOM)
+
+
+def all_tool_types() -> tuple[str, ...]:
+    return TOOL_TYPES + tuple(_CUSTOM)
+
+
+def base_of(tool_type: str) -> str:
+    """The built-in behaviour behind a type name (a built-in is its own base)."""
+    return _CUSTOM.get(tool_type, tool_type)
+
+
+def add_tool_type(name: str, like: str) -> str | None:
+    """Register a user tool type that cuts like a built-in one. Returns the clean name, or None."""
+    name, like = clean(name), clean(like)
+    if not name or like not in TOOL_TYPES or name == UNKNOWN:
+        return None
+    if name not in TOOL_TYPES:
+        _CUSTOM[name] = like
+    return name
+
+
+def remove_tool_type(name: str) -> None:
+    _CUSTOM.pop(clean(name), None)
 OP_TYPES = ("FACE", "OD ROUGH", "OD FINISH", "ID ROUGH", "ID FINISH", "DRILL", "SPOT DRILL", "TAP", "OD GROOVE",
             "FACE GROOVE", "THREAD", "CHAMFER", "PART-OFF", "SKIP")
 # a keyword may also set just ROUGH / FINISH: OD or ID is then decided by the motion
@@ -32,6 +62,13 @@ DEFAULTS = (
     ("CUTOFF", "CUTOFF", "PART-OFF"),
     ("GROOVE", "GROOVE", "OD GROOVE"),
     ("THREAD", "THREAD", "THREAD"),
+    ("UN", "THREAD", "THREAD"),           # thread designators: 2.75-8 UN, 1/4-20 UNC, 1/2-20 UNF, 1/8 NPT
+    ("UNC", "THREAD", "THREAD"),
+    ("UNF", "THREAD", "THREAD"),
+    ("UNEF", "THREAD", "THREAD"),
+    ("NPT", "THREAD", "THREAD"),
+    ("TPI", "THREAD", "THREAD"),
+    ("ACME", "THREAD", "THREAD"),
     ("FINISH", None, "FINISH"),
     ("ROUGH", None, "ROUGH"),
     ("DRILL", "DRILL", "DRILL"),
@@ -58,7 +95,7 @@ def _row(raw) -> dict | None:
     tool, op = raw.get("tool"), raw.get("op")
     if not key:
         return None
-    return {"keyword": key, "tool": tool if tool in TOOL_TYPES else None, "op": op if op in KEYWORD_OPS else None,
+    return {"keyword": key, "tool": tool if tool in all_tool_types() else None, "op": op if op in KEYWORD_OPS else None,
             "source": "USER" if raw.get("source") == "USER" else "DEFAULT"}
 
 
@@ -66,6 +103,10 @@ def load(path) -> list[dict]:
     """The saved table, or the defaults when there is no file (or it cannot be read)."""
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
+        _CUSTOM.clear()                                 # the file's own tool types, before its rows are read
+        for t in data.get("tool_types", []):
+            if isinstance(t, dict):
+                add_tool_type(t.get("name", ""), t.get("like", ""))
         rows = [r for r in (_row(x) for x in data["keywords"]) if r]
     except Exception:
         return defaults()
@@ -80,7 +121,8 @@ def load(path) -> list[dict]:
 def save(path, table: list[dict]) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"version": 1, "keywords": table}, indent=1), encoding="utf-8")
+    types = [{"name": n, "like": l} for n, l in _CUSTOM.items()]
+    p.write_text(json.dumps({"version": 1, "keywords": table, "tool_types": types}, indent=1), encoding="utf-8")
 
 
 def add(table: list[dict], keyword: str, tool: str | None, op: str | None, source: str = "USER") -> list[dict]:

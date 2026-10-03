@@ -204,6 +204,16 @@ def test_defining_a_tool_changes_the_result():
     assert close(r.diameter_at(-0.3), 0.8)                      # the wider blade reaches Z-0.25
 
 
+def test_a_user_tool_type_is_cut_with_the_shape_of_its_base_type(monkeypatch):
+    from gsend_cad.gcode_import import keywords as kw
+    monkeypatch.setattr(kw, "_CUSTOM", {"WIDE BLADE": "GROOVE"})
+    stock = dict(BAR, od=1.25, length=1.5)
+    program = parse_program((FIXTURES / "groove.nc").read_text())
+    blade = {t.number: t for t in tooling.build_tools(program, TABLE)}["04"]
+    r = run("groove.nc", stock, tool_overrides={"04": replace(blade, type="WIDE BLADE")})
+    assert close(r.diameter_at(-0.44), 0.8) and close(r.diameter_at(-0.3), 1.0)     # same groove as a GROOVE
+
+
 def test_a_part_off_keeps_the_front_piece():
     text = (FIXTURES / "turn_and_face.nc").read_text().replace(
         "M30", "T0404 (.118 CUTOFF)\nG0 X1.4 Z-0.618\nG1 X-0.03 F0.003\nG0 X1.4\nM30")

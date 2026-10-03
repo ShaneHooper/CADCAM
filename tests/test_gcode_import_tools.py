@@ -23,8 +23,8 @@ def names(comment, table=TABLE):
 # ---- keyword matching ----
 def test_the_shipped_defaults():
     assert [r["keyword"] for r in TABLE] == [
-        "FACE GROOVE", "OD FINISH", "OD ROUGH", "ID FINISH", "ID ROUGH", "CUTOFF", "GROOVE", "THREAD", "FINISH",
-        "ROUGH", "DRILL", "BORE", "FACE", "SPOT", "TAP"]
+        "FACE GROOVE", "OD FINISH", "OD ROUGH", "ID FINISH", "ID ROUGH", "CUTOFF", "GROOVE", "THREAD",
+        "UN", "UNC", "UNF", "UNEF", "NPT", "TPI", "ACME", "FINISH", "ROUGH", "DRILL", "BORE", "FACE", "SPOT", "TAP"]
     assert all(r["source"] == "DEFAULT" for r in TABLE)
 
 
@@ -57,6 +57,32 @@ def test_user_keywords_are_stored_as_json_and_come_back(tmp_path):
     back = kw.load(path)
     assert back[0] == {"keyword": "WIPER TOOL", "tool": "OD TURN", "op": None, "source": "USER"}
     assert len(back) == len(TABLE) + 1 and names("WIPER TOOL", back) == ["WIPER TOOL"]
+
+
+def test_thread_designators_read_as_a_thread_tool():
+    for comment in ("2.75-8 UN", "1/4-20 UNC TAP", "1/8 NPT", "16 TPI THREAD", "ACME 1/2-10"):
+        r = tooling.read_comment(comment, TABLE)
+        assert "THREAD" in (r.tool_type, *r.ops) or r.tool_type == "TAP", comment
+    assert tooling.read_comment("2.75-8 UN", TABLE).tool_type == "THREAD"
+    assert names("UNDERCUT") == [] and names("RUN") == []                    # whole words only
+
+
+def test_a_user_tool_type_cuts_like_the_built_in_it_was_given(tmp_path, monkeypatch):
+    monkeypatch.setattr(kw, "_CUSTOM", {})
+    assert kw.add_tool_type("back bore", "BORING BAR") == "BACK BORE"
+    assert kw.add_tool_type("", "BORING BAR") is None and kw.add_tool_type("X", "NOT A TYPE") is None
+    assert kw.add_tool_type("OD TURN", "DRILL") == "OD TURN" and kw.base_of("OD TURN") == "OD TURN"   # built-ins stay
+    assert kw.base_of("BACK BORE") == "BORING BAR" and "BACK BORE" in kw.all_tool_types()
+    assert tooling.default_side("BACK BORE") == "ID"
+    t = replace(tooling.build_tools(parse_program(MULTI), TABLE)[2], type="BACK BORE", nose_assumed=True, insert="")
+    assert t.base == "BORING BAR" and "Nose radius" in t.assumed
+    # it is saved with the keywords and comes back, and a keyword may point at it
+    path = tmp_path / "kw.json"
+    kw.save(path, kw.add(kw.defaults(), "BB", "BACK BORE", None))
+    monkeypatch.setattr(kw, "_CUSTOM", {})
+    table = kw.load(path)
+    assert kw.custom_types() == {"BACK BORE": "BORING BAR"} and table[0]["tool"] == "BACK BORE"
+    assert tooling.read_comment("BB", table).tool_type == "BACK BORE"
 
 
 def test_adding_an_existing_keyword_replaces_it_and_a_bad_file_falls_back(tmp_path):

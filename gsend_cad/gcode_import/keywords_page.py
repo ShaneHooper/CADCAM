@@ -56,7 +56,7 @@ class KeywordsDialog(QDialog):
         add = QHBoxLayout()
         self.new_key = QLineEdit()
         self.new_key.setPlaceholderText("new keyword")
-        self.new_tool, self.new_op = _combo(kw.TOOL_TYPES, None), _combo(kw.KEYWORD_OPS, None)
+        self.new_tool, self.new_op = _combo(kw.all_tool_types(), None), _combo(kw.KEYWORD_OPS, None)
         self.add_btn = button("ADD", ok=True)
         for label, w in (("KEYWORD", self.new_key), ("TOOL TYPE", self.new_tool), ("OPERATION", self.new_op)):
             add.addWidget(QLabel(label))
@@ -105,7 +105,7 @@ class KeywordsDialog(QDialog):
         self.table.setRowCount(len(self.rows))
         for r, row in enumerate(self.rows):
             self.table.setItem(r, 0, QTableWidgetItem(row["keyword"]))
-            tool, op = _combo(kw.TOOL_TYPES, row["tool"]), _combo(kw.KEYWORD_OPS, row["op"])
+            tool, op = _combo(kw.all_tool_types(), row["tool"]), _combo(kw.KEYWORD_OPS, row["op"])
             tool.currentTextChanged.connect(lambda _t, r=r, c=tool: self.edit(r, "tool", _pick(c)))
             op.currentTextChanged.connect(lambda _t, r=r, c=op: self.edit(r, "op", _pick(c)))
             self.table.setCellWidget(r, 1, tool)
