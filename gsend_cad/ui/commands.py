@@ -1673,8 +1673,8 @@ def setup_bodies(win, setup):
 def turning_radius(win, setup, bodies):
     """The part's largest radius about the setup's spindle axis (cached per model + axis)."""
     i, center, _ = cam.turning_frame(bodies_bbox(bodies), setup)
-    key = (id(win.model), tuple(b.id for b in bodies), setup["axis"])
-    cache = win.__dict__.setdefault("_radius_cache", {})
+    key = (tuple(b.id for b in bodies), setup["axis"])
+    cache = win.cam_cache
     if key not in cache:
         cache.clear() if len(cache) > 32 else None
         cache[key] = max_radius(bodies, center, cam._unit(i))
@@ -2106,8 +2106,8 @@ class SetupSession:
 def setup_holes(win, setup):
     """Round holes in the setup's bodies (kernel.find_holes), cached per model."""
     bodies = setup_bodies(win, setup)
-    key = ("holes", id(win.model), tuple(b.id for b in bodies))
-    cache = win.__dict__.setdefault("_radius_cache", {})
+    key = ("holes", tuple(b.id for b in bodies))
+    cache = win.cam_cache
     if key not in cache:
         cache[key] = find_holes(bodies) if bodies else []
     return cache[key]
@@ -2126,14 +2126,14 @@ def _mill_rough_layers(win, setup, op, bodies, bbox):
     else:                                        # the whole stock: the outside pass just clears its edge
         lo, hi = cam.stock_box(bbox, setup)
         boundary, grow_b = [(lo[0], lo[1]), (hi[0], lo[1]), (hi[0], hi[1]), (lo[0], hi[1])], R - 0.05
-    cache = win.__dict__.setdefault("_radius_cache", {})
+    cache = win.cam_cache
     faces = []
     for c in o["islands"]:
         f = None if c.get("sketch") else chain_face(bodies, c)
         faces.append(f if f is not None else c["pts"])
     out = []
     for z, act in cam.mill_rough_layers(bbox, setup, o):
-        key = ("rough", id(win.model), json.dumps([o["islands"][i] for i in act], sort_keys=True),
+        key = ("rough", json.dumps([o["islands"][i] for i in act], sort_keys=True),
                json.dumps(o.get("boundary"), sort_keys=True), round(R, 6), round(o["leave"], 6), round(step, 6),
                json.dumps(cam.stock_box(bbox, setup)))
         if key not in cache:
@@ -2166,8 +2166,8 @@ def op_moves(win, setup, op):
             raise ValueError("the tool doesn't fit inside the picked pocket wall")
     elif op.get("type") == "contour":         # the part outline grown by tool radius + stock to leave
         grow = op["tool_dia"] / 2 + op.get("leave", 0.0)
-        key = ("outline", id(win.model), tuple(b.id for b in bodies), round(grow, 6))
-        cache = win.__dict__.setdefault("_radius_cache", {})
+        key = ("outline", tuple(b.id for b in bodies), round(grow, 6))
+        cache = win.cam_cache
         if key not in cache:
             cache[key] = outline_loops(bodies, grow)
         loops = cache[key]
@@ -2175,15 +2175,15 @@ def op_moves(win, setup, op):
     if op.get("type") in ("rough", "finish") and setup["type"] == cam.TURNING:   # OD (or ID: bore) silhouette
         i, center, _ = cam.turning_frame(bbox, setup)
         inner = bool(op.get("internal"))
-        key = ("bore" if inner else "profile", id(win.model), tuple(b.id for b in bodies), setup["axis"])
-        cache = win.__dict__.setdefault("_radius_cache", {})
+        key = ("bore" if inner else "profile", tuple(b.id for b in bodies), setup["axis"])
+        cache = win.cam_cache
         if key not in cache:
             cache[key] = (turn_bore if inner else turn_profile)(bodies, center, cam._unit(i))
         profile = cache[key]
     if op.get("type") == "groove":              # the part cut through the axis: grooves on OD / ID / face
         i, center, _ = cam.turning_frame(bbox, setup)
-        key = ("section", id(win.model), tuple(b.id for b in bodies), setup["axis"])
-        cache = win.__dict__.setdefault("_radius_cache", {})
+        key = ("section", tuple(b.id for b in bodies), setup["axis"])
+        cache = win.cam_cache
         if key not in cache:
             cache[key] = turn_section(bodies, center, cam._unit(i))
         profile = cache[key]
@@ -2676,8 +2676,8 @@ class OpSession:
         closed shapes of the XY sketches (sketch=True, at their plane)."""
         st = self.current_setup()
         bodies = setup_bodies(self.win, st)
-        key = ("chains", id(self.win.model), tuple(b.id for b in bodies))
-        cache = self.win.__dict__.setdefault("_radius_cache", {})
+        key = ("chains", tuple(b.id for b in bodies))
+        cache = self.win.cam_cache
         if key not in cache:
             cache[key] = slice_chains(bodies) if bodies else []
         out = list(cache[key])

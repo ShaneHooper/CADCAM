@@ -15,6 +15,8 @@ from __future__ import annotations
 import copy
 import json
 import os
+import shutil
+import time
 
 KINDS = {"face mill": "Face mill", "end mill": "End mill", "drill": "Drill",
          "od turn": "OD turning", "drill-t": "Drill", "groove": "Grooving"}
@@ -98,6 +100,12 @@ def new_id(lib: list) -> str:
 
 def load(path: str) -> list:
     """The saved library, or the defaults when there is none (or it can't be read)."""
+    return load_checked(path)[0]
+
+
+def load_checked(path: str) -> tuple[list, str | None]:
+    """(library, backup path or None). A file that exists but can't be read is copied aside
+    first (tool_library.bad-<time>.json), so saving the defaults never wipes the user's tools."""
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
@@ -105,9 +113,17 @@ def load(path: str) -> list:
         if data.get("version", 1) < 2 and not any(t["kind"] == "groove" for t in lib):
             lib += [copy.deepcopy(t) for t in DEFAULT if t["kind"] == "groove"   # grooving came in v2
                     and t["id"] not in {x["id"] for x in lib}]
-        return lib
-    except (OSError, ValueError, TypeError, AttributeError):
-        return copy.deepcopy(DEFAULT)
+        return lib, None
+    except FileNotFoundError:
+        return copy.deepcopy(DEFAULT), None
+    except (OSError, ValueError, TypeError, AttributeError, KeyError):
+        backup = None
+        try:
+            backup = f"{os.path.splitext(path)[0]}.bad-{time.strftime('%Y%m%d-%H%M%S')}.json"
+            shutil.copy2(path, backup)
+        except OSError:
+            backup = None
+        return copy.deepcopy(DEFAULT), backup or "(could not back it up)"
 
 
 def save(path: str, lib: list):

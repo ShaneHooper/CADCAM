@@ -1,6 +1,7 @@
 """Main window: wires the Document, the Kernel and the panels together."""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -32,6 +33,8 @@ class MainWindow(QMainWindow):
         self.doc = doc or bracket_plate()
         self.kernel = Kernel()
         self.model = None
+        self.cam_cache: dict = {}        # CAM geometry (outlines, profiles, holes...) for the current part
+        self._geo_key = None
         self.path: Path | None = None
         self.dirty = False
         self.undo_stack: list[dict] = []
@@ -104,7 +107,11 @@ class MainWindow(QMainWindow):
         self.tool_lib_path = os.environ.get("GSEND_TOOL_LIBRARY") or os.path.join(
             QStandardPaths.writableLocation(QStandardPaths.AppDataLocation) or os.path.expanduser("~/.gsend_cadcam"),
             "tool_library.json")
-        self.tool_lib = tools.load(self.tool_lib_path)          # CAM → Tool Library
+        self.tool_lib, bad = tools.load_checked(self.tool_lib_path)   # CAM → Tool Library
+        if bad:     # never silent: the defaults are loaded and the unreadable file is kept
+            QTimer.singleShot(800, lambda: QMessageBox.warning(self, "Tool Library",
+                f"Your tool library couldn't be read, so the default tools are loaded.\n\n"
+                f"Your old file was kept as:\n{bad}"))
         proj = str(self.prefs.value("view/projection", "ortho"))
         self.viewport.set_projection(proj)
         self.topbar.set_projection(self.viewport.projection)
@@ -127,6 +134,9 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------- model / view sync
     def rebuild(self, fit=False):
         self.model = self.kernel.build(self.doc)
+        geo = json.dumps(self.doc.features[: self.doc.marker], sort_keys=True)
+        if geo != self._geo_key:         # the part changed: CAM must re-read it (never key on id(model))
+            self._geo_key, self.cam_cache = geo, {}
         sel = self._shown_sel()
         self.viewport.show_bodies(self.model.bodies, sel)
         self.draw_sketches()
