@@ -33,15 +33,16 @@ drives (`tests/drive_sketch_orbit.py`) need a real screen.
 - **Last change, in the newest commit:** in a sketch, Shift + left drag or Alt + left drag turns the view (a plain
   left drag still draws / selects; Shift + click without a drag is still a click). Shane said "I can't rotate after I
   draw lines"; I could not reproduce a break, only that left drag never rotated in a sketch and Shift + wheel-button
-  drag does. **Ask him whether this fixed what he meant.** Not yet in his installed exe.
+  drag does. **Confirmed by Shane 10/3/26: the Shift drag fixed the rotate problem.** In his installed exe (5f8064d).
 
 ## Open items / things not verified by hand
-- Shane has not yet run cutter comp, the 0-on-axis fix or the sketch orbit in the real window; they are tested by
-  drive scripts only.
+- Shane has not yet run cutter comp or the 0-on-axis fix in the real window; they are tested by drive scripts only.
+  (Sketch orbit: confirmed by hand 10/3/26.)
 - Cutter comp assumes G42 for OD and G41 for ID (Haas convention); his own programs have no G41/G42 to confirm. It
   applies only to the turning Contour, and a G70-cycle Contour is posted line by line when comp is on.
-- `tests/drive_fillet_revolve.py`, `drive_sketch_dims.py`, `drive_edit.py`, `drive_sketch_plane.py` fail (the first
-  three failed before these changes too; `drive_sketch_plane` needs a DISPLAY). Not investigated.
+- `drive_sketch_dims.py`, `drive_edit.py`, `drive_sketch_plane.py` fail (the first two failed before these changes
+  too; `drive_sketch_plane` needs a DISPLAY). Not investigated. `tests/drive_fillet_revolve.py` passes 9/9 on the home
+  laptop at 5f8064d (10/3/26), so its failure at work is environment, not code.
 - PR descriptions: add the sketch orbit; the PR #2 test list / count (239) is stale.
 - Importer Phase 6 options he has not picked: dimension table, edit-with-neighbours-follow, check-against-drawing.
 - Program O1646 (title OP1, then "(OP 1)" after "(OP2)") looks like an unusual ordering; not checked.
