@@ -113,9 +113,25 @@ check("...and the origin (a snap point) is not mistaken for an axis click", s.xr
 s.on_click((0.02, 4.0), Ev()); s.on_click((0.02, 4.0), Ev())
 s.set_tool(None)
 
+# ---- zero is a distance: typing 0 puts the line right on the axis ----
+s.ents, s.origin = [], []
+s.set_tool("Line")
+s.on_click((3.0, 0.03), Ev()); s.on_move((3.0, 1.0), Ev(50, 50)); s.on_key(key("0"))
+check("typing 0 opens the box with the 0", s.editor.isVisible() and s.editor.box.lineEdit().text() == "0")
+s.editor._done(); QTest.qWait(50)
+check("0 puts the level line on the X axis (Y 0), not nothing",
+      len(s.ents) == 1 and s.ents[0]["type"] == "xline" and s.ents[0]["p"][1] == 0 and abs(s.ents[0]["d"][0] - 1) < 1e-9)
+s.on_click((0.02, 3.0), Ev()); s.on_move((1.0, 3.0), Ev(60, 60)); s.on_key(key("0")); s.editor._done(); QTest.qWait(50)
+check("0 from the Y axis puts the plumb line on the Y axis (X 0)",
+      len(s.ents) == 2 and s.ents[1]["p"][0] == 0 and abs(s.ents[1]["d"][1] - 1) < 1e-9)
+s.on_click((3.0, 0.03), Ev()); s.on_move((3.0, -1.0), Ev(50, 50)); s.on_key(key("0"))
+s.editor.box.lineEdit().setText("0.0"); s.editor._done(); QTest.qWait(50)
+check("0.0 typed with the cursor below the axis lands on it too", len(s.ents) == 3 and s.ents[2]["p"][1] == 0)
+s.set_tool(None)
+
 win.finish_sketch(); QTest.qWait(200)
 f = win.doc.features[-1]
-check("Finish Sketch keeps them in the sketch", sum(e["type"] == "xline" for e in f["ents"]) >= 2)
+check("Finish Sketch keeps them in the sketch", sum(e["type"] == "xline" for e in f["ents"]) >= 3)
 vp_groups = vp._groups.get("sketches", [])
 check("...but the finished sketch is drawn without the parallel lines (one actor: the rectangle's lines)",
       all(max(abs(c) for c in a.GetBounds()) < 50 for a in vp_groups))

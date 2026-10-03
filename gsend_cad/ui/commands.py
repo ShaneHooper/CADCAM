@@ -990,13 +990,13 @@ class SketchSession:
         ref = self.xref
 
         def apply(value):
-            if self.xref is not ref or abs(value) < 1e-12:
-                return
+            if self.xref is not ref:
+                return                                           # (0 is a distance too: right on the axis / line)
             _e, off = sk.xline_offset(ref[0], ref[1], side)
             n = (-ref[1][1], ref[1][0])
             n = (n[0] / math.hypot(*n), n[1] / math.hypot(*n))
             signed = value * (1.0 if off >= 0 else -1.0)         # a minus sign: the other side
-            self._place_xline(sk.xline((ref[0][0] + signed * n[0], ref[0][1] + signed * n[1]), ref[1]))
+            self._place_xline(sk.xline((ref[0][0] + signed * n[0] + 0.0, ref[0][1] + signed * n[1] + 0.0), ref[1]))
             self.vp.plotter.setFocus()
         self.editor.open("Distance", 0.0, 4, pos, apply)
         le = self.editor.box.lineEdit()
