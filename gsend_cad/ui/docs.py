@@ -37,6 +37,7 @@ toolpath is open, left drag orbits as before.</td></tr>
 <tr><td class="k">Left click</td><td>Picks the body under it (Ctrl: add / drop); empty space clears.</td></tr>
 <tr><td class="k">Shift + left drag</td><td>Orbit (spin the part)</td></tr>
 <tr><td class="k">Shift + wheel-button drag</td><td>Orbit freely in any direction. Works while sketching too (left click draws there).</td></tr>
+<tr><td class="k">Shift or Alt + left drag, while sketching</td><td>Turn the view (a plain left drag draws or selects there). A Shift + click that does not move is still a click.</td></tr>
 <tr><td class="k">Right drag</td><td>Pan</td></tr>
 <tr><td class="k">Wheel-button drag</td><td>Pan</td></tr>
 <tr><td class="k">Mouse wheel</td><td>Zoom (toward you zooms in)</td></tr>
