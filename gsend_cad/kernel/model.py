@@ -202,7 +202,8 @@ def extrude_tool(f: dict, feats: list):
 
 
 def revolve_axis(f: dict, feats: list) -> Axis:
-    """World axis of a revolve: the sketch's own X or Y axis, or one of its lines."""
+    """World axis of a revolve: the sketch's own X or Y axis, one of its lines, or two sketch points
+    ("pts": the edge of a rectangle or polygon the user clicked)."""
     s = next((g for g in feats if g["kind"] == "sketch" and g["id"] == f["axis"]["sketch"]), None)
     if s is None:
         raise ValueError(f"{f['name']}: its sketch is gone")
@@ -213,6 +214,10 @@ def revolve_axis(f: dict, feats: list) -> Axis:
         if not (0 <= ax["ent"] < len(ents)) or ents[ax["ent"]]["type"] != "line":
             raise ValueError(f"{f['name']}: its axis line is gone")
         a, b = ents[ax["ent"]]["pts"]
+    elif ax["kind"] == "pts":
+        a, b = ax["a"], ax["b"]
+        if math.hypot(b[0] - a[0], b[1] - a[1]) < 1e-9:
+            raise ValueError(f"{f['name']}: its axis has no length")
     else:
         a, b = (0.0, 0.0), ((1.0, 0.0) if ax["kind"] == "x" else (0.0, 1.0))
     wa, wb = pl.to_world(fr, a), pl.to_world(fr, b)

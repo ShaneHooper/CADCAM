@@ -27,6 +27,9 @@ def pump(ms=150):
 
 def shot(name):
     pump(300)
+    if "DISPLAY" not in os.environ:                     # Windows: grab the window itself
+        win.grab().save(os.path.join(OUT, name + ".png"))
+        return
     from PIL import ImageGrab
     g = win.frameGeometry()
     ImageGrab.grab(xdisplay=os.environ["DISPLAY"]).crop((g.x(), g.y(), g.x() + 1400, g.y() + 820)).save(
@@ -151,7 +154,24 @@ win.run_tool("Revolve")
 rs = win.session
 click(1, 0.75)
 click(2.5, 0.6)
-check("Revolve picks 2 profiles, axis defaults to sketch X", len(rs.sel) == 2 and rs.panel.axis.currentData()[0] == "x")
+check("Revolve picks 2 profiles, axis defaults to sketch X", len(rs.sel) == 2 and rs.axis == ("x", None)
+      and rs.panel.axis_val.text() == "Sketch X axis")
+rs.panel.axis_btn.setChecked(True)
+check("the cursor button arms an axis pick in the view", rs.axis_pick)
+click(1, 1)                                             # the top edge of the first rectangle
+check("clicking a rectangle's edge makes it the axis and the button pops back up",
+      rs.axis[0] == "pts" and rs.axis[1][0][1] == rs.axis[1][1][1] == 1.0
+      and rs.panel.axis_val.text().startswith("Edge of") and not rs.axis_pick)
+f = rs.feature()
+check("the feature carries the edge as two sketch points", f["axis"]["kind"] == "pts" and f["axis"]["a"][1] == 1.0)
+rs.panel.axis_btn.setChecked(True)
+click(1.5, 0)                                           # the red X axis
+check("clicking the X axis picks it again", rs.axis == ("x", None) and rs.panel.axis_val.text() == "Sketch X axis")
+rs.panel.axis_btn.setChecked(True)
+click(2.5, 3)                                           # nothing there
+check("a miss keeps the axis and stays armed", rs.axis == ("x", None) and rs.axis_pick)
+key(Qt.Key_Escape)
+check("Esc leaves axis picking without leaving Revolve", not rs.axis_pick and win.session is rs)
 shot("fr_04_revolve")
 key(Qt.Key_Return)
 want = math.pi * (1 - 0.25) * 2 + math.pi * (0.75 ** 2 - 0.25) * 1

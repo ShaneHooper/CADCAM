@@ -8,7 +8,8 @@ from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
 PATHS = {
-    "sketch": '<path d="M4 20 20 4M4 4h4v4H4zM16 16h4v4h-4z"/>',
+    # "2D": the sketch is the flat drawing the solids grow from (the ribbon says "Sketch" under it)
+    "sketch": '<path d="M3 8.5a4 4 0 0 1 8 0c0 3.5-8 6.5-8 10.5h8M14 5v14h3a7 7 0 0 0 0-14z"/>',
     "box": '<path d="M4 8l8-4 8 4v8l-8 4-8-4zM4 8l8 4 8-4M12 12v8"/>',
     "cyl": '<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/>',
     "extrude": '<path d="M5 17h14M8 17l4-4 4 4M12 13V4M5 20h14"/>',

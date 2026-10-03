@@ -105,8 +105,9 @@ class Document:
                          "profiles": refs, **kw})
 
     def add_revolve(self, profiles, axis: dict, angle=360.0, op="join", **kw):
-        """axis: {"sketch": id, "kind": "x" | "y" | "line", "ent": index (for "line")} - the
-        sketch's X / Y axis through its origin, or one of its lines."""
+        """axis: {"sketch": id, "kind": "x" | "y" | "line" | "pts", "ent": index (for "line"),
+        "a": [u, v], "b": [u, v] (for "pts")} - the sketch's X / Y axis through its origin, one of
+        its lines, or a picked edge of a rectangle / polygon given as two sketch points."""
         if op not in ("join", "cut", "new"):
             raise ValueError(f"bad revolve op {op!r}")
         if not 0 < abs(angle) <= 360:
