@@ -164,13 +164,13 @@ click(4, 2)
 check("point placed and selected", s.ents[2] == {"type": "point", "p": [4.0, 2.0]} and s.sel == 2)
 
 win.run_tool("Line")
-click(0, 2)
-click(1, 2)
+click(0.5, 2)                      # off the Y axis: a first click on an axis starts a Parallel to Axis line
+click(1.5, 2)
 key(Qt.Key_Escape)
 type_value("len", "2")
 type_value("ang", "45")
 ln = s.ents[3]
-check("line length 2 at 45°", close(ln["pts"][1], (math.sqrt(2), 2 + math.sqrt(2))))
+check("line length 2 at 45°", close(ln["pts"][1], (0.5 + math.sqrt(2), 2 + math.sqrt(2))))
 
 key(Qt.Key_Escape)                 # select mode
 click(3.0, 0.4)                    # right edge of the rectangle
@@ -182,7 +182,7 @@ check("Delete removes the selected rectangle", len(s.ents) == 3 and s.ents[0]["t
 key(Qt.Key_Z, Qt.ControlModifier)
 check("Ctrl+Z brings it back", len(s.ents) == 4 and s.ents[0]["type"] == "rect")
 key(Qt.Key_Z, Qt.ControlModifier)  # undoes the line's 45° edit
-check("Ctrl+Z also undoes a typed value", close(s.ents[3]["pts"][1], (2, 2)))
+check("Ctrl+Z also undoes a typed value", close(s.ents[3]["pts"][1], (2.5, 2)))
 
 key(Qt.Key_Return)
 f = win.doc.features[-1]
