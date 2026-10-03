@@ -15,7 +15,9 @@ small and cheap.** Read only the file(s) the task needs, change only what he ask
 | CAD/CAM switch, CAM tabs (`CAM_TABS`), G-SEND wordmark (`Wordmark`, text/colour in `theme.BRAND_TEXT` / `BRAND_INK`) | `gsend_cad/ui/panels.py` |
 | Toolbar/tree icons | `gsend_cad/ui/icons.py` → `PATHS` |
 | Help → Documentation text | `gsend_cad/ui/docs.py` |
-| Sketch tools (incl. corner Fillet/Chamfer, Trim, Rotate / Mirror / Pattern `XformPanel`), palette value fields, Extrude / Revolve / edge Fillet dialogs | `gsend_cad/ui/commands.py` |
+| Sketch tools (incl. corner Fillet/Chamfer, Trim, Rotate / Mirror / Pattern `XformPanel`), palette value fields | `gsend_cad/ui/sketch_cmds.py` |
+| Extrude / Revolve / edge Fillet dialogs | `gsend_cad/ui/solid_cmds.py` |
+| Shared command pieces (`Panel`: draggable, Esc closes; `NumBox`; OK / Cancel footer) | `gsend_cad/ui/cmd_base.py` (`ui/commands.py` only re-exports the split files) |
 | 3D view, camera, grid, HUD, view cube, projection (ortho / perspective) | `gsend_cad/ui/viewport.py` · Settings menu in `panels.py` TopBar, saved via QSettings in `main_window.py` |
 | Menus, shortcuts, wiring, save/open | `gsend_cad/ui/main_window.py` |
 | F12 / Print Screen screenshot (menus included, to clipboard + Pictures) | `gsend_cad/ui/snapshot.py` |
@@ -23,9 +25,9 @@ small and cheap.** Read only the file(s) the task needs, change only what he ask
 | Startup, splash, crash logs, `--selftest` | `gsend_cad/ui/app.py` · Windows taskbar icon (from the .ico, no exe rebuild): `ui/winicon.py` |
 | Sketch entity math, exact values (`params`/`set_param`), dimensions, picking / closed profiles, trim, rotate / mirror / pattern math | `gsend_cad/core/sketch.py`, `core/profiles.py` |
 | Features, timeline, .gcad file format | `gsend_cad/core/document.py` |
-| CAM setups (milling / turning, stock, WCS math) and operations (Face, 2D Contour (picked chains), mill Roughing (islands / boundary, `kernel.slice_chains` / `clearing_passes`), turning Roughing (OD / ID), turning Contour (op type `finish`), Groove (OD / ID / face), Drill toolpaths, cycle / move times) | `gsend_cad/core/cam.py` (data, toolpaths) · `ui/commands.py` `SetupSession` / `OpSession` / `SimSession` / `draw_setup` / `draw_toolpath` (panels, simulate, drawing); part outline for contours = `kernel.outline_loops`, turned OD silhouette for Roughing / Contour = `kernel.turn_profile`, bore (Internal) = `kernel.turn_bore`, half cross-section for Groove = `kernel.turn_section`, holes for Drill = `kernel.find_holes` |
-| Tool library (tools ops pick from; JSON in the user's app-data folder) | `gsend_cad/core/tools.py` · dialog `ui/commands.py` `ToolLibraryDialog` · path / load / save in `main_window.py` |
-| Post processor (G-code: Haas / Fanuc, mill / lathe, G72 / G71 / G70 / G81 / G83 / G73 cycles) | `gsend_cad/core/post.py` · dialog `ui/commands.py` `PostDialog` |
+| CAM setups (milling / turning, stock, WCS math) and operations (Face, 2D Contour (picked chains), mill Roughing (islands / boundary, `kernel.slice_chains` / `clearing_passes`), turning Roughing (OD / ID), turning Contour (op type `finish`), Groove (OD / ID / face), Drill toolpaths, cycle / move times) | `gsend_cad/core/cam.py` (data, toolpaths) · `ui/cam_cmds.py` `SetupSession` / `OpSession` / `SimSession` / `draw_setup` / `draw_toolpath` (panels, simulate, drawing); part outline for contours = `kernel.outline_loops`, turned OD silhouette for Roughing / Contour = `kernel.turn_profile`, bore (Internal) = `kernel.turn_bore`, half cross-section for Groove = `kernel.turn_section`, holes for Drill = `kernel.find_holes` |
+| Tool library (tools ops pick from; JSON in the user's app-data folder) | `gsend_cad/core/tools.py` · dialog `ui/cam_dialogs.py` `ToolLibraryDialog` · path / load / save in `main_window.py` |
+| Post processor (G-code: Haas / Fanuc, mill / lathe, G72 / G71 / G70 / G81 / G83 / G73 cycles) | `gsend_cad/core/post.py` · dialog `ui/cam_dialogs.py` `PostDialog` |
 | Lathe cutter comp (Off / Machine G41 G42 G40 / Computer = nose radius worked into the points) | tip math gsend_cad/core/nose.py · modes in core/post.py (COMPS, _comp_plan) · box in PostDialog |
 | Solids, booleans, revolve, edge fillet/chamfer, STEP/STL | `gsend_cad/kernel/model.py` |
 | Windows build | `packaging/` (spec, entry, installer .iss, update_app.py, sign_folder.py) |
