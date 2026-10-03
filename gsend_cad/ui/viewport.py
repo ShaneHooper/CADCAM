@@ -173,19 +173,19 @@ class Viewport(QWidget):
             self.plotter.add_mesh(polyline_mesh(m2), color="#333333", line_width=1, pickable=False, lighting=False)]
         for d, c in (((1.5, 0, 0), theme.BAD), ((0, 1.5, 0), theme.OK), ((0, 0, 1.5), "#3b8cff")):
             self.plotter.add_mesh(polyline_mesh([[(0, 0, 0), d]]), color=c, line_width=1.5, lighting=False)
-        # the sketch's own X (red) and Y (green) axes: all the way across, bold, drawn over everything, so they
-        # are there however far the view is panned or zoomed (they used to be 1.5 in long and could vanish)
+        # the sketch's own X (red) and Y (green) axes: 2 in each way from the sketch origin, thin, drawn over
+        # everything (they ran "forever" and 2.5 px wide for a while; Shane found that too much)
         self._axis_actors = []
         for d, c in (((1, 0, 0), theme.BAD), ((0, 1, 0), theme.OK)):
             a = pv.Actor(mapper=pv.DataSetMapper(polyline_mesh([[tuple(-self.AXIS_REACH * x for x in d),
                                                                 tuple(self.AXIS_REACH * x for x in d)]])))
-            a.prop.color, a.prop.line_width, a.prop.lighting = c, 2.5, False
+            a.prop.color, a.prop.line_width, a.prop.lighting = c, 1.5, False
             a.SetPickable(False)
             self.top.AddActor(a)
             self._axis_actors.append(a)
         self._sync_grid(render=False)
 
-    AXIS_REACH = 5000.0                      # the sketch axes run this far each way: "forever" at any zoom
+    AXIS_REACH = 2.0                         # the sketch axes run this far (inches) each way from the origin
     GRID_LIFT = 0.003                        # the grid floats this far above the face it lies on (no flicker)
 
     @property
