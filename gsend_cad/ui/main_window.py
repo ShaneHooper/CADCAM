@@ -20,8 +20,9 @@ from .commands import (EdgeSession, ExtrudeSession, OpSession, PlanePickSession,
 from .panels import Browser, Ribbon, StatusBar, Timeline, TopBar
 
 FILE_FILTER = f"{APP_NAME} (*.gcad);;All files (*)"
-DEFAULT_MSG = ("Left drag: selection box · Shift + left drag: orbit (Shift + wheel-button drag works while sketching) · "
-               "Right drag: pan · Wheel: zoom · Click a feature in the timeline to roll back")
+# the idle status line is empty: the mouse hints that used to live there cluttered the window (Shane 10/3/26);
+# Help > Documentation has them. Command prompts and results still show while a command runs.
+DEFAULT_MSG = ""
 
 
 class MainWindow(QMainWindow):
@@ -56,6 +57,7 @@ class MainWindow(QMainWindow):
         g.setSpacing(0)
         self.topbar = TopBar(fonts)
         self.ribbon = Ribbon()
+        self.ribbon.place_menus(self.topbar.settings, self.topbar.help)
         self.browser = Browser()
         self.viewport = Viewport()
         self.status = StatusBar()
@@ -537,12 +539,13 @@ class MainWindow(QMainWindow):
                                      else "Finish the command first")
             return
         self.ribbon.show_mode(mode)
+        # the body readout (bbox / volume / mass) is CAD information: CAM keeps the browser uncluttered
+        self.browser.props.setVisible(mode != "cam")
         if mode == "cam":
             self.show_cam_tab(self.doc.setup(getattr(self, "cam_setup", None)) or
                               (self.doc.setups[-1] if self.doc.setups else None))
         self.draw_cam()
-        self.message("CAM: pick a Setup, then its toolpaths. Your model stays as it is; flip back to CAD to edit it."
-                     if mode == "cam" else DEFAULT_MSG)
+        self.message(DEFAULT_MSG)
 
     def run_tool(self, label: str):
         if self.session is not None:

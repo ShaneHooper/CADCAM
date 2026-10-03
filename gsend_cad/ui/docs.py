@@ -390,6 +390,8 @@ same line runs it that much further. Same on turning <b>Contour</b>.</li>
 undercuts are skipped: an OD tool can't reach into them.</li>
 <li><b>Output</b>: <b>Single lines (G01)</b> writes every move; <b>Canned cycle (G71)</b> writes a G71 with the
 finished contour in N-blocks (Haas: one line with D; Fanuc: two G71 lines). U / W carry the stock to leave.</li>
+<li>A radius on the part (a fillet, a round on the sketch) is written as one <b>G02 / G03</b> block with R, in
+either output. A chamfer is a G01.</li>
 </ol>
 """),
     ("finish", "CAM: Contour (turning finish)", """

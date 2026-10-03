@@ -140,7 +140,7 @@ key(Qt.Key_Return)                            # XY plane
 s = win.session
 check("Enter takes the XY plane", isinstance(s, SketchSession) and pl.is_xy(s.frame))
 win.run_tool("Line")
-click_uv(0.0, 1.0)
+click_uv(0.5, 1.0)                            # off the Y axis: a first click on an axis starts a Parallel to Axis line
 click_uv(2.0, 1.0)
 key(Qt.Key_Escape)                            # end the chain
 check("a line is drawn", len(s.ents) == 1 and s.ents[0]["type"] == "line")
@@ -153,8 +153,8 @@ shot("plane_05_snap_end")
 click_at(near_end)
 check("the circle's center landed exactly on the end", s.pts and s.pts[0] == [2.0, 1.0])
 key(Qt.Key_Escape)
-move_to(screen_uv(1.02, 0.98))
-check("the midpoint snaps too", s.snap_hit is not None and s.snap_hit[2] == "mid" and s.snap_hit[:2] == (1.0, 1.0))
+move_to(screen_uv(1.27, 0.98))
+check("the midpoint snaps too", s.snap_hit is not None and s.snap_hit[2] == "mid" and s.snap_hit[:2] == (1.25, 1.0))
 win.session.set_plane(0.5)                    # the plate's top face is at Z 0.5: its edges come in
 check("raising the plane to the top face brings the part's edges in", len(s.model_edges) > 0)
 corner = (2.0 - 0.25, 1.5)                    # where the top face's straight edge meets the corner radius

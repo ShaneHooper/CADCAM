@@ -92,8 +92,8 @@ class SetupPanel(Panel):
             b = QPushButton(label.upper())
             b.setCheckable(True)
             b.setCursor(Qt.PointingHandCursor)
-            rad = "border-top-left-radius:11px;border-bottom-left-radius:11px;" if i == 0 else \
-                  "border-top-right-radius:11px;border-bottom-right-radius:11px;"
+            rad = "border-top-left-radius:4px;border-bottom-left-radius:4px;" if i == 0 else \
+                  "border-top-right-radius:4px;border-bottom-right-radius:4px;"      # slight corners, like the CAD / CAM switch
             b.setStyleSheet(f"QPushButton{{border:1px solid {theme.ACCENT};{rad}padding:3px 0;font-weight:700;"
                             f"letter-spacing:2px;color:{theme.FG2};background:{theme.BG};}}"
                             f"QPushButton:checked{{background:{theme.ACCENT};color:#ffffff;}}")
