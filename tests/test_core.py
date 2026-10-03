@@ -635,3 +635,19 @@ def test_trim_groove_drawn_on_the_od_line():
                        for s in segs)                                    # nothing left across the groove
     e, _ = sk.trim([sk.line((0, 0), (6, 0)), sk.line((1, -1), (1, 1))], [0, 1], (3, 0), 0.05)
     assert e[-1]["pts"] == [[0, 0], [1, 0]]
+
+
+def test_tool_library_unreadable_file_is_backed_up(tmp_path):
+    from gsend_cad.core import tools
+    p = tmp_path / "tool_library.json"
+    p.write_text("{ not json", encoding="utf-8")
+    lib, bad = tools.load_checked(str(p))
+    assert lib == tools.DEFAULT and bad and open(bad, encoding="utf-8").read() == "{ not json"
+    assert tools.load_checked(str(tmp_path / "missing.json")) == (tools.DEFAULT, None)
+
+
+def test_document_save_is_atomic(tmp_path):
+    from gsend_cad.core import Document, bracket_plate
+    p = tmp_path / "part.gcad"
+    bracket_plate().save(p)
+    assert Document.load(p).name == "Bracket Plate v3" and not (tmp_path / "part.gcad.tmp").exists()

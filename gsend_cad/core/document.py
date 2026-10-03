@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from typing import Callable
 
 from . import cam
@@ -326,8 +327,14 @@ class Document:
         return doc
 
     def save(self, path):
-        with open(path, "w", encoding="utf-8") as fh:
+        """Written to a temp file next to it, then swapped in: a crash mid-save never corrupts the part."""
+        path = os.fspath(path)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(self.to_dict(), fh, indent=1)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
 
     @classmethod
     def load(cls, path) -> "Document":
