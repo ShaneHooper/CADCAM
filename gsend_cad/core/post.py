@@ -1,0 +1,382 @@
+"""Post processor: a setup's operations -> G-code text (stdlib only, like the rest of core).
+
+    from gsend_cad.core import post
+    text = post.post_setup(setup, [(op, moves), ...], controller="haas", program=1000)
+
+`moves` are the WCS toolpaths from cam.face_toolpath (turning X is a radius there; the lathe
+post writes it as a diameter). Inch, absolute, one tool change per operation. Controllers:
+"haas" and "fanuc" (generic Fanuc: same codes, homes X and Y together).
+"""
+from __future__ import annotations
+
+from . import arcs
+from . import cam
+from . import nose
+from .cam import FACE_PULL
+
+CONTROLLERS = {"haas": "Haas", "fanuc": "Fanuc (generic)"}
+OFFSETS = ["G54", "G55", "G56", "G57", "G58", "G59"]
+# Cutter comp for a lathe Contour. Off: the part line point to point (no G41 / G42, no nose radius). Machine: the same
+# points, with G42 / G41 and G40 in the program so the control compensates. Computer: no G41 / G42 / G40; the program
+# carries the points that make the nose radius cut the part line (nose.py).
+COMPS = {"off": "Off", "machine": "Machine (G41 / G42)", "computer": "Computer (in the code)"}
+COMP_CODE = {"od": "G42", "id": "G41"}      # an OD tool on the Haas lathes: G42; an ID (bore) tool: G41
+
+
+def num(v: float) -> str:
+    """Fanuc-style number: 4 places, trailing zeros dropped, always a decimal point (1.25, 0., -0.02)."""
+    s = f"{v:.4f}".rstrip("0")
+    return "0." if s in ("-0.", "0.", "-0") else s
+
+
+ASCII = {"·": "-", "Ø": "DIA ", "×": "X", "°": " DEG", "−": "-"}
+
+
+def _comment(text: str) -> str:
+    """(UPPER CASE, plain ASCII, no nested parentheses) - what every control accepts."""
+    t = "".join(ASCII.get(c, c) for c in text.upper())
+    return "(" + "".join(c for c in t if c not in "()" and 32 <= ord(c) < 127) + ")"
+
+
+class _Modal:
+    """Writes only the words that changed since the last block (X, Y, Z, F, G0/G1)."""
+
+    def __init__(self):
+        self.last = {}
+
+    def block(self, words: list[tuple[str, str]]) -> str:
+        out = []
+        for k, v in words:
+            if k in ("X", "Y", "Z", "F", "G") and self.last.get(k) == v:
+                continue
+            self.last[k] = v
+            out.append(v if k == "G" else k + v)
+        return " ".join(out)
+
+    def forget(self, *keys):
+        for k in keys:
+            self.last.pop(k, None)
+
+
+def post_setup(setup: dict, ops: list[tuple[dict, list]], controller: str = "haas", program: int = 1000,
+               offset: str = "G54", coolant: bool = True, doc_name: str = "", comp: str = "off") -> str:
+    """G-code for every operation of a setup, in order. comp: cutter comp for a lathe Contour (COMPS)."""
+    if controller not in CONTROLLERS:
+        raise ValueError(f"controller must be one of {', '.join(CONTROLLERS)}")
+    if comp not in COMPS:
+        raise ValueError(f"cutter comp must be one of {', '.join(COMPS)}")
+    if offset not in OFFSETS:
+        raise ValueError(f"work offset must be one of {', '.join(OFFSETS)}")
+    if not 1 <= int(program) <= 9999:
+        raise ValueError("program number must be 1 to 9999")
+    if not ops:
+        raise ValueError(f"{setup['name']} has no operations to post")
+    turning = setup["type"] == cam.TURNING
+    L = ["%", f"O{int(program):04d} {_comment(setup['name'])}"]
+    if doc_name:
+        L.append(_comment(f"PART {doc_name}"))
+    L.append(_comment(f"G-SEND CAD/CAM {CONTROLLERS[controller]} {'LATHE' if turning else 'MILL'}"))
+    L.append(_comment(cam.describe(setup)))
+    L.append("G20 G18 G40 G80 G99" if turning else "G20 G17 G40 G49 G80 G90")
+    g71 = []                                          # (contour, P, Q) of each G71 rough so far
+    for k, (op, moves) in enumerate(ops):
+        L += (_lathe_op(setup, op, moves, offset, coolant, controller, 100 * (k + 1), g71, comp) if turning
+              else (_mill_drill if op.get("type") == "drill" else _mill_op)(setup, op, moves, offset, coolant))
+    if turning:
+        L += ["G28 U0. W0.", "M30", "%"]
+    else:
+        L += ["G28 G91 Z0.", "G28 G91 Y0." if controller == "haas" else "G28 G91 X0. Y0.", "G90", "M30", "%"]
+    return "\n".join(L) + "\n"
+
+
+def _mill_op(setup, op, moves, offset, coolant):
+    t = int(op.get("tool", 1))
+    what = {"face": "FACE MILL", "contour": "END MILL 2D CONTOUR", "rough": "END MILL ROUGHING"}.get(op.get("type", "face"), "")
+    L = ["", _comment(f"{op['name']} T{t} D{num(op['tool_dia'])} {what}"),
+         f"T{t} M06", f"{offset} G90", f"S{int(round(op['rpm']))} M03"]
+    m = _Modal()
+    first = True
+    prev = None
+    for kind, (x, y, z) in moves:
+        if first:                                     # XY first, then Z with length comp
+            L.append(m.block([("G", "G00"), ("X", num(x)), ("Y", num(y))]))
+            L.append(f"G43 Z{num(z)} H{t:02d}" + (" M08" if coolant else ""))
+            m.last["Z"] = num(z)
+            first = False
+            prev = (x, y, z)
+            continue
+        words = [("G", "G00" if kind == "rapid" else "G01"), ("X", num(x)), ("Y", num(y)), ("Z", num(z))]
+        if kind == "feed":                            # straight down = plunge feed, when the op has one
+            down = prev is not None and prev[:2] == (x, y) and z < prev[2]
+            words.append(("F", num(op["plunge"] if down and "plunge" in op else op["feed"])))
+        line = m.block(words)
+        if line and line not in ("G00", "G01"):
+            L.append(line)
+        prev = (x, y, z)
+    L += ["M09" if coolant else None, "M05"]
+    return [x for x in L if x is not None]
+
+
+def _with_g(line: str, code: str) -> str:
+    """Add a G word (G41 / G42 / G40) to a motion block: 'G01 Z-1.' -> 'G01 G42 Z-1.'; a block that dropped its
+    modal G01 / G00 just gets it in front."""
+    head = line.split(" ", 1)
+    if head[0] in ("G00", "G01"):
+        return head[0] + f" {code}" + (" " + head[1] if len(head) > 1 else "")
+    return f"{code} {line}".strip()
+
+
+def _comp_plan(op, moves, comp, cycle):
+    """Cutter comp for a lathe Contour. Returns (moves, cycle, notes, code, a, b): the moves to write (the tip's path in
+    computer mode), whether it can still be a canned cycle (comp needs the contour written out, so G70 is not),
+    the comments to put at the top, and for machine comp the G41 / G42 word with the indexes of the approach move
+    (a) and the move that leaves the contour (b + 1) - code is None otherwise."""
+    if op.get("type") != "finish" or comp == "off":
+        return moves, cycle, [], None, None, None
+    r = float(op.get("nose_r") or 0.0)
+    internal = bool(op.get("internal"))
+    notes = []
+    if cycle:
+        cycle = False
+        notes.append("CUTTER COMP: CONTOUR POSTED LINE BY LINE (NOT G70)")
+    feeds = [i for i, (k, _p) in enumerate(moves) if k == "feed"]
+    if comp == "computer":
+        if r <= 0:
+            notes.append("CUTTER COMP COMPUTER: THIS TOOL HAS NO NOSE RADIUS - NOT COMPENSATED")
+        else:
+            try:
+                moves = nose.compensate(moves, r, internal)
+                notes.append(f"CUTTER COMP IN THE CODE: NOSE R{num(r)} - TOOL TIP PATH, NO G41 / G42")
+            except ValueError as exc:
+                notes.append(f"CUTTER COMP COMPUTER: {exc} - NOT COMPENSATED")
+        return moves, cycle, notes, None, None, None
+    code = COMP_CODE["id" if internal else "od"]
+    if len(feeds) < 2 or feeds[-1] + 1 >= len(moves):
+        notes.append("CUTTER COMP MACHINE: NO CONTOUR PASS TO COMPENSATE")
+        return moves, cycle, notes, None, None, None
+    notes.append(f"CUTTER COMP {code} ON AT THE APPROACH, G40 AFTER THE CONTOUR - "
+                 + (f"SET NOSE RADIUS R{num(r)} AND TIP IN THE OFFSET" if r > 0 else "SET NOSE RADIUS AND TIP IN THE OFFSET"))
+    return moves, cycle, notes, code, feeds[0], feeds[-1] + 1
+
+
+def _lathe_op(setup, op, moves, offset, coolant, controller="haas", n=100, g71=None, comp="off"):
+    t = int(op.get("tool", 1))
+    cycle = op.get("output") == "cycle"
+    rough = op.get("type") == "rough"
+    kind = op.get("type", "face")
+    if kind == "drill":
+        return _lathe_drill(op, moves, offset, coolant, controller)
+    moves, cycle, comp_notes, comp_code, comp_on, comp_off = _comp_plan(op, moves, comp, cycle)
+    what = {"rough": "ID ROUGH" if op.get("internal") else "OD ROUGH",
+            "finish": "ID CONTOUR" if op.get("internal") else "CONTOUR", "face": "FACE",
+            "groove": {"od": "OD", "id": "ID", "face": "FACE"}.get(op.get("side"), "OD") + " GROOVE"}[kind] + \
+        ({"rough": " G71 CYCLE", "finish": " G70 CYCLE", "face": " G72 CYCLE"}[kind] if cycle else "")
+    note = None
+    if kind == "finish" and cycle:                    # G70 finishes the last G71 rough's contour (P..Q)
+        ref = (g71 or [None])[-1]
+        ref = ref and ref[1:]
+        if ref is None:                               # no G71 to point at: cut the contour line by line
+            cycle = False
+            note = _comment("G70 NEEDS AN OD ROUGH POSTED AS G71 - POSTED LINE BY LINE")
+            what = "CONTOUR"
+    L = ["", _comment(f"{op['name']} T{t:02d} {what}"), "G28 U0. W0.", f"T{t:02d}{t:02d}", offset,
+         f"G50 S{int(round(op['max_rpm']))}", f"G96 S{int(round(op['sfm']))} M03" + (" M08" if coolant else "")]
+    if note:
+        L.insert(2, note)
+    for k, text in enumerate(comp_notes):
+        L.insert(2 + k, _comment(text))
+    m = _Modal()
+    if cycle:
+        if kind == "finish":
+            _k, (xs, _y, zs) = moves[0]
+            return L + [m.block([("G", "G00"), ("X", num(xs * 2)), ("Z", num(zs))]), f"F{num(op['ipr'])}",
+                        f"G70 P{ref[0]} Q{ref[1]}", f"G00 X{num(xs * 2)} Z{num(zs)}"] + \
+                (["M09"] if coolant else []) + ["M05"]
+        if rough and g71 is not None:
+            g71.append((_contour(moves, op), n, n + 1))
+        return L + (_g71(moves, op, m, controller, n) if rough else _g72(moves, op, m, controller, n)) + (["M09"] if coolant else []) + ["M05"]
+    for i, words in _lathe_blocks(moves, op["ipr"]):  # X radius -> diameter; radii as G02 / G03
+        line = m.block(words)
+        if comp_code and i == comp_on:                # machine comp: on at the approach move ...
+            line = _with_g(line, comp_code)
+        elif comp_code and i == comp_off:             # ... off on the first move away from the contour
+            line = _with_g(line, "G40")
+        if line and line not in ("G00", "G01"):
+            L.append(line)
+    L += ["M09" if coolant else None, "M05"]
+    return [x for x in L if x is not None]
+
+
+def _arc_words(pts, piece, ipr=None):
+    """The words of one piece of a (x radius, z) polyline: G01 to its end, or G02 / G03 with R. In the G18
+    view (Z right, X up) a counter-clockwise turn is G03."""
+    x, z = pts[piece[2]]
+    g = "G01" if piece[0] == "line" else ("G03" if piece[5] else "G02")
+    words = [("G", g), ("X", num(x * 2)), ("Z", num(z))]
+    if piece[0] == "arc":
+        words.append(("R", num(piece[4])))
+    if ipr is not None:
+        words.append(("F", num(ipr)))
+    return words
+
+
+def _profile_words(pts, ipr=None):
+    """Blocks along a (x radius, z) profile, each as _Modal words; runs of chords on one circle are arcs."""
+    return [_arc_words(pts, p, ipr) for p in arcs.fit([(z, x) for x, z in pts])]
+
+
+def _lathe_blocks(moves, ipr):
+    """[(index of the move the block ends on, _Modal words)] for a lathe path written line by line. The feed
+    moves between a rapid and the next rapid are one cut: its first move (the approach) and last (the
+    pull-off) stay straight, and the chords between them become G02 / G03 where they lie on one circle."""
+    out = []
+    i, n = 0, len(moves)
+    while i < n:
+        if moves[i][0] != "feed":
+            x, _y, z = moves[i][1]
+            out.append((i, [("G", "G00"), ("X", num(x * 2)), ("Z", num(z))]))
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and moves[j + 1][0] == "feed":
+            j += 1
+        if j - i < 1 + arcs.MIN_CHORDS:                   # too short to hold an arc between its ends
+            for k in range(i, j + 1):
+                x, _y, z = moves[k][1]
+                out.append((k, [("G", "G01"), ("X", num(x * 2)), ("Z", num(z)), ("F", num(ipr))]))
+        else:
+            x, _y, z = moves[i][1]
+            out.append((i, [("G", "G01"), ("X", num(x * 2)), ("Z", num(z)), ("F", num(ipr))]))
+            pts = [(x, z) for _k, (x, _y, z) in moves[i:j]]
+            for piece in arcs.fit([(z, x) for x, z in pts]):
+                out.append((i + piece[2], _arc_words(pts, piece, ipr)))
+            x, _y, z = moves[j][1]
+            out.append((j, [("G", "G01"), ("X", num(x * 2)), ("Z", num(z)), ("F", num(ipr))]))
+        i = j + 1
+    return out
+
+
+def _g72(moves, op, m, controller, n):
+    """Facing as a G72 stock-removal cycle. The finished face is the contour N n .. N n+1: Z down to
+    the part face first (G72 wants Z alone in the first block), then X past center. The face's
+    stock to leave goes in W. Haas takes the depth per pass as D on one line; Fanuc wants two
+    G72 blocks (W depth R retract, then P Q U W F)."""
+    _k, (xs, _y, zs) = moves[0]
+    feeds = [p for k, p in moves if k == "feed"]
+    x_end = min(p[0] for p in feeds)
+    zf = min(p[2] for p in feeds) - op["leave"]
+    p, q = n, n + 1
+    L = [m.block([("G", "G00"), ("X", num(xs * 2)), ("Z", num(zs))])]
+    if controller == "haas":
+        L.append(f"G72 P{p} Q{q} U0. W{num(op['leave'])} D{num(op['stepdown'])} F{num(op['ipr'])}")
+    else:
+        L += [f"G72 W{num(op['stepdown'])} R{num(FACE_PULL)}",
+              f"G72 P{p} Q{q} U0. W{num(op['leave'])} F{num(op['ipr'])}"]
+    L += [f"N{p} G00 Z{num(zf)}", f"N{q} G01 X{num(x_end * 2)}", f"G00 X{num(xs * 2)} Z{num(zs)}"]
+    return L
+
+
+def _g71(moves, op, m, controller, n):
+    """OD roughing as a G71 cycle. The finish contour (N n .. N n+1) is the rough's profile pass
+    with the stock to leave taken back off (the control adds it again from U / W), its radii written
+    as G02 / G03 (core.arcs). Haas takes the depth of cut as D on one line; Fanuc wants two G71 blocks
+    (U depth R retract, then P Q U W F)."""
+    _k, (xs, _y, zs) = moves[0]
+    prof = _contour(moves, op)
+    p, q = n, n + 1
+    u, w = num(2 * op["leave_x"] * (-1 if op.get("internal") else 1)), num(op["leave_z"])   # ID: U-
+    L = [m.block([("G", "G00"), ("X", num(xs * 2)), ("Z", num(zs))])]
+    if controller == "haas":
+        L.append(f"G71 P{p} Q{q} U{u} W{w} D{num(op['stepdown'])} F{num(op['ipr'])}")
+    else:
+        L += [f"G71 U{num(op['stepdown'])} R{num(op['retract'])}", f"G71 P{p} Q{q} U{u} W{w} F{num(op['ipr'])}"]
+    c = _Modal()
+    L.append(f"N{p} " + c.block([("G", "G00"), ("X", num(prof[0][0] * 2))]))
+    c.last["Z"] = num(zs)
+    L.append(c.block([("G", "G01"), ("X", num(prof[0][0] * 2)), ("Z", num(prof[0][1]))]))   # onto the front
+    for words in _profile_words(prof):                 # along the contour; radii as G02 / G03
+        line = c.block(words)
+        if line and line != "G01":
+            L.append(line)
+    L.append(f"N{q} " + c.block([("G", "G01"), ("X", num(xs * 2))]))
+    L.append(f"G00 X{num(xs * 2)} Z{num(zs)}")
+    return L
+
+
+def _contour(moves, op):
+    """The finished contour [(x radius, z)] of a rough / finish path: its last pass along the
+    profile (without the pull-off), with the stock to leave taken back off."""
+    end = max(i for i, (k, _p) in enumerate(moves) if k == "feed")
+    a = end
+    while moves[a - 1][0] == "feed":
+        a -= 1
+    lx, lz = op["leave_x"] * (-1 if op.get("internal") else 1), op["leave_z"]   # ID: the stock is inside
+    return [(x - lx, z - lz) for _k, (x, _y, z) in moves[a:end]]
+
+
+DRILL_CODES = {"drill": "G81", "peck": "G83", "chip": "G73"}
+
+
+def _holes(moves):
+    """[(x, y, R, bottom)] from a drill path: each hole starts with a rapid to its XY at the
+    safe height, then a rapid down to R; the deepest feed is its bottom."""
+    out, i = [], 0
+    while i < len(moves) - 1:
+        (_k, (x, y, _z)), (_k2, (_x2, _y2, R)) = moves[i], moves[i + 1]
+        j = i + 2
+        bottom = R
+        while j < len(moves) and moves[j][1][:2] == (x, y) and not (moves[j][0] == "rapid" and moves[j][1][2] > R + 1e-9):
+            bottom = min(bottom, moves[j][1][2])
+            j += 1
+        out.append((x, y, R, bottom))
+        i = j + 1                                    # skip the rapid back up to the safe height
+    return out
+
+
+def _mill_drill(setup, op, moves, offset, coolant):
+    t = int(op.get("tool", 1))
+    code = DRILL_CODES[op["cycle"]]
+    L = ["", _comment(f"{op['name']} T{t} D{num(op['tool_dia'])} DRILL {code}"),
+         f"T{t} M06", f"{offset} G90", f"S{int(round(op['rpm']))} M03"]
+    holes = _holes(moves)
+    x, y, _R, _b = holes[0]
+    safe = moves[0][1][2]
+    L += [f"G00 X{num(x)} Y{num(y)}", f"G43 Z{num(safe)} H{t:02d}" + (" M08" if coolant else "")]
+    last = {}
+    for k, (x, y, R, bottom) in enumerate(holes):
+        words = {"X": num(x), "Y": num(y), "Z": num(bottom), "R": num(R)}
+        if k == 0:
+            q = f" Q{num(op['peck'])}" if op["cycle"] != "drill" else ""
+            L.append(f"G98 {code} X{words['X']} Y{words['Y']} Z{words['Z']} R{words['R']}{q} F{num(op['feed'])}")
+        else:                                        # modal: only what changed
+            L.append(" ".join(k2 + v for k2, v in words.items() if last.get(k2) != v) or f"X{words['X']}")
+        last = words
+    L += ["G80", "M09" if coolant else None, "M05"]
+    return [x for x in L if x is not None]
+
+
+def _lathe_drill(op, moves, offset, coolant, controller):
+    """On-center drilling at a fixed RPM (G97). Haas: G81 / G83 cycle. Fanuc (generic): the lathe
+    drilling cycles differ between controls, so the pecks are written out as G01 / G00."""
+    t = int(op.get("tool", 1))
+    haas = controller == "haas"
+    code = DRILL_CODES[op["cycle"]]
+    L = ["", _comment(f"{op['name']} T{t:02d} D{num(op['tool_dia'])} DRILL" + (f" {code}" if haas else "")),
+         "G28 U0. W0.", f"T{t:02d}{t:02d}", offset, f"G97 S{int(round(op['rpm']))} M03" + (" M08" if coolant else "")]
+    m = _Modal()
+    if haas:
+        (_k, (xo, _y, zs)), (_k2, (_x, _y2, R)) = moves[0], moves[2]
+        bottom = min(p[2] for _k, p in moves)
+        q = f" Q{num(op['peck'])}" if op["cycle"] != "drill" else ""
+        L += [f"G00 X{num(xo * 2)} Z{num(zs)}", "X0.", f"{code} Z{num(bottom)} R{num(R)}{q} F{num(op['ipr'])}",
+              "G80", f"G00 Z{num(zs)}", f"X{num(xo * 2)}"]
+    else:
+        for kind, (x, _y, z) in moves:
+            words = [("G", "G00" if kind == "rapid" else "G01"), ("X", num(x * 2)), ("Z", num(z))]
+            if kind == "feed":
+                words.append(("F", num(op["ipr"])))
+            line = m.block(words)
+            if line and line not in ("G00", "G01"):
+                L.append(line)
+    L += ["M09" if coolant else None, "M05"]
+    return [x for x in L if x is not None]

@@ -1,0 +1,1001 @@
+"""Main window: wires the Document, the Kernel and the panels together."""
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+from PySide6.QtCore import QStandardPaths, Qt, QTimer, Signal
+from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtWidgets import QFileDialog, QGridLayout, QMainWindow, QMessageBox, QWidget
+
+from .. import APP_NAME
+from ..core import Document, bracket_plate, tools
+from ..core import plane as pl
+from ..kernel import Kernel
+from . import theme
+from .commands import (EdgeSession, ExtrudeSession, OpSession, PlanePickSession, RevolveSession, SetupSession,
+                       SimSession, SketchSession, ToolLibraryDialog, draw_setup, draw_toolpath, op_moves,
+                       regions_for)
+from .panels import Browser, Ribbon, StatusBar, Timeline, TopBar
+
+FILE_FILTER = f"{APP_NAME} (*.gcad);;All files (*)"
+# the idle status line is empty: the mouse hints that used to live there cluttered the window (Shane 10/3/26);
+# Help > Documentation has them. Command prompts and results still show while a command runs.
+DEFAULT_MSG = ""
+
+
+class MainWindow(QMainWindow):
+    document_changed = Signal()      # for a host app (G-SEND.IO) that wants to follow edits
+
+    def __init__(self, doc: Document | None = None, fonts=None):
+        super().__init__()
+        from .viewport import Viewport   # imported late so core/kernel users never need Qt/VTK
+        self.doc = doc or bracket_plate()
+        self.kernel = Kernel()
+        self.model = None
+        self.cam_cache: dict = {}        # CAM geometry (outlines, profiles, holes...) for the current part
+        self._geo_key = None
+        self.path: Path | None = None
+        self.dirty = False
+        self.undo_stack: list[dict] = []
+        self.redo_stack: list[dict] = []
+        self.selected = "body1"
+        self.sel_node = None             # last sketch / body picked in the Browser (for Delete)
+        self.paint_sel = False           # like the prototype: highlight only after a click
+        self.sel_bodies: list = []       # bodies picked in the view (a box can pick several)
+        self.session = None
+        fonts = fonts or {"g": "DejaVu Sans", "wm": "DejaVu Sans"}
+
+        self.setWindowTitle(APP_NAME)
+        self.setWindowIcon(theme.app_icon())
+        self.resize(1400, 820)
+        central = QWidget()
+        central.setObjectName("central")
+        g = QGridLayout(central)
+        g.setContentsMargins(0, 0, 0, 0)
+        g.setSpacing(0)
+        self.topbar = TopBar(fonts)
+        self.ribbon = Ribbon()
+        self.ribbon.place_menus(self.topbar.settings, self.topbar.help)
+        self.browser = Browser()
+        self.viewport = Viewport()
+        self.status = StatusBar()
+        self.timeline = Timeline()
+        g.addWidget(self.topbar, 0, 0, 1, 2)
+        g.addWidget(self.ribbon, 1, 0, 1, 2)
+        g.addWidget(self.browser, 2, 0)
+        g.addWidget(self.viewport, 2, 1)
+        g.addWidget(self.status, 3, 0, 1, 2)
+        g.addWidget(self.timeline, 4, 0, 1, 2)
+        g.setRowStretch(2, 1)
+        g.setColumnStretch(1, 1)
+        self.setCentralWidget(central)
+
+        self.ribbon.tool.connect(self.run_tool)
+        self.ribbon.tab_changed.connect(self.select_tab)
+        self.ribbon.switch.changed.connect(self.set_mode)
+        self.browser.selected.connect(self.select_node)
+        self.timeline.roll.connect(self.roll_to)
+        self.timeline.play.connect(self.play)
+        self.timeline.delete.connect(self.delete_feature)
+        self.timeline.edit.connect(lambda i: self.edit_sketch(self.doc.features[i]["id"]))
+        self.timeline.toggle.connect(lambda i: self.toggle_sketch(self.doc.features[i]["id"]))
+        self.browser.edit.connect(self.edit_sketch)
+        self.browser.toggle.connect(self.toggle_sketch)
+        self.browser.delete.connect(self.delete_node)
+        self.browser.rename.connect(self.rename_node)
+        self.browser.simulate.connect(self.simulate)
+        self.browser.post.connect(self.post_process)
+        self.topbar.docs.connect(self.show_docs)
+        self.topbar.about.connect(self.show_about)
+        docs = QAction("Documentation", self, shortcut=QKeySequence(Qt.Key_F1),
+                       shortcutContext=Qt.ApplicationShortcut, triggered=self.show_docs)
+        self.addAction(docs)
+        self.docs = None
+        from PySide6.QtWidgets import QApplication
+        from .snapshot import Snapshot
+        self.snapshot = Snapshot(self)                  # F12 / Print Screen: screenshot, menus and all
+        QApplication.instance().installEventFilter(self.snapshot)
+        self.topbar.new.connect(self.new_doc)
+        self.topbar.save_as.connect(self.save_as)
+        self.topbar.export.connect(self.export)
+        self.topbar.save.connect(self.save)
+        self.topbar.open.connect(self.open)
+        self.topbar.undo.connect(self.undo)
+        self.topbar.projection.connect(self.set_projection)
+        from PySide6.QtCore import QSettings
+        self.prefs = QSettings("G-SEND", "CADCAM")            # remembered between runs
+        self.tool_lib_path = os.environ.get("GSEND_TOOL_LIBRARY") or os.path.join(
+            QStandardPaths.writableLocation(QStandardPaths.AppDataLocation) or os.path.expanduser("~/.gsend_cadcam"),
+            "tool_library.json")
+        self.tool_lib, bad = tools.load_checked(self.tool_lib_path)   # CAM → Tool Library
+        if bad:     # never silent: the defaults are loaded and the unreadable file is kept
+            QTimer.singleShot(800, lambda: QMessageBox.warning(self, "Tool Library",
+                f"Your tool library couldn't be read, so the default tools are loaded.\n\n"
+                f"Your old file was kept as:\n{bad}"))
+        proj = str(self.prefs.value("view/projection", "ortho"))
+        self.viewport.set_projection(proj)
+        self.topbar.set_projection(self.viewport.projection)
+        self.topbar.redo.connect(self.redo)
+        self.viewport.cursor.connect(self.status.set_coord)
+        self.viewport.key_cb = self.handle_key
+        self.viewport.box_cb = self.box_select           # left drag / click in the view picks bodies
+        self.viewport.click_cb = self.click_select
+        nb = self.viewport.nav_buttons
+        nb["fit"].clicked.connect(lambda: self.viewport.set_view("home"))
+        nb["trash"].clicked.connect(self.deselect_all)
+        nb["disp"].clicked.connect(self.cycle_display)
+        for k in ("orbit", "view", "pan", "zoom"):
+            nb[k].clicked.connect(lambda _=False, k=k: self.message(
+                f"{k.upper()}: Shift + left drag (or Shift + wheel drag) orbits, right drag pans, wheel zooms · "
+                "left drag boxes a selection"))
+        self.message(DEFAULT_MSG)
+        self.rebuild()
+
+    # ---------------------------------------------------------- model / view sync
+    def rebuild(self, fit=False):
+        self.model = self.kernel.build(self.doc)
+        geo = json.dumps(self.doc.features[: self.doc.marker], sort_keys=True)
+        if geo != self._geo_key:         # the part changed: CAM must re-read it (never key on id(model))
+            self._geo_key, self.cam_cache = geo, {}
+        sel = self._shown_sel()
+        self.viewport.show_bodies(self.model.bodies, sel)
+        self.draw_sketches()
+        self.refresh_tree()
+        self.refresh_props()
+        idx = {f["id"]: i for i, f in enumerate(self.doc.features)}
+        errs = {idx[k]: v for k, v in self.model.errors.items() if k in idx}
+        consumed = self.doc.consumed_sketches()
+        hidden = [i for i, f in enumerate(self.doc.features)
+                  if f["kind"] == "sketch" and not self.doc.sketch_shown(f, consumed)]
+        self.timeline.set_features([(f["name"], f["kind"], self.doc.describe(f)) for f in self.doc.features],
+                                   self.doc.marker, errs, hidden)
+        self.topbar.set_doc(self.doc.name, self.dirty)
+        self.draw_cam()
+        if fit:
+            self.viewport.set_view("home")
+
+    def draw_cam(self):
+        """In CAM mode, the picked (or newest) setup's stock and WCS."""
+        vp = self.viewport
+        vp.clear("cam", render=False)
+        if self.ribbon.switch.mode == "cam" and self.doc.setups and not isinstance(self.session, (SetupSession, OpSession)):
+            sid = getattr(self, "cam_setup", None)
+            s = self.doc.setup(sid) or self.doc.setups[-1]
+            draw_setup(vp, self, s)
+            for o in s.get("ops", []):              # its toolpaths; the picked op bright, the rest dim
+                try:
+                    draw_toolpath(vp, op_moves(self, s, o)[1], "cam", dim=o["id"] != getattr(self, "cam_op", None))
+                except ValueError:
+                    pass
+        vp.render()
+
+    def start_setup(self, kind: str = "milling", edit_id: str | None = None):
+        if not self.model.bodies:
+            self.viewport.show_toast("No solid to machine · make a part in CAD first", bad=True)
+            return
+        self.cancel_command()
+        edit = self.doc.setup(edit_id) if edit_id else None
+        self.viewport.clear("cam")
+        self.session = SetupSession(self, kind, edit)
+        self.viewport.handler = self.session
+        self.ribbon.set_active("Setup")
+
+    def start_op(self, kind: str = "face", edit_id: str | None = None):
+        if not self.doc.setups:
+            self.viewport.show_toast("Create a Setup first (CAM → Setup)", bad=True)
+            return
+        if not self.model.bodies:
+            self.viewport.show_toast("No solid to machine · make a part in CAD first", bad=True)
+            return
+        self.cancel_command()
+        sid = getattr(self, "cam_setup", None)
+        need = {"contour": "milling", "finish": "turning", "groove": "turning"}.get(kind)
+        want = need or self.ribbon.current
+        if not self.doc.setup(sid) or (need and self.doc.setup(sid)["type"] != need):
+            sid = next((x["id"] for x in reversed(self.doc.setups) if x["type"] == want), None)
+            if sid is None and need and not edit_id:
+                name = {"contour": "2D Contour", "rough": "Roughing", "finish": "Contour", "groove": "Groove"}[kind]
+                self.viewport.show_toast(f"{name} needs a {need.capitalize()} setup · CAM → Setup → {need.upper()}",
+                                         bad=True)
+                return
+            sid = sid or self.doc.setups[-1]["id"]
+        self.viewport.clear("cam")
+        self.session = OpSession(self, sid, kind, edit_id)
+        self.viewport.handler = self.session
+        self.ribbon.set_active({"face": "Face", "contour": "2D Contour", "rough": "Roughing",
+                                "finish": "Contour", "drill": "Drill", "groove": "Groove"}.get(self.session.kind))
+
+    def simulate(self, nid: str | None = None):
+        """Right-click → Simulate on a setup (all its ops) or one op; ribbon Simulate = the picked one."""
+        nid = nid or getattr(self, "cam_op", None) or getattr(self, "cam_setup", None)
+        st, op = self.doc.op(nid) if nid else (None, None)
+        if op is None:
+            st = self.doc.setup(nid) if nid else None
+            st = st if st and st.get("ops") else next((x for x in self.doc.setups if x.get("ops")), None)
+        if st is None:
+            self.viewport.show_toast("Nothing to simulate · add an operation to a setup first", bad=True)
+            return
+        if self.ribbon.switch.mode != "cam":
+            self.set_mode("cam")
+        self.cancel_command()
+        try:
+            self.session = SimSession(self, st, [op] if op else st["ops"])
+        except ValueError as exc:
+            self.session = None
+            self.viewport.show_toast(str(exc), bad=True)
+            return
+        self.viewport.handler = self.session
+        self.ribbon.set_active("Simulate")
+
+    def post_process(self, nid: str | None = None):
+        from .commands import PostDialog
+        if not any(x.get("ops") for x in self.doc.setups):
+            self.viewport.show_toast("Nothing to post · add an operation to a setup first", bad=True)
+            return
+        st, _op = self.doc.op(nid) if nid else (None, None)
+        sid = st["id"] if st else (nid if nid and self.doc.setup(nid) else getattr(self, "cam_setup", None))
+        if not (self.doc.setup(sid) or {}).get("ops"):
+            sid = next(x["id"] for x in self.doc.setups if x.get("ops"))
+        self.post_dialog = PostDialog(self, sid)
+        self.post_dialog.show()
+
+    def commit_op(self, sid: str, op: dict, edit_id: str | None):
+        self.cancel_command()
+        self._snapshot()
+        try:
+            o = self.doc.update_op(edit_id, op) if edit_id else self.doc.add_op(sid, op)
+        except ValueError as exc:
+            self.undo_stack.pop()
+            self.viewport.show_toast(str(exc), bad=True)
+            return
+        self.cam_setup, self.cam_op = sid, o["id"]
+        self.document_changed.emit()
+        self.rebuild()
+        from ..core import cam
+        st = self.doc.setup(sid)
+        t = cam.cycle_time(op_moves(self, st, o)[0], st, o)
+        self.viewport.show_toast(f"{o['name']} · about {t:.1f} min")
+        self.message(f"{o['name']} in {st['name']}: {cam.describe_op(st, o)}. Double-click it in the Browser to change it.")
+
+    def commit_setup(self, setup: dict, edit_id: str | None):
+        self.cancel_command()
+        self._snapshot()
+        try:
+            s = self.doc.update_setup(edit_id, setup) if edit_id else self.doc.add_setup(setup)
+        except ValueError as exc:
+            self.undo_stack.pop()
+            self.viewport.show_toast(str(exc), bad=True)
+            return
+        self.cam_setup = s["id"]
+        self.show_cam_tab(s)
+        self.document_changed.emit()
+        self.rebuild()
+        self.viewport.show_toast(f"{s['name']} · {s['type'].capitalize()}")
+        from ..core import cam
+        self.message(f"{s['name']}: {cam.describe(s)}. Double-click it in the Browser to change it.")
+
+    def draw_sketches(self):
+        vp = self.viewport
+        vp.clear("sketches", render=False)
+        consumed = self.doc.consumed_sketches()
+        show_all = isinstance(self.session, ExtrudeSession)
+        editing = getattr(self.session, "edit_id", None)    # that sketch is drawn by the session
+        from ..core import sketch as sk
+        for f in self.doc.applied():
+            if f["kind"] == "sketch" and f["id"] != editing and f.get("show") is not False \
+                    and (show_all or self.doc.sketch_shown(f, consumed)):
+                fr = self.doc.sketch_plane(f)
+                line = lambda e: [pl.to_world(fr, q, 0.004) for q in sk.entity_points(e)]
+                # (parallel lines are drawing aids: they show only while the sketch is open)
+                vp.add_lines("sketches", [line(e) for e in f["ents"] if e.get("src") != "ASSUMED"
+                                          and e["type"] != "xline"])
+                # pieces the G-code import only ASSUMED (a guessed nose radius or tool): warning yellow
+                vp.add_lines("sketches", [line(e) for e in f["ents"] if e.get("src") == "ASSUMED"], color=theme.WARN)
+        vp.render()
+
+    def refresh_tree(self):
+        n = self.doc.marker
+        have = {b.id for b in self.model.bodies}
+        full = self.kernel.build(self.doc, upto=len(self.doc.features))   # cached; lists bodies made later too
+        names = {b.id: b.name for b in full.bodies}
+        names.update({b.id: b.name for b in self.model.bodies})
+        bodies = [(bid, name, bid in have) for bid, name in sorted(names.items(), key=lambda kv: int(kv[0][4:]))]
+        consumed = self.doc.consumed_sketches()
+        sketches = [(f["id"], f["name"], i < n and self.doc.sketch_shown(f, consumed), len(f["ents"]),
+                     self.doc.sketch_shown(f, consumed))
+                    for i, f in enumerate(self.doc.features) if f["kind"] == "sketch"]
+        editing = None
+        if isinstance(self.session, SketchSession):
+            editing = (self.session.name, len(self.session.ents), self.session.edit_id)
+        setups = [(x["id"], x["name"], x["type"], [(o["id"], o["name"], o.get("type", "face")) for o in x.get("ops", [])])
+                  for x in self.doc.setups]
+        self.browser.set_rows(self.doc.name, bodies, sketches, self.selected, editing, setups)
+
+    def refresh_props(self):
+        b = self.model.body(self.selected) or (self.model.bodies[0] if self.model.bodies else None)
+        n, tot = self.doc.marker, len(self.doc.features)
+        if b is None:
+            rows = {"BODY": "—", "MATERIAL": self.doc.material, "BBOX X": "0.000 in", "BBOX Y": "0.000 in",
+                    "BBOX Z": "0.000 in", "VOLUME": "0.000 in³", "MASS": "0.000 lb"}
+        else:
+            sx, sy, sz = b.size()
+            rows = {"BODY": b.name, "MATERIAL": self.doc.material, "BBOX X": f"{sx:.3f} in", "BBOX Y": f"{sy:.3f} in",
+                    "BBOX Z": f"{sz:.3f} in", "VOLUME": f"{b.volume:.3f} in³", "MASS": f"{b.mass(self.doc.material):.3f} lb"}
+        rows["FEATURES"] = f"{n} / {tot}"
+        self.browser.set_props(rows)
+
+    def message(self, text: str):
+        self.status.msg.setText(text)
+
+    def not_built(self, label: str):
+        self.viewport.show_toast(f"{label} · not in this build yet")
+        self.message(f"{label} is on the list. Working now: Sketch (L), Extrude (E), Revolve, Fillet (F) / Chamfer, "
+                     "timeline rollback, Export STEP / STL (Utilities).")
+
+    # ---------------------------------------------------------- edits (undoable)
+    def _snapshot(self):
+        self.undo_stack.append(self.doc.to_dict())
+        self.redo_stack.clear()
+        self.dirty = True
+
+    def _restore(self, d: dict):
+        self.doc = Document.from_dict(d)
+        self.dirty = True
+        self.rebuild()
+        self.document_changed.emit()
+
+    def undo(self):
+        if self.session:
+            if isinstance(self.session, SketchSession):
+                self.session.undo()
+            return
+        if not self.undo_stack:
+            self.viewport.show_toast("Nothing to undo")
+            return
+        self.redo_stack.append(self.doc.to_dict())
+        self._restore(self.undo_stack.pop())
+        self.message("Undo")
+
+    def redo(self):
+        if isinstance(self.session, SketchSession):
+            self.session.redo()
+            return
+        if self.session or not self.redo_stack:
+            return
+        self.undo_stack.append(self.doc.to_dict())
+        self._restore(self.redo_stack.pop())
+        self.message("Redo")
+
+    def delete_node(self, nid: str):
+        """Delete key / right-click → Delete on a sketch or body in the Browser."""
+        if self.session is not None:
+            self.viewport.show_toast("Finish the current command first")
+            return
+        if self.doc.op(nid)[1]:
+            self._snapshot()
+            name = self.doc.op(nid)[1]["name"]
+            self.doc.remove_op(nid)
+            self.document_changed.emit()
+            self.rebuild()
+            self.viewport.show_toast(f"{name} deleted · Ctrl+Z brings it back")
+            return
+        if self.doc.setup(nid):
+            self._snapshot()
+            name = self.doc.setup(nid)["name"]
+            self.doc.remove_setup(nid)
+            self.document_changed.emit()
+            self.rebuild()
+            self.viewport.show_toast(f"{name} deleted · Ctrl+Z brings it back")
+            return
+        if nid.startswith("body"):
+            body = self.model.body(nid)
+            if body is None:
+                self.viewport.show_toast("That body isn't there at this point in the timeline", bad=True)
+                return
+            self._snapshot()
+            f = self.doc.add_remove(nid)
+            self.sel_node = None
+            self.paint_sel = False
+            self.status.sel.setText("SEL: —")
+            self.rebuild()
+            self.document_changed.emit()
+            self.viewport.show_toast(f"{body.name} deleted")
+            self.message(f"{body.name} deleted ({f['name']} in the timeline). Ctrl+Z brings it back.")
+            return
+        try:
+            f = self.doc.feature(nid)
+        except KeyError:
+            return
+        deps = self.doc.dependents(nid)
+        ids = [nid]
+        if deps:
+            names = ", ".join(d["name"] for d in deps)
+            r = QMessageBox.question(
+                self, "Delete sketch",
+                f"{f['name']} was used to make {names}.\n\nDelete {f['name']} and {names}?",
+                QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
+            if r != QMessageBox.Yes:
+                return
+            ids += [d["id"] for d in deps]
+        self._snapshot()
+        gone = self.doc.remove_features(ids)
+        self.sel_node = None
+        self.status.sel.setText("SEL: —")
+        self.rebuild()
+        self.document_changed.emit()
+        what = " and ".join(g["name"] for g in gone)
+        self.viewport.show_toast(f"{what} deleted")
+        self.message(f"{what} deleted. Ctrl+Z brings it back.")
+
+    def rename_node(self, nid: str, name: str):
+        """Right-click → Rename (or F2) on a sketch or body in the Browser."""
+        name = " ".join(name.split())[:40]
+        if self.doc.op(nid)[1]:
+            self._snapshot()
+            self.doc.op(nid)[1]["name"] = name
+            self.document_changed.emit()
+            self.rebuild()
+            return
+        if self.doc.setup(nid):
+            if any(x["name"] == name and x["id"] != nid for x in self.doc.setups):
+                self.viewport.show_toast(f"There is already a setup called {name}", bad=True)
+                self.rebuild()
+                return
+            self._snapshot()
+            self.doc.setup(nid)["name"] = name
+            self.document_changed.emit()
+            self.rebuild()
+            return
+        if nid.startswith("body"):
+            if any(b.name == name and b.id != nid for b in self.kernel.build(self.doc, len(self.doc.features)).bodies):
+                self.viewport.show_toast(f"There is already a body called {name}", bad=True)
+                self.rebuild()
+                return
+            self._snapshot()
+            self.doc.body_names[nid] = name
+        else:
+            f = self.doc.feature(nid)
+            if self.doc.name_taken(name, nid):
+                self.viewport.show_toast(f"There is already a feature called {name}", bad=True)
+                self.rebuild()
+                return
+            self._snapshot()
+            f["name"] = name
+        self.rebuild()
+        self.document_changed.emit()
+        self.message(f"Renamed to {name}")
+
+    def delete_feature(self, i: int):
+        self.cancel_command()
+        f = self.doc.features[i]
+        self._snapshot()
+        del self.doc.features[i]
+        if self.doc.marker > i:
+            self.doc.marker -= 1
+        self.rebuild()
+        self.document_changed.emit()
+        self.message(f"{f['name']} deleted. Ctrl+Z brings it back.")
+
+    # ---------------------------------------------------------- timeline
+    def roll_to(self, n: int):
+        self.cancel_command()
+        self.doc.set_marker(n)
+        self.rebuild()
+        if 0 < self.doc.marker <= len(self.doc.features):
+            f = self.doc.features[self.doc.marker - 1]
+            self.message(f"Rolled to {f['name']}: {self.doc.describe(f)}")
+
+    def play(self):
+        self.cancel_command()
+        steps = iter(range(len(self.doc.features) + 1))
+
+        def tick():
+            try:
+                self.doc.set_marker(next(steps))
+                self.rebuild()
+            except StopIteration:
+                t.stop()
+        t = QTimer(self, interval=450, timeout=tick)
+        tick()
+        t.start()
+
+    # ---------------------------------------------------------- tools
+    def show_cam_tab(self, setup):
+        """A lathe setup shows the Turning toolpaths, a mill setup the Milling ones (CAM mode only)."""
+        if setup and self.ribbon.switch.mode == "cam" and self.ribbon.current != setup["type"]:
+            self.ribbon.show_tab(setup["type"])
+
+    def select_tab(self, key):
+        if isinstance(self.session, SketchSession) and key != "sketch":
+            self.viewport.show_toast("Finish the sketch first")
+            return
+        self.ribbon.show_tab(key)
+
+    def set_projection(self, mode: str):
+        """Settings → View projection."""
+        from .viewport import PROJECTIONS
+        self.viewport.set_projection(mode)
+        self.topbar.set_projection(mode)
+        self.prefs.setValue("view/projection", mode)
+        self.viewport.show_toast(f"View: {PROJECTIONS[mode]}")
+
+    def set_mode(self, mode: str):
+        """The CAD / CAM switch under the logo."""
+        if self.session is not None:
+            self.viewport.show_toast("Finish the sketch first" if isinstance(self.session, SketchSession)
+                                     else "Finish the command first")
+            return
+        self.ribbon.show_mode(mode)
+        # the body readout (bbox / volume / mass) is CAD information: CAM keeps the browser uncluttered
+        self.browser.props.setVisible(mode != "cam")
+        if mode == "cam":
+            self.show_cam_tab(self.doc.setup(getattr(self, "cam_setup", None)) or
+                              (self.doc.setups[-1] if self.doc.setups else None))
+        self.draw_cam()
+        self.message(DEFAULT_MSG)
+
+    def run_tool(self, label: str):
+        if self.session is not None:
+            self.session.ribbon_tool(label)
+            return
+        self.ribbon.set_active(None)
+        if label == "Sketch":
+            self.start_sketch()
+        elif label == "Extrude":
+            self.start_extrude()
+        elif label == "Revolve":
+            self.start_revolve()
+        elif label in ("Fillet", "Chamfer") and self.ribbon.switch.mode == "cad":
+            self.start_edges(label.lower())
+        elif label == "Setup":
+            self.start_setup("turning" if self.ribbon.current == "turning" else "milling")
+        elif label == "Face" and self.ribbon.switch.mode == "cam":
+            self.start_op("face")
+        elif label == "Post Process" and self.ribbon.switch.mode == "cam":
+            self.post_process()
+        elif label == "2D Contour" and self.ribbon.switch.mode == "cam":
+            self.start_op("contour")
+        elif label == "Tool Library" and self.ribbon.switch.mode == "cam":
+            self.open_tool_library("turning" if self.ribbon.current == "turning" else "milling")
+        elif label == "Drill" and self.ribbon.switch.mode == "cam":
+            self.start_op("drill")
+        elif label == "Contour" and self.ribbon.switch.mode == "cam":
+            self.start_op("finish")
+        elif label == "Roughing" and self.ribbon.switch.mode == "cam":
+            self.start_op("rough")
+        elif label == "Groove" and self.ribbon.switch.mode == "cam":
+            self.start_op("groove")
+        elif label == "Simulate" and self.ribbon.switch.mode == "cam":
+            self.simulate()
+        elif label == "Export":
+            self.export("step")
+        elif label == "3D Print":
+            self.export("stl")
+        else:
+            self.not_built(label)
+
+    def open_tool_library(self, machine: str = "milling", new_kind: str | None = None, select: str | None = None):
+        """CAM → Tool Library (also "New tool…" / right-click Edit in an operation's Tool box)."""
+        ToolLibraryDialog(self, machine, new_kind, select).exec()
+
+    def save_tool_lib(self):
+        try:
+            tools.save(self.tool_lib_path, self.tool_lib)
+        except OSError as exc:
+            self.viewport.show_toast(f"Tool library not saved: {exc}", bad=True)
+
+    def cancel_command(self):
+        s, self.session = self.session, None
+        if s is None:
+            return
+        s.close()
+        self.viewport.handler = None
+        self.viewport.set_side(None)
+        self.ribbon.set_active(None)
+        if isinstance(s, SketchSession):
+            self.ribbon.show_sketch_tab(False)
+            self.viewport.set_parallel(False)
+            self.viewport.plane_z = 0.0
+            self.viewport.set_view("home")
+        self.status.sel.setText("SEL: —")
+        self.message(DEFAULT_MSG)
+        self.rebuild()
+
+    # sketch
+    def start_sketch(self, edit_id: str | None = None, plane: dict | None = None):
+        """New sketch: with a part on screen, first pick the face to sketch on (PlanePickSession
+        calls back with `plane`); with nothing built yet, straight onto the XY plane."""
+        if edit_id:
+            f = self.doc.feature(edit_id)
+            session = SketchSession(self, f["name"], f["plane_z"], f["ents"], edit_id,
+                                    plane=self.doc.sketch_plane(f))
+        elif plane is None and self.model.bodies:
+            self.session = PlanePickSession(self)
+            self.viewport.handler = self.session
+            return
+        else:
+            n = sum(1 for f in self.doc.features if f["kind"] == "sketch") + 1
+            session = SketchSession(self, f"Sketch{n}", plane=plane)
+        if isinstance(self.session, PlanePickSession):     # the pick that chose this plane
+            self.session.close()
+        self.session = session
+        vp = self.viewport
+        vp.handler = self.session
+        vp.look_at(self.session.frame)
+        vp.set_parallel(True)
+        vp.hud_view.setText("TOP · SKETCH" if pl.is_xy(self.session.frame) else "FACE · SKETCH")
+        self.ribbon.show_sketch_tab(True)
+        vp.set_side(self.session.palette)
+        self.session.set_tool("Line")
+        self.draw_sketches()
+        self.refresh_tree()
+        if edit_id:
+            self.message(f"Editing {self.session.name}: draw to add, × in the palette deletes a shape, "
+                         "Plane moves it. Enter / Finish Sketch saves, Cancel throws the changes away.")
+
+    def toggle_sketch(self, fid: str):
+        """Hide or show a sketch (Browser eye dot, or right-click → Hide / Show Sketch)."""
+        f = self.doc.feature(fid)
+        if isinstance(self.session, SketchSession) and self.session.edit_id == fid:
+            self.viewport.show_toast("Finish editing the sketch first")
+            return
+        self._snapshot()
+        f["show"] = not self.doc.sketch_shown(f)
+        if isinstance(self.session, ExtrudeSession):   # hidden sketches can't be picked; close the picker
+            self.cancel_command()
+        self.rebuild()
+        self.document_changed.emit()
+        self.message(f"{f['name']} {'shown' if f['show'] else 'hidden'}. "
+                     + ("" if f["show"] else "Show it again from the Browser or the timeline (right-click)."))
+
+    def edit_sketch(self, fid: str):
+        """Reopen a sketch that is already in the timeline (right-click it → Edit Sketch)."""
+        if self.doc.op(fid)[1]:                    # a CAM operation in the Browser
+            if self.ribbon.switch.mode != "cam":
+                self.set_mode("cam")
+            self.start_op(edit_id=fid)
+            return
+        if self.doc.setup(fid):                    # a CAM setup in the Browser: edit that instead
+            if self.ribbon.switch.mode != "cam":
+                self.set_mode("cam")
+            self.start_setup(edit_id=fid)
+            return
+        try:
+            f = self.doc.feature(fid)
+        except KeyError:
+            return
+        if f["kind"] != "sketch":
+            return
+        self.cancel_command()
+        self.ribbon.set_active(None)
+        self.start_sketch(edit_id=fid)
+
+    def finish_sketch(self):
+        s = self.session
+        if not isinstance(s, SketchSession):
+            return
+        ents, z = list(s.ents), s.plane_z
+        if s.edit_id:
+            if not ents:
+                self.viewport.show_toast("A sketch needs at least one shape", bad=True)
+                self.message("To remove the whole sketch, finish or cancel, then right-click it in the timeline → Delete.")
+                return
+            self.cancel_command()
+            if s.changed():
+                self._snapshot()
+                self.doc.update_sketch(s.edit_id, ents, z, s.origin, plane=s.frame)
+                self.rebuild()
+                self.document_changed.emit()
+                self._report_edit(s.edit_id)
+            else:
+                self.message(f"{s.name}: no changes")
+            return
+        self.cancel_command()
+        if not ents:
+            self.viewport.show_toast("Empty sketch discarded")
+            return
+        self._snapshot()
+        f = self.doc.add_sketch(ents, plane_z=z, plane=s.frame)
+        self.rebuild()
+        self.document_changed.emit()
+        self.viewport.show_toast(f"{f['name']} added · {len(ents)} entities")
+        self.message(f"{f['name']} saved to the timeline. Press E to extrude its closed profiles.")
+
+    def _report_edit(self, fid: str):
+        name = self.doc.feature(fid)["name"]
+        users = self.doc.dependents(fid)
+        broken = [g["name"] for g in users if g["id"] in self.kernel.build(self.doc, len(self.doc.features)).errors]
+        if broken:
+            self.viewport.show_toast(f"{name} updated · {', '.join(broken)} lost its profile", bad=True)
+            self.message(f"{', '.join(broken)} used a shape you deleted (red in the timeline). "
+                         "Ctrl+Z undoes the edit, or delete that extrude and extrude again.")
+        else:
+            rebuilt = f" · {', '.join(g['name'] for g in users)} rebuilt" if users else ""
+            self.viewport.show_toast(f"{name} updated{rebuilt}")
+            self.message(f"{name} updated{rebuilt}. New closed shapes can be extruded with E.")
+
+    # extrude
+    def start_extrude(self):
+        regions, planes = regions_for(self.doc)
+        if not regions:
+            self.viewport.show_toast("No closed profiles · press L to sketch", bad=True)
+            self.message("Extrude needs a closed profile: rectangle, circle, polygon, or a line chain that closes.")
+            return
+        self.session = ExtrudeSession(self, regions, planes)
+        self.viewport.handler = self.session
+        self.viewport.set_side(self.session.panel)
+        self.ribbon.set_active("Extrude")
+        self.draw_sketches()
+
+    def start_revolve(self):
+        regions, planes = regions_for(self.doc)
+        if not regions:
+            self.viewport.show_toast("No closed profiles · press L to sketch", bad=True)
+            self.message("Revolve needs a closed profile: sketch half the part's cross-section on one side "
+                         "of an axis (the sketch's X or Y axis, or a line you draw).")
+            return
+        self.session = RevolveSession(self, regions, planes)
+        self.viewport.handler = self.session
+        self.viewport.set_side(self.session.panel)
+        self.ribbon.set_active("Revolve")
+        self.draw_sketches()
+
+    def start_edges(self, op: str):
+        if not self.model.bodies:
+            self.viewport.show_toast("No solid yet · sketch and extrude first", bad=True)
+            return
+        self.session = EdgeSession(self, op)
+        self.viewport.handler = self.session
+        self.viewport.set_side(self.session.panel)
+
+    def commit_feature(self, f: dict):
+        """OK in the Revolve or Fillet / Chamfer panel."""
+        self.cancel_command()
+        self._snapshot()
+        if f["kind"] == "revolve":
+            feat = self.doc.add_revolve(f["profiles"], f["axis"], f["angle"], op=f["op"])
+        else:
+            feat = self.doc.add_fillet(f["edges"], f["size"], op=f["op"])
+        self.rebuild()
+        self.document_changed.emit()
+        err = self.model.errors.get(feat["id"])
+        if err:
+            self.viewport.show_toast(err, bad=True)
+            self.message(err + " · Ctrl+Z to undo")
+        else:
+            self.viewport.show_toast(f"{feat['name']} · {self.doc.describe(feat)}")
+            self.message(f"{feat['name']} added to the timeline.")
+
+    def commit_extrude(self, f: dict):
+        self.cancel_command()
+        self._snapshot()
+        feat = self.doc.add_extrude(f["profiles"], f["distance"], op=f["op"], direction=f["direction"])
+        self.rebuild()
+        self.document_changed.emit()
+        err = self.model.errors.get(feat["id"])
+        if err:
+            self.viewport.show_toast(err, bad=True)
+            self.message(err + " · Ctrl+Z to undo")
+        else:
+            self.viewport.show_toast(f"{feat['name']} · {self.doc.describe(feat)}")
+            self.message(f"{feat['name']} added to the timeline. Roll back to compare.")
+
+    # ---------------------------------------------------------- help
+    def show_docs(self):
+        from .docs import DocsWindow
+        if self.docs is None:
+            self.docs = DocsWindow(self)
+        self.docs.show()
+        self.docs.raise_()
+        self.docs.activateWindow()
+
+    def show_about(self):
+        from ..buildinfo import info, pretty_date
+        b = info()
+        when = f"<br>Updated {pretty_date(b['date'])}" if b.get("date") else ""
+        commit = f" <span style='color:{theme.FG3}'>({b['commit']})</span>" if b.get("commit") else ""
+        QMessageBox.about(self, f"About {APP_NAME}",
+                          f"<b>About {APP_NAME}</b><br><br>Version {b['version']}{commit}{when}<br><br>"
+                          "CAD/CAM for G-SEND.IO.<br>Help → Documentation (F1) explains how.")
+
+    # ---------------------------------------------------------- misc actions
+    def select_node(self, nid: str):
+        b = self.browser
+        self.sel_node = nid if nid in b.sketch_ids or nid in b.body_ids or nid in b.setup_ids else None
+        if nid in b.setup_ids:
+            st, o = self.doc.op(nid)
+            self.cam_setup, self.cam_op = (st["id"], nid) if o else (nid, None)
+            self.show_cam_tab(st if o else self.doc.setup(nid))
+            self.draw_cam()
+        if nid.startswith("body"):
+            self.selected = nid
+            self.paint_sel = True
+            self.sel_bodies = [nid]
+            self.viewport.show_bodies(self.model.bodies, nid)
+            self.refresh_props()
+        self.status.sel.setText("SEL: " + (nid.upper() if nid else "—"))
+
+    def deselect_all(self):
+        """The view bar's trash button: nothing selected (sketch shapes, picks, bodies)."""
+        if self.session is not None and hasattr(self.session, "clear_selection"):
+            self.session.clear_selection()
+        else:
+            self._pick_bodies([])
+        self.viewport.show_toast("Selection cleared")
+
+    def _shown_sel(self):
+        return set(self.sel_bodies or [self.selected]) if self.paint_sel else None
+
+    def box_select(self, rect, crossing: bool, add: bool = False):
+        """Left drag in the view (no command running): bodies in the box. Left to right = wholly
+        inside, right to left = any it touches; Ctrl adds to what's picked."""
+        hits = [b.id for b in self.model.bodies if self.viewport.box_hit(b.edge_polylines(), rect, crossing)]
+        if add and self.paint_sel:
+            hits = list(dict.fromkeys(self.sel_bodies + hits))
+        self._pick_bodies(hits)
+
+    def click_select(self, pos, add: bool = False):
+        """A click in the view: the body under it (Ctrl: add / drop it); empty space clears."""
+        bid = self.viewport.body_at(pos)
+        if add and bid and self.paint_sel:
+            hits = [b for b in self.sel_bodies if b != bid] + ([] if bid in self.sel_bodies else [bid])
+        else:
+            hits = [bid] if bid else []
+        self._pick_bodies(hits)
+
+    def _pick_bodies(self, hits):
+        if len(hits) == 1:
+            self.select_node(hits[0])
+            return
+        self.sel_bodies = hits
+        self.paint_sel = bool(hits)
+        self.sel_node = hits[0] if hits else None
+        if hits:
+            self.selected = hits[0]
+        self.viewport.show_bodies(self.model.bodies, self._shown_sel())
+        self.status.sel.setText(f"SEL: {len(hits)} BODIES" if hits else "SEL: —")
+        if hits:
+            self.message(f"{len(hits)} bodies selected · Delete removes them")
+
+    def cycle_display(self):
+        self.viewport.cycle_display()
+        self.viewport.show_bodies(self.model.bodies, self._shown_sel())
+
+    def export(self, kind: str):
+        if not self.model.bodies:
+            self.viewport.show_toast("Nothing to export", bad=True)
+            return
+        ext = {"step": "STEP (*.step *.stp)", "stl": "STL (*.stl)"}[kind]
+        path, _ = QFileDialog.getSaveFileName(self, f"Export {kind.upper()}", f"{self.doc.name}.{kind}", ext)
+        if not path:
+            return
+        if kind == "step":
+            self.model.export_step(path)
+        else:
+            from build123d import export_stl
+            shape = self.model.bodies[0].shape
+            for b in self.model.bodies[1:]:
+                shape = shape + b.shape
+            export_stl(shape, path)
+        self.viewport.show_toast(f"Exported {Path(path).name}")
+
+    def save(self):
+        if self.path is None:
+            return self.save_as()
+        self._write(self.path)
+
+    def save_as(self):
+        p, _ = QFileDialog.getSaveFileName(self, "Save As", f"{self.doc.name}.gcad", FILE_FILTER)
+        if not p:
+            return
+        path = Path(p)
+        if path.suffix.lower() != ".gcad":
+            path = path.with_suffix(".gcad")
+        if self.doc.name == "Untitled":       # a new part takes its file's name
+            self.doc.name = path.stem
+        self._write(path)
+
+    def _write(self, path: Path):
+        self.doc.save(path)
+        self.path, self.dirty = path, False
+        self.topbar.set_doc(self.doc.name, False)
+        self.viewport.show_toast(f"Saved {path.name}")
+
+    def _maybe_save(self) -> bool:
+        """Ask before throwing away unsaved work. False = the user cancelled."""
+        if not self.dirty:
+            return True
+        r = QMessageBox.question(self, APP_NAME, f"Save changes to {self.doc.name}?",
+                                 QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+        if r == QMessageBox.Cancel:
+            return False
+        if r == QMessageBox.Save:
+            self.save()
+            return not self.dirty            # the save dialog was cancelled: keep the work
+        return True
+
+    def new_doc(self):
+        """File → New (Ctrl+N): an empty part."""
+        self.cancel_command()
+        if not self._maybe_save():
+            return
+        self._set_doc(Document("Untitled"), None)
+        self.viewport.show_toast("New part")
+        self.message("New part. Press L to sketch, draw a closed shape, Enter, then E to make it solid.")
+
+    def _set_doc(self, doc: Document, path):
+        self.doc, self.path, self.dirty = doc, (Path(path) if path else None), False
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self.selected, self.paint_sel, self.sel_node = "body1", False, None
+        self.status.sel.setText("SEL: —")
+        self.rebuild(fit=True)
+        self.document_changed.emit()
+
+    def open(self, path=None):
+        if path is None:
+            self.cancel_command()
+            if not self._maybe_save():
+                return
+            p, _ = QFileDialog.getOpenFileName(self, "Open", "", FILE_FILTER)
+            if not p:
+                return
+            path = p
+        try:
+            doc = Document.load(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Open", f"Could not open {path}:\n{exc}")
+            return
+        self.cancel_command()
+        self._set_doc(doc, path)
+
+    # ---------------------------------------------------------- keys (like Fusion)
+    def handle_key(self, ev):
+        if self.session is not None and self.session.on_key(ev):
+            return
+        k, mod = ev.key(), ev.modifiers()
+        ctrl = bool(mod & Qt.ControlModifier)
+        if ctrl and k == Qt.Key_S and mod & Qt.ShiftModifier:
+            self.save_as()
+        elif ctrl and k == Qt.Key_S:
+            self.save()
+        elif ctrl and k == Qt.Key_N:
+            self.new_doc()
+        elif ctrl and k == Qt.Key_O:
+            self.open()
+        elif ctrl and k == Qt.Key_Z:
+            self.undo()
+        elif ctrl and k == Qt.Key_Y:
+            self.redo()
+        elif k == Qt.Key_F1:
+            self.show_docs()
+        elif k == Qt.Key_Delete and self.session is None and self.paint_sel and len(self.sel_bodies) > 1:
+            for bid in list(self.sel_bodies):            # every body the box picked (each its own Ctrl+Z)
+                self.delete_node(bid)
+            self.sel_bodies = []
+        elif k == Qt.Key_Delete and self.session is None and self.sel_node:
+            self.delete_node(self.sel_node)
+        elif self.session is not None:
+            return
+        elif k == Qt.Key_L:
+            self.start_sketch()
+        elif k == Qt.Key_E:
+            self.start_extrude()
+        elif k == Qt.Key_Home:
+            self.viewport.set_view("home")
+        elif k == Qt.Key_F:
+            self.start_edges("fillet")
+        elif k in (Qt.Key_H, Qt.Key_I):
+            self.not_built({Qt.Key_H: "Hole", Qt.Key_I: "Measure"}[k])
+
+    def keyPressEvent(self, ev):
+        self.handle_key(ev)
+
+    def closeEvent(self, ev):
+        if self.isVisible() and not self._maybe_save():
+            ev.ignore()
+            return
+        self.viewport.plotter.close()
+        super().closeEvent(ev)

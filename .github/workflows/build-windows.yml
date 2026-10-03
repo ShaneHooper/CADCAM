@@ -1,0 +1,245 @@
+name: Build G-SEND CADCAM (Windows)
+
+# Builds the one-folder Windows app with PyInstaller, checks it with --selftest, wraps it in an
+# installer (G-SEND-CADCAM-Setup.exe, Inno Setup), installs that and self-tests the installed copy.
+# Artifacts on the run's Summary page: "G-SEND CADCAM Setup" (the installer) and "G-SEND CADCAM Rev1"
+# (the plain folder, as a fallback).
+on:
+  push:
+    paths:
+      - "gsend_cad/**"
+      - "packaging/**"
+      - "pyproject.toml"
+      - ".github/workflows/build-windows.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write     # OIDC token for Azure (signing); no stored certificate or password
+  contents: read
+
+env:
+  # Azure Artifact Signing: the same account and profile as G-SEND.IO's release.yml. Names,
+  # not credentials. What lets a job sign is the Entra app's federated credential, which must
+  # trust  repo:ShaneHooper/CADCAM:environment:production-signing  (see CLAUDE.md, "Signing").
+  SIGNING_ENDPOINT: 'https://eus.codesigning.azure.net/'
+  SIGNING_ACCOUNT_NAME: 'gsendio-prod-signing'
+  SIGNING_CERTIFICATE_PROFILE: 'gsendio-public-trust'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    environment: production-signing     # scopes the AZURE_* secrets; the OIDC subject Azure trusts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # full history: Help → About's version counts the commits
+
+      # Signing is on only when this repo's production-signing environment has the secrets.
+      # Checked in a step (where environment secrets are always visible); sets env.CAN_SIGN for
+      # the rest of the job. Without them the build still runs and says UNSIGNED loudly.
+      - name: Signing secrets present?
+        shell: pwsh
+        env:
+          A: ${{ secrets.AZURE_CLIENT_ID }}
+          B: ${{ secrets.AZURE_TENANT_ID }}
+          C: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          $have = @{ AZURE_CLIENT_ID = [bool]$env:A; AZURE_TENANT_ID = [bool]$env:B; AZURE_SUBSCRIPTION_ID = [bool]$env:C }
+          $have.GetEnumerator() | Sort-Object Name | ForEach-Object { "{0,-22} {1}" -f $_.Name, $(if ($_.Value) { "present" } else { "MISSING" }) }
+          $ok = $have.Values -notcontains $false
+          "CAN_SIGN=$($ok.ToString().ToLower())" >> $env:GITHUB_ENV
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[ui,dev]" pyinstaller
+
+      - name: Core and kernel tests
+        run: python -m pytest -q tests/test_core.py tests/test_kernel.py
+
+      # The runtime (exe + _internal: Python, Qt, VTK, OpenCascade) only changes when the spec,
+      # the entry script or the dependencies change. Reuse it otherwise: a code/font/logo change
+      # then skips PyInstaller entirely and only refreshes the app/ layer.
+      - name: Runtime fingerprint
+        id: rt
+        shell: pwsh
+        run: |
+          $parts = (Get-FileHash packaging\gsend_cadcam.spec, packaging\gsend_cadcam_main.py, pyproject.toml).Hash -join ""
+          $sha = [Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($parts))
+          $state = if ($env:CAN_SIGN -eq 'true') { "signed" } else { "unsigned" }
+          "key=gsend_cadcam-runtime-py312-$state-" + ([BitConverter]::ToString($sha) -replace "-", "").Substring(0, 16) >> $env:GITHUB_OUTPUT
+          if ($env:CAN_SIGN -ne 'true') { "::warning::UNSIGNED BUILD: CADCAM's production-signing environment has no AZURE_* secrets, so Smart App Control will block this build." }
+
+      - name: Azure login (OIDC)
+        if: env.CAN_SIGN == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: actions/cache/restore@v4
+        id: runtime
+        with:
+          path: dist/G-SEND CADCAM
+          key: ${{ steps.rt.outputs.key }}
+
+      - name: Build runtime (PyInstaller; skipped when cached)
+        if: steps.runtime.outputs.cache-hit != 'true'
+        run: pyinstaller packaging/gsend_cadcam.spec --noconfirm
+
+      # Sign the runtime once, right after it is built: only files without a valid signature
+      # (Python, Qt and Microsoft DLLs already carry one). The signed runtime is then cached, so
+      # later code-only builds reuse it and spend no signatures on it.
+      - name: List unsigned runtime binaries
+        if: steps.runtime.outputs.cache-hit != 'true' && env.CAN_SIGN == 'true'
+        run: python packaging/sign_folder.py "dist/G-SEND CADCAM" --list "${{ runner.temp }}\unsigned.txt"
+
+      - name: Sign the runtime
+        if: steps.runtime.outputs.cache-hit != 'true' && env.CAN_SIGN == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ env.SIGNING_ENDPOINT }}
+          signing-account-name: ${{ env.SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ env.SIGNING_CERTIFICATE_PROFILE }}
+          files-catalog: ${{ runner.temp }}\unsigned.txt
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+
+      - name: Verify every runtime binary is signed
+        if: env.CAN_SIGN == 'true'
+        run: python packaging/sign_folder.py "dist/G-SEND CADCAM" --check
+
+      # saved now, before later steps rename the folder
+      - uses: actions/cache/save@v4
+        if: steps.runtime.outputs.cache-hit != 'true'
+        with:
+          path: dist/G-SEND CADCAM
+          key: ${{ steps.rt.outputs.key }}
+
+      - name: Refresh the app layer (gsend_cad code, fonts, logo)
+        run: python packaging/update_app.py "dist/G-SEND CADCAM"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: G-SEND CADCAM app update
+          path: dist/G-SEND CADCAM/app/
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Self-test the built exe
+        shell: pwsh
+        run: |
+          $exe = "dist\G-SEND CADCAM\G-SEND CADCAM.exe"
+          $p = Start-Process -FilePath $exe -ArgumentList "--selftest", "selftest.txt" -Wait -PassThru
+          Get-Content selftest.txt
+          if ($p.ExitCode -ne 0) { throw "selftest failed with exit code $($p.ExitCode)" }
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $ver = python -c "import gsend_cad; print(gsend_cad.__version__)"
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          & $iscc /Qp "/DAppVersion=$ver" packaging\gsend_cadcam.iss
+          if ($LASTEXITCODE -ne 0) { throw "iscc failed" }
+          Get-Item dist\installer\G-SEND-CADCAM-Setup.exe | Select-Object Name, @{n="MB";e={[math]::Round($_.Length/1MB)}}
+
+      - name: Sign the installer (1 signature per build)
+        if: env.CAN_SIGN == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ env.SIGNING_ENDPOINT }}
+          signing-account-name: ${{ env.SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ env.SIGNING_CERTIFICATE_PROFILE }}
+          files: ${{ github.workspace }}\dist\installer\G-SEND-CADCAM-Setup.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+
+      - name: Install silently and self-test the installed copy
+        shell: pwsh
+        run: |
+          $dir = "$env:RUNNER_TEMP\G-SEND CADCAM test install"
+          $t = Measure-Command {
+            $p = Start-Process dist\installer\G-SEND-CADCAM-Setup.exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CURRENTUSER", "/DIR=`"$dir`"" -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "installer failed with exit code $($p.ExitCode)" }
+          }
+          "installed in {0:N0} s" -f $t.TotalSeconds
+          $p = Start-Process -FilePath "$dir\G-SEND CADCAM.exe" -ArgumentList "--selftest", "$PWD\selftest_installed.txt" -Wait -PassThru
+          Get-Content selftest_installed.txt
+          if ($p.ExitCode -ne 0) { throw "installed selftest failed with exit code $($p.ExitCode)" }
+          $p = Start-Process "$dir\unins000.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES" -Wait -PassThru
+          "uninstall exit code $($p.ExitCode)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: G-SEND CADCAM Setup
+          path: dist/installer/G-SEND-CADCAM-Setup.exe
+          retention-days: 90
+          compression-level: 0          # already compressed
+          if-no-files-found: error
+
+      - name: Package folder
+        shell: pwsh
+        run: |
+          Copy-Item packaging\READ_ME_FIRST.txt "dist\G-SEND CADCAM\"
+          Rename-Item "dist\G-SEND CADCAM" "G-SEND CADCAM Rev1"
+          "{0:N0} MB" -f ((Get-ChildItem "dist\G-SEND CADCAM Rev1" -Recurse | Measure-Object Length -Sum).Sum / 1MB)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: G-SEND CADCAM Rev1
+          path: dist/G-SEND CADCAM Rev1/
+          retention-days: 90
+          # sklearn keeps its DLLs in "sklearn\.libs"; without this the dot-folder is
+          # dropped from the zip and the exe dies on start (vcomp140.dll not found).
+          include-hidden-files: true
+          if-no-files-found: error
+
+      # Self-test what Shane actually downloads, not the local dist folder.
+      - uses: actions/download-artifact@v4
+        with:
+          name: G-SEND CADCAM Rev1
+          path: artifact-check/G-SEND CADCAM Rev1
+
+      - name: Self-test the downloaded artifact
+        shell: pwsh
+        run: |
+          $dir = "artifact-check\G-SEND CADCAM Rev1"
+          if (-not (Test-Path "$dir\_internal\sklearn\.libs\vcomp140.dll")) { throw "artifact is missing sklearn\.libs\vcomp140.dll" }
+          $srcCount = (Get-ChildItem "dist\G-SEND CADCAM Rev1" -Recurse -File -Force).Count
+          $dlCount  = (Get-ChildItem $dir -Recurse -File -Force).Count
+          "files: built $srcCount, downloaded $dlCount"
+          if ($srcCount -ne $dlCount) { throw "artifact file count differs from the build" }
+          $p = Start-Process -FilePath "$dir\G-SEND CADCAM.exe" -ArgumentList "--selftest", "$PWD\selftest_artifact.txt" -Wait -PassThru
+          Get-Content selftest_artifact.txt
+          if ($p.ExitCode -ne 0) { throw "artifact selftest failed with exit code $($p.ExitCode)" }
