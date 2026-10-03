@@ -539,6 +539,88 @@ moves .0183 in Z and .0366 on the diameter). The nose radius comes from the tool
 <p>With Machine or Computer the Contour is posted line by line, not as a G70 cycle. Other operations ignore the
 setting, and it is greyed out on a Milling setup.</p>
 """),
+    ("gimport", "Import G-code (lathe)", """
+<h1>Import G-code (lathe)</h1>
+<p><b>FILE → Import G-code…</b> opens an existing lathe program (.nc, .tap, .cnc…) and rebuilds the part it
+cuts: a profile sketch of lines and arcs, revolved into a solid. It is a best effort. It does not treat the
+toolpath lines as the part: it simulates the cutting - the stock as a half-section, each tool's real shape
+swept along every feed move and subtracted - and keeps what is left. Everything it had to guess is marked, and
+everything it did not understand is listed with its line number.</p>
+<p class="tip">Lathe only. Choosing MILL says so and stops. Macros, loops (WHILE / IF / GOTO), G65, G10 and
+subprogram calls to a file that is not there are <b>flagged, not guessed</b>.</p>
+
+<h3>Step 1 · Setup</h3>
+<table>
+<tr><td class="k">Machine</td><td>LATHE / MILL, picked from the program's own tells (T0101-style tools, G96 / G50,
+feed per rev, U / W words, G70-G76 cycles, no Y moves). The reasons are shown; you can override.</td></tr>
+<tr><td class="k">Stock</td><td>ROUND BAR or TUBE (TUBE adds an ID). OD and length are read from the program and
+tagged <b>AUTO</b>; hover a tag to see where the number came from. Type over any of them: the tag turns
+<b>SET BY YOU</b>.</td></tr>
+<tr><td class="k">Origin</td><td>X0 is the spindle centerline. <b>Z0</b> is the FINISHED FRONT FACE, the STOCK FACE
+or the BACK FACE, guessed from the first facing pass. <b>Stock in front</b> is how much the facing takes off.</td></tr>
+<tr><td class="k">Flip program</td><td>A comment such as OP2, FLIP or 2ND OP in the middle of the program means the
+part is turned end for end. A box asks for the <b>overall length</b>; OP2 is then mirrored into OP1's frame
+(NO FLIP reads it as one program).</td></tr>
+<tr><td class="k">Flags</td><td>Every line the importer could not read or did not fully trust.</td></tr>
+</table>
+<p>The preview shows the stock (dashed), the centerline, Z0 and the toolpath: feeds solid, rapids dashed.</p>
+
+<h3>Step 2 · Tools</h3>
+<p>One row per T number with its comment, matched keywords, type, insert or size, nose radius, side and a status:</p>
+<ul>
+<li><b>READ</b> - a keyword in its comment said what it is (OD ROUGH, DRILL, GROOVE…).</li>
+<li><b>GUESSED</b> - no keyword, but its moves or a cycle gave it away (a G76 means a thread tool).</li>
+<li><b>UNKNOWN</b> - neither. It is treated as a sharp point; it still cuts, and every edge it cuts is marked
+ASSUMED.</li>
+<li><b>DEFINED</b> - set by you.</li>
+</ul>
+<p>Click a row to define it: tool type, insert code, nose radius, size, hand, OD / ID / CENTER. Typing an insert
+code (<b>CNMG 432</b> inch, or <b>CNMG 120408</b> metric) fills in the shape and the nose radius. Drill sizes
+are read from comments too: 1/2, .201, 8MM, #7, LETTER F. A nose radius nobody wrote down is a default and tagged
+<b>ASSUMED</b>; the panel says in one line what stays assumed until you define the tool. <b>APPLY · NEXT
+UNRESOLVED</b> moves on to the next tool that needs you. Tick <b>save as keyword</b> to teach the importer a word
+from this comment for next time.</p>
+
+<h3>Step 3 · Operations</h3>
+<p>The program is cut into operations: by tool change, then by operation comment, then by the shape of the
+moves (an X sweep at one Z is a FACE, repeated Z passes stepping in X are a ROUGH, one continuous contour is a
+FINISH, X plunges are a GROOVE, Z moves at X0 are a DRILL, X to the centerline at the back is a PART-OFF,
+G76 / G92 are a THREAD). Each row says how its type was found - <b>KEYWORD</b>, the cycle (G71…), <b>MOTION</b>
+or <b>YOU</b> - and how sure: HIGH, MED, NEEDS TYPE or SET BY YOU. Change any type from its dropdown.</p>
+<p class="tip">The type is a label. It does not change the geometry: an operation with no type still contributes
+its cuts. <b>SKIP</b> is the one exception - it says "this is not geometry" and its cuts are left out.</p>
+<p>The preview on the right shows the reconstructed profile live - exact edges solid, assumed edges dashed orange,
+uncut stock dashed gray - with the selected operation's moves over it, and a summary (max diameter, length, bore,
+thread callouts, operations still needing a type).</p>
+
+<h3>Step 4 · Reconstruct</h3>
+<table>
+<tr><td class="k">Programmed point</td><td><b>IMAGINARY TIP</b> (the usual) or <b>NOSE CENTER</b>: what the program's
+X / Z point at when cutter comp is off. With G41 / G42 active the programmed path is taken as the finished
+contour either way.</td></tr>
+<tr><td class="k">EXACT / ASSUMED</td><td>An edge is EXACT when a known tool or a G71 / G72 P-Q block made it, ASSUMED
+when an unknown tool or a defaulted nose radius decides it (only tapers, arcs and blends - a surface along an axis
+is set by the tip, whatever the radius).</td></tr>
+<tr><td class="k">Warnings and checks</td><td>A <b>rapid into stock</b> (a rapid never cuts, so the stock size, Z0 or a
+tool is wrong), a drill with no diameter, a blade with no width, a part-off leaving two pieces (the front one is
+the part), and each P-Q block's cross-check against the cutting moves.</td></tr>
+<tr><td class="k">BUILD PART</td><td>Makes a new part: the outline fitted to lines and true arcs as a <b>Profile</b>
+sketch (x = lathe Z, y = radius) and a 360° <b>Revolve</b> about the sketch X axis, so the spindle is the part's X
+axis and a Turning setup picks it up on its own. It asks to save the current part first. Values are cleaned onto
+the program's own resolution (0.0001 for an inch program); ASSUMED pieces are never rounded and draw in
+<b>yellow</b> in the sketch, so you know which ones to check against the drawing.</td></tr>
+</table>
+<p>Changing a tool, an operation type or the stock re-runs the reconstruction and every preview.</p>
+
+<h3>Settings · Keywords</h3>
+<p>The button at the top right of the import window. A keyword is a word in a comment that sets a tool type, an
+operation, or both ("-" leaves that one to motion detection). The longest match wins and uses up its text (FACE
+GROOVE beats FACE), whole words only, any case. Add a row at the top, delete one, or RESTORE DEFAULTS. The <b>test a
+comment</b> box shows how any comment is read: matched keywords, insert code, tool type, operations, nose radius,
+size. Keywords saved from Step 2 land here as USER rows.</p>
+<p class="warn">Step 4 and BUILD PART need the shapely library in the installed app's runtime. A copy built
+without it runs Steps 1-3 and says so in Step 4.</p>
+"""),
     ("timeline", "Timeline, Undo, Files", """
 <h1>Timeline, Undo and Files</h1>
 <h3>Timeline</h3>

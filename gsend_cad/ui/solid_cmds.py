@@ -7,13 +7,14 @@ import math
 import numpy as np
 from PySide6.QtCore import Qt
 
-from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton, QWidget)
+from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QPushButton, QToolButton,
+                               QWidget)
 
 from ..core import sketch as sk
 from ..core.profiles import region_at
 from ..kernel import (edge_list, extrude_tool, region_face, revolve_axis,
                       revolve_tool)
-from . import theme
+from . import icons, theme
 from .cmd_base import NumBox, Panel, _dlg_footer, mesh_of
 
 
@@ -180,14 +181,36 @@ class ExtrudeSession:
 # ------------------------------------------------------------------ revolve
 
 
+def _point_segment(p, a, b) -> float:
+    """Distance from point p to the segment a-b (sketch coordinates)."""
+    ax, ay, bx, by = a[0], a[1], b[0], b[1]
+    dx, dy = bx - ax, by - ay
+    L2 = dx * dx + dy * dy
+    t = 0.0 if L2 < 1e-18 else max(0.0, min(1.0, ((p[0] - ax) * dx + (p[1] - ay) * dy) / L2))
+    return math.hypot(p[0] - (ax + t * dx), p[1] - (ay + t * dy))
+
+
 class RevolvePanel(Panel):
     def __init__(self, session: "RevolveSession"):
         super().__init__("Revolve")
         s = session
         self.prof = self.row("Profile", self.value("Select"))
-        self.axis = QComboBox()
-        self.axis.setMinimumWidth(110)
-        self.row("Axis", self.axis)
+        # the axis is PICKED in the sketch (a line, or the red / green axis), not chosen from a list
+        self.axis_val = self.value("Sketch X axis")
+        self.axis_btn = QToolButton()
+        self.axis_btn.setObjectName("pickBtn")
+        self.axis_btn.setCheckable(True)
+        self.axis_btn.setIcon(icons.icon("cursor", theme.FG2))
+        self.axis_btn.setFixedSize(30, 24)
+        self.axis_btn.setToolTip("Click, then click the line or axis in the sketch to revolve about")
+        self.axis_btn.toggled.connect(s.set_axis_pick)
+        wrap = QWidget()
+        hl = QHBoxLayout(wrap)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(6)
+        hl.addWidget(self.axis_val)
+        hl.addWidget(self.axis_btn)
+        self.row("Axis", wrap)
         self.angle = QDoubleSpinBox()
         self.angle.setRange(-360, 360)
         self.angle.setDecimals(2)
@@ -200,11 +223,13 @@ class RevolvePanel(Panel):
             self.op.addItem(label, key)
         self.row("Operation", self.op)
         _dlg_footer(self, s)
-        for w in (self.axis, self.op):
-            w.currentIndexChanged.connect(s.update_preview)
+        self.op.currentIndexChanged.connect(s.update_preview)
         self.angle.valueChanged.connect(s.update_preview)
 
     set_count = ExtrudePanel.set_count
+
+    def show_axis(self, text: str):
+        self.axis_val.setText(text)
 
 
 class RevolveSession(ExtrudeSession):
@@ -213,6 +238,8 @@ class RevolveSession(ExtrudeSession):
 
     def __init__(self, win, regions, planes):
         self._axis_sketch = None
+        self.axis = ("x", None)             # ("x" | "y" | "line", entity index): what the part spins about
+        self.axis_pick = False              # the panel's cursor button is down: the next click picks the axis
         super().__init__(win, regions, planes)
 
     def _sketch_id(self):
@@ -220,43 +247,91 @@ class RevolveSession(ExtrudeSession):
             return next(r for r in self.regions if r.key == self.sel[0]).sketch
         return self.regions[-1].sketch
 
-    def _fill_axes(self):
-        """Axis choices for the profiles' sketch: its X / Y axis, then its lines."""
+    def _default_axis(self):
+        """When the profiles' sketch changes: a profile drawn above the X axis spins about X, one
+        right of the Y axis about Y. The user can then pick any line or axis instead."""
         sid = self._sketch_id()
         if sid == self._axis_sketch:
             return
         self._axis_sketch = sid
-        ents = self.win.doc.feature(sid)["ents"]
-        box = self.panel.axis
-        box.blockSignals(True)
-        box.clear()
-        box.addItem("Sketch X axis", ("x", None))
-        box.addItem("Sketch Y axis", ("y", None))
-        for i, e in enumerate(ents):
-            if e["type"] == "line":
-                box.addItem(f"Line {i + 1} · {sk.entity_label(e)[1]}", ("line", i))
-        # a profile drawn above the X axis spins about X; one right of the Y axis about Y
         pts = [p for r in self.regions if r.key in self.sel for p in r.outer.pts] or [(0, 1)]
-        box.setCurrentIndex(0 if min(p[1] for p in pts) >= -1e-9 else 1)
-        box.blockSignals(False)
+        self.set_axis("x" if min(p[1] for p in pts) >= -1e-9 else "y", None, preview=False)
+
+    def set_axis(self, kind: str, ent, preview: bool = True):
+        self.axis = (kind, ent)
+        if hasattr(self.panel, "axis_val"):
+            if kind == "line":
+                e = self.win.doc.feature(self._sketch_id())["ents"][ent]
+                self.panel.show_axis(f"Line {ent + 1} · {sk.entity_label(e)[1]}")
+            elif kind == "pts":
+                e = self.win.doc.feature(self._sketch_id())["ents"][ent[2]]
+                self.panel.show_axis(f"Edge of {sk.entity_label(e)[0].lower()} {ent[2] + 1}")
+            else:
+                self.panel.show_axis(f"Sketch {kind.upper()} axis")
+        if preview:
+            self.update_preview()
+
+    def set_axis_pick(self, on: bool):
+        self.axis_pick = bool(on)
+        self.vp.plotter.setCursor(Qt.CrossCursor if on else Qt.ArrowCursor)
+        self.update_preview()
+
+    def pick_axis(self, ev) -> bool:
+        """The click lands on the sketch's red X axis, green Y axis or one of its lines: that is the axis."""
+        sid = self._sketch_id()
+        pos = ev.position().toPoint()
+        w = self.vp.world_at(pos, frame=self.planes[sid])
+        if not w:
+            return False
+        tol = 8 * self.vp.pixel_size(pos)
+        ents = self.win.doc.feature(sid)["ents"]
+        best = min((abs(w[1]), ("x", None)), (abs(w[0]), ("y", None)))
+        for i, e in enumerate(ents):
+            if e["type"] in ("point", "circle", "arc"):
+                continue                                # nothing straight to spin about
+            pts = sk.entity_points(e)                   # a line, a parallel line, or a rectangle's / polygon's sides
+            for a, b in zip(pts, pts[1:]):
+                d = _point_segment(w, a, b)
+                if d < best[0]:
+                    best = (d, ("line", i) if e["type"] == "line" else ("pts", (tuple(a), tuple(b), i)))
+        if best[0] > tol:
+            self.vp.show_toast("Click a line or an edge in the sketch, or the red / green axis", bad=True)
+            return False
+        self.set_axis(*best[1], preview=False)
+        self.panel.axis_btn.setChecked(False)           # set_axis_pick(False) redraws
+        return True
+
+    def on_click(self, w, ev):
+        if self.axis_pick:
+            self.pick_axis(ev)
+            return
+        super().on_click(w, ev)
+
+    def on_key(self, ev) -> bool:
+        if ev.key() == Qt.Key_Escape and self.axis_pick:
+            self.panel.axis_btn.setChecked(False)       # Esc leaves axis picking before it leaves Revolve
+            return True
+        return super().on_key(ev)
 
     def paint(self):
-        if hasattr(self.panel, "axis"):
-            self._fill_axes()
+        if hasattr(self.panel, "axis_val"):
+            self._default_axis()
         super().paint()
 
     def feature(self) -> dict:
         regs = [next(r for r in self.regions if r.key == k) for k in self.sel]
-        kind, ent = self.panel.axis.currentData() or ("x", None)
+        kind, ent = self.axis
         axis = {"sketch": self._sketch_id(), "kind": kind}
         if kind == "line":
             axis["ent"] = ent
+        elif kind == "pts":
+            axis["a"], axis["b"] = list(ent[0]), list(ent[1])
         return {"kind": "revolve", "name": "preview", "op": self.panel.op.currentData(),
                 "angle": self.panel.angle.value(), "axis": axis,
                 "profiles": [r.to_data() for r in regs if r.sketch == axis["sketch"]]}
 
     def update_preview(self, *_):
-        if not hasattr(self.panel, "axis"):
+        if not hasattr(self.panel, "axis_val"):
             return
         self.vp.clear("preview", render=False)
         f = self.feature()
@@ -276,9 +351,12 @@ class RevolveSession(ExtrudeSession):
                 self.vp.render()
                 return
         n = len(f["profiles"])
-        self.win.message(f"REVOLVE {self.panel.op.currentText().upper()} · {n} profile{'s' if n != 1 else ''} · "
-                         "pick the axis in the panel (yellow line) · Enter = OK · Esc = cancel" if n else
-                         "REVOLVE: click a profile (a half cross-section) · Esc = cancel")
+        if self.axis_pick:
+            self.win.message("REVOLVE: click the line or the red / green axis to revolve about · Esc = back")
+        else:
+            self.win.message(f"REVOLVE {self.panel.op.currentText().upper()} · {n} profile{'s' if n != 1 else ''} · "
+                             "axis: the yellow line (cursor button to pick another) · Enter = OK · Esc = cancel"
+                             if n else "REVOLVE: click a profile (a half cross-section) · Esc = cancel")
         self.vp.render()
 
     def commit(self):

@@ -183,6 +183,7 @@ class TopBar(QFrame):
     redo = Signal()
     docs = Signal()
     about = Signal()
+    licenses = Signal()
     projection = Signal(str)      # Settings → View projection
 
     def __init__(self, fonts):
@@ -262,6 +263,7 @@ class TopBar(QFrame):
         m = QMenu(self.help)
         m.addAction("Documentation\tF1", self.docs.emit)
         m.addSeparator()
+        m.addAction("Open-source licences", self.licenses.emit)
         m.addAction(f"About {APP_NAME}", self.about.emit)
         self.help.setMenu(m)
         # SETTINGS and HELP live in the ribbon's tab row, after the tabs (Ribbon.place_menus); the top bar

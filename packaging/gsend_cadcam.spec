@@ -31,6 +31,9 @@ for pkg in ("build123d", "ocp_gordon", "ocpsvg", "ezdxf", "lib3mf", "svgpathtool
     except Exception:
         pass
 binaries += collect_dynamic_libs("lib3mf")
+# shapely (G-code import, Step 4): its GEOS DLLs live in shapely.libs beside the package
+hiddenimports += collect_submodules("shapely")
+binaries += collect_dynamic_libs("shapely")
 # pyvista loads VTK modules by name at runtime; take its own modules and the VTK pieces it uses
 hiddenimports += collect_submodules("pyvista", filter=lambda m: ".examples" not in m and ".demos" not in m)
 datas += collect_data_files("pyvista")
@@ -104,3 +107,11 @@ sys.path.insert(0, str(ROOT / "packaging"))
 from update_app import copy_app  # noqa: E402
 
 copy_app(Path(DISTPATH) / NAME)
+
+# Third-party licence notices, next to the .exe (Help > Open-source licences shows this file).
+# Limited to the packages this build really bundles, so it matches what ships.
+sys.path.insert(0, str(ROOT))
+from gsend_cad import licenses  # noqa: E402
+
+bundled = {m[0].split(".")[0] for m in a.pure} | {Path(b[0]).parts[0].split(".")[0] for b in a.binaries}
+licenses.write(Path(DISTPATH) / NAME / licenses.FILE_NAME, only=bundled)

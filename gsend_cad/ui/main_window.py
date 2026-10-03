@@ -89,6 +89,7 @@ class MainWindow(QMainWindow):
         self.browser.post.connect(self.post_process)
         self.topbar.docs.connect(self.show_docs)
         self.topbar.about.connect(self.show_about)
+        self.topbar.licenses.connect(self.show_licenses)
         docs = QAction("Documentation", self, shortcut=QKeySequence(Qt.Key_F1),
                        shortcutContext=Qt.ApplicationShortcut, triggered=self.show_docs)
         self.addAction(docs)
@@ -104,6 +105,16 @@ class MainWindow(QMainWindow):
         self.topbar.open.connect(self.open)
         self.topbar.undo.connect(self.undo)
         self.topbar.projection.connect(self.set_projection)
+        try:                                            # optional module: the app runs without it
+            from ..gcode_import import register as _gcode_import
+            _gcode_import(self)
+        except Exception:                               # broken or removed -> no File > Import G-code… entry
+            import traceback
+            try:                                        # a windowed .exe has no console: keep it in the logs
+                from .app import log_dir
+                (log_dir() / "gcode_import.log").write_text(traceback.format_exc(), encoding="utf-8")
+            except Exception:
+                pass
         from PySide6.QtCore import QSettings
         self.prefs = QSettings("G-SEND", "CADCAM")            # remembered between runs
         self.tool_lib_path = os.environ.get("GSEND_TOOL_LIBRARY") or os.path.join(
@@ -791,6 +802,26 @@ class MainWindow(QMainWindow):
         self.docs.raise_()
         self.docs.activateWindow()
 
+    def show_licenses(self):
+        """Help > Open-source licences: the third-party notices this copy ships."""
+        from PySide6.QtWidgets import QDialog, QPlainTextEdit, QVBoxLayout
+        from .. import licenses
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Open-source licences")
+        dlg.resize(820, 640)
+        lay = QVBoxLayout(dlg)
+        box = QPlainTextEdit()
+        box.setReadOnly(True)
+        box.setStyleSheet(f"font-family:'{theme.MONO[0]}','Consolas',monospace;font-size:12px;"
+                          f"background:{theme.BG};color:{theme.FG};")
+        try:
+            box.setPlainText(licenses.text())
+        except Exception as exc:
+            box.setPlainText(f"Could not read the licence notices:\n{exc}")
+        lay.addWidget(box)
+        self.licenses_dialog = dlg
+        dlg.show()
+
     def show_about(self):
         from ..buildinfo import info, pretty_date
         b = info()
@@ -798,7 +829,8 @@ class MainWindow(QMainWindow):
         commit = f" <span style='color:{theme.FG3}'>({b['commit']})</span>" if b.get("commit") else ""
         QMessageBox.about(self, f"About {APP_NAME}",
                           f"<b>About {APP_NAME}</b><br><br>Version {b['version']}{commit}{when}<br><br>"
-                          "CAD/CAM for G-SEND.IO.<br>Help → Documentation (F1) explains how.")
+                          "CAD/CAM for G-SEND.IO.<br>Help → Documentation (F1) explains how.<br><br>"
+                          "Built with open-source software: Help → Open-source licences.")
 
     # ---------------------------------------------------------- misc actions
     def select_node(self, nid: str):
