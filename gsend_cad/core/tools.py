@@ -7,7 +7,8 @@
 
 A tool: {"id", "number" (T number on the machine), "name", "kind", "machine" ("milling" |
 "turning"), "dia" (cutting diameter; a grooving insert's width; 0 for a turning insert), "nose_r" (insert nose radius)}.
-An operation copies what it needs (op["tool"] = number, op["tool_dia"], op["tool_name"]), so a
+An operation copies what it needs (op["tool"] = number, op["tool_dia"], op["tool_name"], and for a turning insert
+op["nose_r"], which cutter comp needs), so a
 saved part still posts the same after the library changes.
 """
 from __future__ import annotations
@@ -88,6 +89,8 @@ def apply(op: dict, t: dict) -> dict:
     op["tool"], op["tool_name"] = t["number"], t["name"]
     if t.get("dia"):
         op["tool_dia"] = t["dia"]
+    if t.get("kind") == "od turn":                 # the nose radius cutter comp needs, kept with the op like the rest
+        op["nose_r"] = t.get("nose_r", 0.0)
     return op
 
 

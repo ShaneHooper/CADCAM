@@ -21,6 +21,12 @@ OK = "#3ddc84"
 WARN = "#ffb300"
 BAD = "#ff3b3b"
 BODY = "#b4b9c0"
+# How brightly the solid is lit (viewport). Shane 10/2/26: the grey read too dark on the black, "a little lighter,
+# but keep it grey" - then "just a little bit more". Was ambient 0.10 / diffuse 0.60 (luminance 90); now 0.35 / 0.70
+# (luminance 147, +64%, RGB ~143,148,154) with the shading between faces intact. Raise both to go lighter, lower
+# to go darker; the colour above is unchanged. (0.25 / 0.65 was the first step: luminance 123.)
+BODY_AMBIENT = 0.35
+BODY_DIFFUSE = 0.70
 
 FONT_DIR = Path(__file__).with_name("fonts")
 ASSETS = Path(__file__).with_name("assets")

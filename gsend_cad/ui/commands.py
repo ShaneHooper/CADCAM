@@ -25,7 +25,7 @@ from ..kernel import (bodies_bbox, edge_list, max_radius, model_snap_points, out
 from . import icons, theme
 
 TOOL_KEYS = {"Line": "line", "Rectangle": "rect", "Center Rect": "center_rect", "Circle": "circle",
-             "Polygon": "polygon", "Point": "point", "Fillet": "fillet", "Chamfer": "chamfer",
+             "Polygon": "polygon", "Point": "point", "Parallel to Axis": "xline", "Fillet": "fillet", "Chamfer": "chamfer",
              "Trim": "trim", "Rotate": "rotate", "Mirror": "mirror", "Pattern": "pattern"}
 XFORM_TOOLS = ("rotate", "mirror", "pattern")
 CORNER_TOOLS = ("fillet", "chamfer")
@@ -33,6 +33,7 @@ HINTS = {"line": "Click start, click end. Keep clicking to chain. Esc ends the c
          "rect": "Click two opposite corners.", "center_rect": "Click center, then a corner.",
          "circle": "Click center, then a point on the circle.", "polygon": "Click center, then a vertex.",
          "point": "Click to place a point.",
+         "xline": "Click an axis or a line, then click where the parallel line goes, or type the distance from it.",
          "fillet": "Click a sharp corner to round it (radius: Fillet R in the palette).",
          "chamfer": "Click a sharp corner to bevel it (Chamfer H × V in the palette).",
          "trim": "Click the piece to cut away: it goes back to the nearest crossing on each side (T).",
@@ -585,6 +586,7 @@ class PlanePickSession:
 
 class SketchSession:
     captures_left = True
+    shows_grid = True                        # the viewport draws its grid on this sketch's plane while it is open
 
     def __init__(self, win, name: str, plane_z: float = 0.0, ents=None, edit_id: str | None = None,
                  plane: dict | None = None):
@@ -614,6 +616,8 @@ class SketchSession:
         self.xpanel = None                   # Rotate / Mirror / Pattern panel while that tool is on
         self.picked: list = []               # entities those tools work on
         self.xpick = None                    # "center" / "line": the next click picks that
+        self.xref = None                     # Parallel to Axis: (point, direction, name) of the line it runs parallel to
+        self._xcur = None                    # ... and where the cursor last was: (u, v) and the screen spot
         self.mirror_line = None
         self.editor = DimEditor(self.vp)     # right-click a dimension: type its value in place
         self._plane_changed()
@@ -733,6 +737,8 @@ class SketchSession:
         self._end_xform()
         self.tool = TOOL_KEYS.get(label) if label else None
         self.pts = []
+        self.xref = None
+        self.editor.hide()
         self.vp.clear("preview")
         self.vp.dim.hide()
         self.win.ribbon.set_active(label)
@@ -800,7 +806,13 @@ class SketchSession:
             self.vp.add_lines("plane_edges", [[pl.to_world(self.frame, q, 0.003) for q in e["pts"]]
                                               for e in self.model_edges], color=theme.FG3, width=1.0)
         others = [e for i, e in enumerate(self.ents) if i != self.sel and i not in self.multi]
-        self.vp.add_lines("sketch", self._lines(others))
+        # a piece the G-code import only ASSUMED (a guessed nose radius or tool) is drawn in warning yellow
+        solid = [e for e in others if e["type"] != "xline"]
+        self.vp.add_lines("sketch", self._lines([e for e in solid if e.get("src") != "ASSUMED"]))
+        self.vp.add_lines("sketch", self._lines([e for e in solid if e.get("src") == "ASSUMED"]), color=theme.WARN)
+        # parallel lines are reference: thinner and quieter than the part line
+        self.vp.add_lines("sketch", self._lines([e for e in others if e["type"] == "xline"], 0.002),
+                          color=theme.FG2, width=1.0)
         if self.sel is not None:
             self.vp.add_lines("sel", self._lines([self.ents[self.sel]], 0.005), color=theme.FG, width=2.6)
         self.multi = [i for i in self.multi if 0 <= i < len(self.ents)]
@@ -873,6 +885,9 @@ class SketchSession:
         if self.tool == "trim":
             self._trim_hover(w, pos)
             return
+        if self._xmode():
+            self._xline_hover(w, ev)
+            return
         p = self._snap(w, ev)
         self._mark_snap(p, pos)
         tag = f"  · {self.snap_hit[2].upper()}" if self.snap_hit else ""
@@ -889,6 +904,105 @@ class SketchSession:
             self.vp.add_lines("preview", self._lines([ent]), opacity=0.45)
         self.vp.show_dim(sk.preview_label(self.tool, self.pts[0], p, n, flats) + tag, pos)
         self.vp.render()
+
+    # ---- Parallel to Axis: click an axis (or a line), then the spot (or type the distance from it)
+    def _xline_refs(self):
+        """What a parallel line can run parallel to: (point, direction, name) for each axis, line and parallel line."""
+        refs = [((0.0, 0.0), (1.0, 0.0), "X AXIS"), ((0.0, 0.0), (0.0, 1.0), "Y AXIS")]
+        for e in self.ents:
+            if e["type"] == "line" and not e.get("corner"):
+                (x0, y0), (x1, y1) = e["pts"]
+                if math.hypot(x1 - x0, y1 - y0) > 1e-9:
+                    refs.append(((x0, y0), (x1 - x0, y1 - y0), "LINE"))
+            elif e["type"] == "xline":
+                refs.append((tuple(e["p"]), tuple(e["d"]), "PARALLEL LINE"))
+        return refs
+
+    def _xmode(self) -> bool:
+        """Placing a parallel line: the Parallel to Axis tool, or the Line tool after a click on an axis."""
+        return self.tool == "xline" or (self.tool == "line" and self.xref is not None)
+
+    def _xline_ref_at(self, w, tol, axes_only=False):
+        """The reference closest to the cursor within tol: axes and parallel lines are measured to their whole
+        length, a line to the line itself."""
+        best, hit = tol, None
+        for p, d, name in self._xline_refs():
+            if axes_only and not name.endswith("AXIS"):
+                continue
+            if name == "LINE":
+                dist = sk.distance(sk.line(p, (p[0] + d[0], p[1] + d[1])), w)
+            else:
+                dist = abs(sk._cross2((d[0], d[1]), (w[0] - p[0], w[1] - p[1])))
+            if dist <= best:
+                best, hit = dist, (p, d, name)
+        return hit
+
+    def _xline_hover(self, w, ev):
+        pos = ev.position().toPoint()
+        self.vp.clear("preview", render=False)
+        if self.xref is None:
+            ref = self._xline_ref_at(w, 8 * self.vp.pixel_size(pos))
+            if ref:
+                p, d, _name = ref
+                self.vp.add_lines("preview", self._lines([sk.xline(p, d)], 0.006), color=theme.ACCENT, width=2.0)
+                self.vp.show_dim(f"Parallel to Axis · click to run parallel to the {ref[2]}", pos)
+            else:
+                self.vp.show_dim("Parallel to Axis · move onto an axis or a line", pos)
+            self.vp.render()
+            return
+        p = self._snap_point(w, ev)
+        self._xcur = (p, pos)
+        ent, off = sk.xline_offset(self.xref[0], self.xref[1], p)
+        self._mark_snap(p, pos)
+        self.vp.add_lines("preview", self._lines([ent], 0.006), opacity=0.6)
+        self.vp.show_dim(f"{sk.fmt(abs(off))} from the {self.xref[2]} · click to place · type a number", pos)
+        self.vp.render()
+
+    def _xline_click(self, w, ev):
+        pos = ev.position().toPoint()
+        if self.xref is None:
+            ref = self._xline_ref_at(w, 8 * self.vp.pixel_size(pos), axes_only=self.tool == "line")
+            if ref is None:
+                self.vp.show_toast("Click an axis or a line to run a line parallel to it", bad=True)
+                return
+            self.xref = ref
+            self.win.message(f"Parallel to the {ref[2]}: click where it goes, or type the distance from it "
+                             "(on the side the cursor is) · Esc picks another")
+            self._xline_hover(w, ev)
+            return
+        p = self._snap(w, ev)
+        ent, _off = sk.xline_offset(self.xref[0], self.xref[1], p)
+        self._place_xline(ent)
+
+    def _place_xline(self, ent):
+        self.xref = None
+        self.vp.clear("preview", render=False)
+        self.vp.clear("snapmark", render=False)
+        self.vp.dim.hide()
+        self._add(ent)
+        self.win.message(HINTS[self.tool])
+
+    def _xline_type(self, first: str):
+        """A digit typed with a reference picked: the distance box opens at the cursor."""
+        if self._xcur is None:
+            return
+        side, pos = self._xcur
+        ref = self.xref
+
+        def apply(value):
+            if self.xref is not ref:
+                return                                           # (0 is a distance too: right on the axis / line)
+            _e, off = sk.xline_offset(ref[0], ref[1], side)
+            n = (-ref[1][1], ref[1][0])
+            n = (n[0] / math.hypot(*n), n[1] / math.hypot(*n))
+            signed = value * (1.0 if off >= 0 else -1.0)         # a minus sign: the other side
+            self._place_xline(sk.xline((ref[0][0] + signed * n[0] + 0.0, ref[0][1] + signed * n[1] + 0.0), ref[1]))
+            self.vp.plotter.setFocus()
+        self.editor.open("Distance", 0.0, 4, pos, apply)
+        le = self.editor.box.lineEdit()
+        le.setText(first)
+        le.deselect()
+        le.setCursorPosition(len(first))
 
     def _add(self, ent):
         self._push()
@@ -971,7 +1085,15 @@ class SketchSession:
             self.select(None)
             self._trim_hover(w, pos)
             return
+        if self._xmode():
+            self._xline_click(w, ev)
+            return
         p = self._snap(w, ev)
+        if self.tool == "line" and not self.pts and self.snap_hit is None:
+            axis = self._xline_ref_at(w, 8 * self.vp.pixel_size(ev.position().toPoint()), axes_only=True)
+            if axis:                                   # Line tool, first click on an axis: a line parallel to it
+                self._xline_click(w, ev)               # follows the cursor until it is placed (or a number typed)
+                return
         if self.tool == "point":
             self._add(sk.point(p))
             return
@@ -1013,11 +1135,20 @@ class SketchSession:
 
     def on_key(self, ev) -> bool:
         k = ev.key()
+        if self._xmode() and ev.text() and ev.text() in "0123456789.-" \
+                and not ev.modifiers() & Qt.ControlModifier:
+            self._xline_type(ev.text())
+            return True
         if k == Qt.Key_Escape:
             if self.pts:
                 self.pts = []
                 self.vp.clear("preview")
                 self.vp.dim.hide()
+            elif self.xref is not None:
+                self.xref = None
+                self.vp.clear("preview")
+                self.vp.dim.hide()
+                self.win.message(HINTS[self.tool])
             elif self.tool:
                 self.set_tool(None)
             else:
@@ -3433,8 +3564,14 @@ class PostDialog(QDialog):
         self.offset = QComboBox()
         self.offset.addItems(post.OFFSETS)
         self.coolant = QCheckBox("Coolant (M08)")
+        self.comp = QComboBox()                         # cutter comp for a lathe Contour: off / machine / computer
+        for k, label in post.COMPS.items():
+            self.comp.addItem(label, k)
+        self.comp.setToolTip("Lathe Contour only.\nOff: the part line point to point.\nMachine: the same points with "
+                             "G41 / G42 and G40, the control compensates.\nComputer: no G41 / G42 / G40; the points "
+                             "carry the tool nose radius.")
         for label, w in (("Setup", self.setup), ("Control", self.control), ("Program", self.program),
-                         ("Work offset", self.offset)):
+                         ("Work offset", self.offset), ("Cutter comp", self.comp)):
             top.addWidget(QLabel(label))
             top.addWidget(w)
         top.addWidget(self.coolant)
@@ -3459,7 +3596,7 @@ class PostDialog(QDialog):
         save.clicked.connect(self.save)
         v.addLayout(foot)
         self.setup.currentIndexChanged.connect(self.load_settings)
-        for w in (self.control, self.offset):
+        for w in (self.control, self.offset, self.comp):
             w.currentIndexChanged.connect(self.refresh)
         self.program.valueChanged.connect(self.refresh)
         self.coolant.toggled.connect(self.refresh)
@@ -3473,19 +3610,22 @@ class PostDialog(QDialog):
         st = self.current()
         i = self.win.doc.setups.index(st)
         ps = st.get("post", {"controller": "haas", "program": 1000 + i, "offset": "G54", "coolant": True})
-        for w in (self.control, self.offset, self.program, self.coolant):
+        for w in (self.control, self.offset, self.program, self.coolant, self.comp):
             w.blockSignals(True)
         self.control.setCurrentIndex(max(0, self.control.findData(ps["controller"])))
         self.offset.setCurrentText(ps["offset"])
         self.program.setValue(int(ps["program"]))
         self.coolant.setChecked(bool(ps["coolant"]))
-        for w in (self.control, self.offset, self.program, self.coolant):
+        self.comp.setCurrentIndex(max(0, self.comp.findData(ps.get("comp", "off"))))
+        self.comp.setEnabled(st["type"] == cam.TURNING)       # a lathe thing: greyed out (not hidden) on a mill
+        for w in (self.control, self.offset, self.program, self.coolant, self.comp):
             w.blockSignals(False)
         self.refresh()
 
     def settings(self) -> dict:
         return {"controller": self.control.currentData(), "program": self.program.value(),
-                "offset": self.offset.currentText(), "coolant": self.coolant.isChecked()}
+                "offset": self.offset.currentText(), "coolant": self.coolant.isChecked(),
+                "comp": self.comp.currentData() if self.comp.isEnabled() else "off"}
 
     def gcode(self) -> str:
         """The setup's program. An op that can't make a toolpath (a Groove with no groove on
@@ -3499,6 +3639,9 @@ class PostDialog(QDialog):
             except ValueError as exc:
                 self.skipped.append(f"{o.get('name', 'op')}: {exc}")
                 continue
+            if o.get("type") == "finish" and "nose_r" not in o:      # an older op: the library's nose radius
+                t = tools.find(self.win.tool_lib, o, st["type"], "finish")
+                o = {**o, "nose_r": t["nose_r"] if t else 0.0}
             ops.append((o, mv))
             self.minutes += cam.cycle_time(mv, st, o)
         if not ops:
@@ -3506,7 +3649,7 @@ class PostDialog(QDialog):
                                                      "this setup has no toolpaths yet"))
         ps = self.settings()
         g = post.post_setup(st, ops, ps["controller"], ps["program"], ps["offset"], ps["coolant"],
-                            self.win.doc.name)
+                            self.win.doc.name, ps["comp"])
         if self.skipped:                              # say so at the top of the program too
             lines = g.splitlines()
             note = [post._comment("NOT POSTED - " + s) for s in self.skipped]

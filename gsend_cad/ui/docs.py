@@ -37,6 +37,7 @@ toolpath is open, left drag orbits as before.</td></tr>
 <tr><td class="k">Left click</td><td>Picks the body under it (Ctrl: add / drop); empty space clears.</td></tr>
 <tr><td class="k">Shift + left drag</td><td>Orbit (spin the part)</td></tr>
 <tr><td class="k">Shift + wheel-button drag</td><td>Orbit freely in any direction. Works while sketching too (left click draws there).</td></tr>
+<tr><td class="k">Shift or Alt + left drag, while sketching</td><td>Turn the view (a plain left drag draws or selects there). A Shift + click that does not move is still a click.</td></tr>
 <tr><td class="k">Right drag</td><td>Pan</td></tr>
 <tr><td class="k">Wheel-button drag</td><td>Pan</td></tr>
 <tr><td class="k">Mouse wheel</td><td>Zoom (toward you zooms in)</td></tr>
@@ -169,6 +170,18 @@ circle; less = from the original to that angle). <b>Rectangular</b> = count and 
 will cut away turns red. It runs to the nearest crossing on each side of the cursor.</li>
 <li>A piece with nothing crossing it is removed entirely. A circle needs two crossings to be trimmed
 into an arc. A rectangle or polygon is split into lines first. Each click is its own Ctrl+Z.</li>
+</ul>
+<h3>Parallel to Axis</h3>
+<ul>
+<li>Click <b>Parallel to Axis</b> (Sketch tab, Create), or just use the <b>Line</b> tool and make your first click on an
+axis. Click an <b>axis</b> (the red or green line) or any line
+in the sketch: a line parallel to it, running on forever, follows the cursor.</li>
+<li>Click where it goes (it snaps like everything else), or just <b>type the distance</b>, for example
+<b>4.25</b>, and press Enter: it goes that far from the line you picked, on the side the cursor is on.
+A minus sign puts it on the other side.</li>
+<li>It is a drawing aid: it is never part of a profile (nothing is extruded or revolved from it) and it is
+not shown once the sketch is finished. The cursor snaps to where parallel lines cross each other, the axes
+and lines, so a part can be laid out from them. Select one to change its position in the palette.</li>
 </ul>
 <h3>Closed shapes (what can be extruded)</h3>
 <p>Only closed shapes can become solid: a rectangle, circle, polygon, or lines that join
@@ -508,6 +521,21 @@ M09 M05 · G28 G91 Z0. then Y0. (Haas) or X0. Y0. (Fanuc) · M30.</li>
 <li>Inch, absolute, only changed words written (modal). Always prove out a new program: single block,
 rapid override down, and check it in G-SEND.IO's simulator first.</li>
 </ul>
+<h3>Cutter comp (lathe Contour)</h3>
+<p>A round tool nose sits back from the sharp tip the program steers, so angles and radii cut a little off.
+Axis-only moves (a plain face, a straight diameter) don't care. The <b>Cutter comp</b> box in the Post Process
+window picks how a turning <b>Contour</b> deals with it:</p>
+<ul>
+<li><b>Off</b>: the part line, point to point. No G41 / G42, no nose radius used.</li>
+<li><b>Machine (G41 / G42)</b>: the same points, plus <b>G42</b> (OD) or <b>G41</b> (ID) on the approach move and
+<b>G40</b> on the first move away. The control compensates, so the tool's nose radius and tip direction must be
+set in its offset (the program says so in a comment).</li>
+<li><b>Computer (in the code)</b>: no G41 / G42 / G40. The program carries the points that make the tool's nose
+radius cut the part line (the way the Haas ST/TL workbook does it by hand: for a .031 nose radius, a 45° chamfer
+moves .0183 in Z and .0366 on the diameter). The nose radius comes from the tool in the Tool Library.</li>
+</ul>
+<p>With Machine or Computer the Contour is posted line by line, not as a G70 cycle. Other operations ignore the
+setting, and it is greyed out on a Milling setup.</p>
 """),
     ("timeline", "Timeline, Undo, Files", """
 <h1>Timeline, Undo and Files</h1>

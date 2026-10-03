@@ -12,6 +12,7 @@ from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QToolButton, QVBoxLayout,
                                QWidget)
 from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
+from vtkmodules.vtkCommonMath import vtkMatrix4x4
 from vtkmodules.vtkRenderingCore import vtkBillboardTextActor3D, vtkCellPicker, vtkMapper, vtkRenderer
 
 from ..core import plane as pl
@@ -62,6 +63,7 @@ class Viewport(QWidget):
         self._right_taken = False            # a right-click a session handled: swallow its release too
         self._rpress = None                  # right press spot: a release there (no pan) = context menu
         self._box0 = None                    # left press spot of a selection box (None = not boxing)
+        self._sk_orbit = None                # sketching, Shift / Alt + left drag orbits: [press spot, last spot, Shift?]
         self.box_cb = None                   # no command running: box / click selects bodies (main window)
         self.click_cb = None
 
@@ -113,9 +115,11 @@ class Viewport(QWidget):
     @plane_z.setter
     def plane_z(self, z: float):
         self.frame = pl.xy(float(z))
+        self._sync_grid()
 
     def set_frame(self, frame: dict):
         self.frame = frame
+        self._sync_grid()
 
     def look_at(self, frame: dict, dist: float = 10.0):
         """Camera square on to a sketch plane: looking along -n with the plane's y up, so the
@@ -157,15 +161,68 @@ class Viewport(QWidget):
 
     # ---------- scene ----------
     def _build_grid(self):
+        """The grid is drawn once in the sketch plane's own axes (u, v, 0) and moved onto the plane being
+        sketched on (`_place_grid`); it is only shown while a sketch is open (`_sync_grid`). The red / green /
+        blue axes at the world origin are always there."""
         size, minor = 8, 0.25
         m1, m2 = [], []
         for i in np.arange(-size, size + 1e-9, minor):
             major = abs(i - round(i)) < 1e-6
             (m2 if major else m1).extend([[(i, -size, 0), (i, size, 0)], [(-size, i, 0), (size, i, 0)]])
-        self.plotter.add_mesh(polyline_mesh(m1), color="#1f1f1f", line_width=1, pickable=False, lighting=False)
-        self.plotter.add_mesh(polyline_mesh(m2), color="#333333", line_width=1, pickable=False, lighting=False)
+        self._grid_actors = [
+            self.plotter.add_mesh(polyline_mesh(m1), color="#1f1f1f", line_width=1, pickable=False, lighting=False),
+            self.plotter.add_mesh(polyline_mesh(m2), color="#333333", line_width=1, pickable=False, lighting=False)]
         for d, c in (((1.5, 0, 0), theme.BAD), ((0, 1.5, 0), theme.OK), ((0, 0, 1.5), "#3b8cff")):
             self.plotter.add_mesh(polyline_mesh([[(0, 0, 0), d]]), color=c, line_width=1.5, lighting=False)
+        # the sketch's own X (red) and Y (green) axes: 2 in each way from the sketch origin, thin, drawn over
+        # everything (they ran "forever" and 2.5 px wide for a while; Shane found that too much)
+        self._axis_actors = []
+        for d, c in (((1, 0, 0), theme.BAD), ((0, 1, 0), theme.OK)):
+            a = pv.Actor(mapper=pv.DataSetMapper(polyline_mesh([[tuple(-self.AXIS_REACH * x for x in d),
+                                                                tuple(self.AXIS_REACH * x for x in d)]])))
+            a.prop.color, a.prop.line_width, a.prop.lighting = c, 1.5, False
+            a.SetPickable(False)
+            self.top.AddActor(a)
+            self._axis_actors.append(a)
+        self._sync_grid(render=False)
+
+    AXIS_REACH = 2.0                         # the sketch axes run this far (inches) each way from the origin
+    GRID_LIFT = 0.003                        # the grid floats this far above the face it lies on (no flicker)
+
+    @property
+    def handler(self):
+        return self._handler
+
+    @handler.setter
+    def handler(self, h):
+        self._handler = h
+        self._sync_grid()
+
+    def _sync_grid(self, render: bool = True):
+        """Show the grid on the sketch plane while a sketch is open, hide it otherwise (a plain 3D model needs
+        no grid). Anything that sketches says so with `shows_grid`."""
+        actors = getattr(self, "_grid_actors", None)
+        if not actors:
+            return                           # not built yet (the handler is first set before the scene exists)
+        show = bool(getattr(self._handler, "shows_grid", False))
+        for a in list(actors) + self._axis_actors:
+            a.SetVisibility(show)
+        if show:
+            self._place_grid()
+        if render:
+            self.plotter.render()
+
+    def _place_grid(self):
+        """Lay the grid on the current sketch plane: its x / y axes, its normal, its origin, lifted a hair."""
+        fr = self.frame
+        m = vtkMatrix4x4()
+        for r in range(3):
+            m.SetElement(r, 0, fr["x"][r])
+            m.SetElement(r, 1, fr["y"][r])
+            m.SetElement(r, 2, fr["n"][r])
+            m.SetElement(r, 3, fr["origin"][r] + fr["n"][r] * self.GRID_LIFT)
+        for a in self._grid_actors + self._axis_actors:
+            a.SetUserMatrix(m)
 
     def show_bodies(self, bodies, selected: str | None = None):
         """bodies: kernel Body objects. Rebuilds the solid actors."""
@@ -184,7 +241,8 @@ class Viewport(QWidget):
             a = self.plotter.add_mesh(mesh, color=theme.ACCENT if sel else theme.BODY, smooth_shading=True,
                                       split_sharp_edges=True, feature_angle=30,
                                       style="wireframe" if wire else "surface", specular=0.3, specular_power=24,
-                                      ambient=0.1 if not sel else 0.3, diffuse=0.6, render=False)
+                                      ambient=theme.BODY_AMBIENT if not sel else 0.3, diffuse=theme.BODY_DIFFUSE,
+                                      render=False)
             self._body_actors.append(a)
             self._actor_body[id(a)] = b.id
             if self.display_mode != 1:
@@ -414,9 +472,26 @@ class Viewport(QWidget):
         u, v = pl.to_local(fr, (float(hit[0]), float(hit[1]), float(hit[2])))
         return u, v
 
+    SK_ORBIT_DEG = 0.4                       # degrees of turn per pixel dragged, Shift / Alt + left drag in a sketch
+
+    def _sketch_orbit_to(self, p: QPoint):
+        """Turn the view about its centre by the drag since the last spot (a free trackball turn)."""
+        o = self._sk_orbit
+        dx, dy = p.x() - o[1].x(), p.y() - o[1].y()
+        o[1] = p
+        cam = self.plotter.camera
+        cam.Azimuth(-dx * self.SK_ORBIT_DEG)
+        cam.Elevation(dy * self.SK_ORBIT_DEG)
+        cam.OrthogonalizeViewUp()
+        self.plotter.renderer.ResetCameraClippingRange()
+        self.plotter.render()
+
     # ---------- mouse routing ----------
     def eventFilter(self, obj, ev):
         t = ev.type()
+        if t == QEvent.MouseMove and self._sk_orbit is not None and ev.buttons() & Qt.LeftButton:
+            self._sketch_orbit_to(ev.position().toPoint())
+            return True
         if t == QEvent.MouseMove and self._box0 is not None and ev.buttons() & Qt.LeftButton:
             p = ev.position().toPoint()
             if (p - self._box0).manhattanLength() > 4:
@@ -455,7 +530,7 @@ class Viewport(QWidget):
             # a fast second click arrives as DblClick: it must count as a click, and VTK must
             # never see it (it starts an orbit whose release we swallow = stuck rotating)
             self._press = ev.position().toPoint()
-            boxing = self._box_ok() and not (ev.modifiers() & Qt.ShiftModifier)   # Shift+drag orbits
+            boxing = self._box_ok() and not (ev.modifiers() & (Qt.ShiftModifier | Qt.AltModifier))   # Shift / Alt+drag orbits
             self._box0 = self._press if boxing else None
             if boxing and self.handler is None:
                 return True                          # VTK must not start an orbit
@@ -463,10 +538,18 @@ class Viewport(QWidget):
                 self._face_view = False              # orbiting off TOP / FRONT / ...: not a face view now
                 self.apply_projection(render=False)
             if self.handler and self.handler.captures_left:
+                if ev.modifiers() & (Qt.ShiftModifier | Qt.AltModifier):
+                    # sketching: a plain left drag draws / selects, so Shift (or Alt) + left drag turns the view.
+                    # A Shift press that never moves is the click it always was (it snaps four times finer).
+                    self._sk_orbit = [self._press, self._press, bool(ev.modifiers() & Qt.ShiftModifier)]
+                    if self._face_view:
+                        self._face_view = False
+                        self.apply_projection(render=False)
+                    return True
                 w = self.world_at(self._press)
                 if w:
                     self.handler.on_click(w, ev)
-                return True          # no orbit while sketching
+                return True          # a plain left drag does not orbit while sketching
             return False
         if t == QEvent.MouseButtonRelease and ev.button() == Qt.LeftButton and self._box0 is not None:
             p0, self._box0, self._press = self._box0, None, None
@@ -489,6 +572,11 @@ class Viewport(QWidget):
             p0, self._press = self._press, None
             if self.handler and self.handler.captures_left:
                 self.plotter.iren.interactor.GetInteractorStyle().OnLeftButtonUp()   # never leave VTK orbiting
+                orbit, self._sk_orbit = self._sk_orbit, None
+                if orbit is not None and orbit[2] and (ev.position().toPoint() - orbit[0]).manhattanLength() <= 4:
+                    w = self.world_at(ev.position().toPoint())
+                    if w:
+                        self.handler.on_click(w, ev)             # Shift + click with no drag: a click (fine snap)
                 return True
             if self.handler and p0 is not None and (ev.position().toPoint() - p0).manhattanLength() <= 4:
                 w = self.world_at(ev.position().toPoint())
