@@ -107,9 +107,11 @@ class Wordmark(QWidget):
 
 
 class ModeSwitch(QWidget):
-    """The CAD / CAM switch: a pill with a blue knob that slides to the active side."""
+    """The CAD / CAM switch: a rounded rectangle with a blue knob that slides to the active side."""
     changed = Signal(str)                       # "cad" | "cam"
     MODES = ("cad", "cam")
+    RADIUS = 4.0                                # corner radius of the outline; the knob's is one less (Shane 10/3/26:
+                                                # "a rectangle with a slight radius", not a full pill)
 
     def __init__(self):
         super().__init__()
@@ -150,7 +152,7 @@ class ModeSwitch(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        rad = r.height() / 2
+        rad = self.RADIUS
         p.setPen(QPen(QColor(theme.ACCENT), 1))
         p.setBrush(QColor(theme.BG))
         p.drawRoundedRect(r, rad, rad)
@@ -158,7 +160,7 @@ class ModeSwitch(QWidget):
         knob = QRectF(r.left() + 2 + self._pos * (half - 2), r.top() + 2, half - 2, r.height() - 4)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(theme.ACCENT))
-        p.drawRoundedRect(knob, knob.height() / 2, knob.height() / 2)
+        p.drawRoundedRect(knob, rad - 1, rad - 1)
         f = QFont(theme.HEAD[0])
         f.setPixelSize(12)
         f.setBold(True)
@@ -253,7 +255,6 @@ class TopBar(QFrame):
             grp.addAction(a)
             self.proj_actions[key] = a
         self.settings.setMenu(sm)
-        lay.addWidget(self.settings)
         self.help = QToolButton()
         self.help.setObjectName("menuBtn")
         self.help.setText("HELP")
@@ -263,8 +264,8 @@ class TopBar(QFrame):
         m.addSeparator()
         m.addAction(f"About {APP_NAME}", self.about.emit)
         self.help.setMenu(m)
-        lay.addWidget(self.help)
-        lay.addSpacing(4)
+        # SETTINGS and HELP live in the ribbon's tab row, after the tabs (Ribbon.place_menus); the top bar
+        # still owns them and their signals
         lay.addWidget(units)
         lay.addWidget(user)
 
@@ -302,6 +303,7 @@ class Ribbon(QFrame):
             b.clicked.connect(partial(self.tab_changed.emit, key))
             tl.addWidget(b)
             self.tab_buttons[key] = b
+        self._tabs_row = tl
         tl.addStretch()
         for key, _ in [("sketch", "")] + CAM_TABS:
             self.tab_buttons[key].hide()
@@ -361,6 +363,15 @@ class Ribbon(QFrame):
             lay.addWidget(grp)
         lay.addStretch()
         return page, tools
+
+    def place_menus(self, *buttons):
+        """Put the top bar's menu buttons (SETTINGS, HELP) in the tab row, right after the last tab
+        (Shane 10/3/26: next to Utilities, not up in the top bar)."""
+        tl = self._tabs_row
+        at = tl.count() - 1                       # before the stretch
+        tl.insertSpacing(at, 14)
+        for i, b in enumerate(buttons):
+            tl.insertWidget(at + 1 + i, b, 0, Qt.AlignVCenter)
 
     def show_tab(self, key):
         self.current = key

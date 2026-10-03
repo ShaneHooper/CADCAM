@@ -9,6 +9,7 @@ post writes it as a diameter). Inch, absolute, one tool change per operation. Co
 """
 from __future__ import annotations
 
+from . import arcs
 from . import cam
 from . import nose
 from .cam import FACE_PULL
@@ -194,10 +195,7 @@ def _lathe_op(setup, op, moves, offset, coolant, controller="haas", n=100, g71=N
         if rough and g71 is not None:
             g71.append((_contour(moves, op), n, n + 1))
         return L + (_g71(moves, op, m, controller, n) if rough else _g72(moves, op, m, controller, n)) + (["M09"] if coolant else []) + ["M05"]
-    for i, (kind, (x, _y, z)) in enumerate(moves):    # X radius -> diameter
-        words = [("G", "G00" if kind == "rapid" else "G01"), ("X", num(x * 2)), ("Z", num(z))]
-        if kind == "feed":
-            words.append(("F", num(op["ipr"])))
+    for i, words in _lathe_blocks(moves, op["ipr"]):  # X radius -> diameter; radii as G02 / G03
         line = m.block(words)
         if comp_code and i == comp_on:                # machine comp: on at the approach move ...
             line = _with_g(line, comp_code)
@@ -207,6 +205,55 @@ def _lathe_op(setup, op, moves, offset, coolant, controller="haas", n=100, g71=N
             L.append(line)
     L += ["M09" if coolant else None, "M05"]
     return [x for x in L if x is not None]
+
+
+def _arc_words(pts, piece, ipr=None):
+    """The words of one piece of a (x radius, z) polyline: G01 to its end, or G02 / G03 with R. In the G18
+    view (Z right, X up) a counter-clockwise turn is G03."""
+    x, z = pts[piece[2]]
+    g = "G01" if piece[0] == "line" else ("G03" if piece[5] else "G02")
+    words = [("G", g), ("X", num(x * 2)), ("Z", num(z))]
+    if piece[0] == "arc":
+        words.append(("R", num(piece[4])))
+    if ipr is not None:
+        words.append(("F", num(ipr)))
+    return words
+
+
+def _profile_words(pts, ipr=None):
+    """Blocks along a (x radius, z) profile, each as _Modal words; runs of chords on one circle are arcs."""
+    return [_arc_words(pts, p, ipr) for p in arcs.fit([(z, x) for x, z in pts])]
+
+
+def _lathe_blocks(moves, ipr):
+    """[(index of the move the block ends on, _Modal words)] for a lathe path written line by line. The feed
+    moves between a rapid and the next rapid are one cut: its first move (the approach) and last (the
+    pull-off) stay straight, and the chords between them become G02 / G03 where they lie on one circle."""
+    out = []
+    i, n = 0, len(moves)
+    while i < n:
+        if moves[i][0] != "feed":
+            x, _y, z = moves[i][1]
+            out.append((i, [("G", "G00"), ("X", num(x * 2)), ("Z", num(z))]))
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and moves[j + 1][0] == "feed":
+            j += 1
+        if j - i < 1 + arcs.MIN_CHORDS:                   # too short to hold an arc between its ends
+            for k in range(i, j + 1):
+                x, _y, z = moves[k][1]
+                out.append((k, [("G", "G01"), ("X", num(x * 2)), ("Z", num(z)), ("F", num(ipr))]))
+        else:
+            x, _y, z = moves[i][1]
+            out.append((i, [("G", "G01"), ("X", num(x * 2)), ("Z", num(z)), ("F", num(ipr))]))
+            pts = [(x, z) for _k, (x, _y, z) in moves[i:j]]
+            for piece in arcs.fit([(z, x) for x, z in pts]):
+                out.append((i + piece[2], _arc_words(pts, piece, ipr)))
+            x, _y, z = moves[j][1]
+            out.append((j, [("G", "G01"), ("X", num(x * 2)), ("Z", num(z)), ("F", num(ipr))]))
+        i = j + 1
+    return out
 
 
 def _g72(moves, op, m, controller, n):
@@ -231,8 +278,9 @@ def _g72(moves, op, m, controller, n):
 
 def _g71(moves, op, m, controller, n):
     """OD roughing as a G71 cycle. The finish contour (N n .. N n+1) is the rough's profile pass
-    with the stock to leave taken back off (the control adds it again from U / W). Haas takes the
-    depth of cut as D on one line; Fanuc wants two G71 blocks (U depth R retract, then P Q U W F)."""
+    with the stock to leave taken back off (the control adds it again from U / W), its radii written
+    as G02 / G03 (core.arcs). Haas takes the depth of cut as D on one line; Fanuc wants two G71 blocks
+    (U depth R retract, then P Q U W F)."""
     _k, (xs, _y, zs) = moves[0]
     prof = _contour(moves, op)
     p, q = n, n + 1
@@ -245,8 +293,9 @@ def _g71(moves, op, m, controller, n):
     c = _Modal()
     L.append(f"N{p} " + c.block([("G", "G00"), ("X", num(prof[0][0] * 2))]))
     c.last["Z"] = num(zs)
-    for x, z in prof:
-        line = c.block([("G", "G01"), ("X", num(x * 2)), ("Z", num(z))])
+    L.append(c.block([("G", "G01"), ("X", num(prof[0][0] * 2)), ("Z", num(prof[0][1]))]))   # onto the front
+    for words in _profile_words(prof):                 # along the contour; radii as G02 / G03
+        line = c.block(words)
         if line and line != "G01":
             L.append(line)
     L.append(f"N{q} " + c.block([("G", "G01"), ("X", num(xs * 2))]))
